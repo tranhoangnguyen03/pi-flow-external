@@ -1,0 +1,76 @@
+{
+  "name": "@davidus-tranus/pi-flow-external",
+  "version": "1.0.10-external.0",
+  "description": "External Claude Code and Codex delegation for pi.",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "assets"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "subagent",
+    "workflow",
+    "multi-agent",
+    "codex",
+    "claude"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit && vitest run",
+    "e2e": "node scripts/e2e/main-agent-comparison.mjs",
+    "e2e:compare-claude": "node scripts/e2e/main-agent-comparison.mjs --with-claude",
+    "e2e:workflow-features": "node scripts/e2e/workflow-features.mjs",
+    "e2e:codex-subagent": "node scripts/e2e/codex-subagent.mjs",
+    "e2e:claude-subagent": "node scripts/e2e/claude-subagent.mjs",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.79.4",
+    "@earendil-works/pi-ai": "0.79.4",
+    "@earendil-works/pi-coding-agent": "0.79.4",
+    "@earendil-works/pi-tui": "0.79.4",
+    "@types/node": "^24.12.4",
+    "typebox": "1.1.38",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/davidus-tranus/pi-flow-external/main/assets/subagents.png"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidus-tranus/pi-flow-external.git"
+  },
+  "bugs": {
+    "url": "https://github.com/davidus-tranus/pi-flow-external/issues"
+  },
+  "homepage": "https://github.com/davidus-tranus/pi-flow-external#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "acorn": "^8.17.0"
+  }
+}
