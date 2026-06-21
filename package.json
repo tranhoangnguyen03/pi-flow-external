@@ -1,5 +1,5 @@
 {
-  "name": "@davidus-tranus/pi-flow-external",
+  "name": "@tranhoangnguyen0310/pi-flow-external",
   "version": "1.0.10-external.0",
   "description": "External Claude Code and Codex delegation for pi.",
   "type": "module",
@@ -54,19 +54,19 @@
     "extensions": [
       "./index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/davidus-tranus/pi-flow-external/main/assets/subagents.png"
+    "image": "https://raw.githubusercontent.com/tranhoangnguyen03/pi-flow-external/main/assets/subagents.png"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/davidus-tranus/pi-flow-external.git"
+    "url": "git+https://github.com/tranhoangnguyen03/pi-flow-external.git"
   },
   "bugs": {
-    "url": "https://github.com/davidus-tranus/pi-flow-external/issues"
+    "url": "https://github.com/tranhoangnguyen03/pi-flow-external/issues"
   },
-  "homepage": "https://github.com/davidus-tranus/pi-flow-external#readme",
+  "homepage": "https://github.com/tranhoangnguyen03/pi-flow-external#readme",
   "publishConfig": {
     "access": "public"
   },
