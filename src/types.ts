@@ -1,7 +1,7 @@
 import type { WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
-export type SubagentBackend = "pi" | "codex" | "claude";
+export type SubagentBackend = "pi" | "codex" | "claude" | "agy";
 export type ThinkingLevel = string;
 
 export interface SubagentProfile {

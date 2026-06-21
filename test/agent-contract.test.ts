@@ -64,9 +64,9 @@ describe("pi-subagent agent contract", () => {
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");
     expect(properties).not.toHaveProperty("subagentTimeoutMs");
-    expect(tool?.description).toContain("external Claude Code or Codex CLI");
+    expect(tool?.description).toContain("external Claude Code, Codex CLI, or Antigravity");
     expect(tool?.promptGuidelines).toContain(
-      "Reach for Agent only when the user asks for Claude Code/Codex delegation or an available external profile matches the task.",
+      "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
     );
 
     disposeSession(session);
@@ -123,7 +123,7 @@ describe("pi-subagent agent contract", () => {
     await session.prompt("Just say noted.");
 
     expect(rootContext?.systemPrompt).toContain("Subagent Delegation");
-    expect(rootContext?.systemPrompt).toContain("Use Agent only for external Claude Code or Codex CLI delegation");
+    expect(rootContext?.systemPrompt).toContain("Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation");
     expect(rootContext?.systemPrompt).toContain("Root-level parallel delegation is bounded");
     expect(rootContext?.systemPrompt).not.toContain("max concurrency 4");
     expect(rootContext?.systemPrompt).toContain("Available agents");

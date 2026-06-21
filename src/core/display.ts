@@ -10,5 +10,8 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
   if (backend === "claude") {
     return "Claude Agent";
   }
+  if (backend === "agy") {
+    return "Antigravity Agent";
+  }
   return "Agent";
 }

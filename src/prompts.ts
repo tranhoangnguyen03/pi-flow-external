@@ -2,12 +2,13 @@ import type { SavedWorkflow } from "./workflow/registry.ts";
 import type { SubagentProfile } from "./types.ts";
 
 export const AGENT_PROMPT_SNIPPET =
-  "Delegate to an external Claude Code or Codex CLI agent when a backend-qualified profile matches the task.";
+  "Delegate to an external Claude Code, Codex CLI, or Antigravity agent when a backend-qualified profile matches the task.";
 
 export const AGENT_PROMPT_GUIDELINES = [
-  "Reach for Agent only when the user asks for Claude Code/Codex delegation or an available external profile matches the task.",
+  "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
   "Use claude-* profiles for Claude Code strengths such as frontend/product review and nuanced repo exploration.",
   "Use codex-* profiles for Codex strengths such as broad code search, independent implementation review, and CLI-oriented investigation.",
+  "Use agy-* profiles for Antigravity strengths such as autonomous planning, implementation, and repository-aware debugging.",
   "For a single-fact lookup where you already know the file, symbol, or value, search directly instead of spawning a subagent.",
   "Once you delegate a search, do not also run the same search yourself; wait for the result and keep the conclusion, not raw file dumps.",
   "If the user asks for parallel work, launch multiple Agent calls in the same assistant response.",
@@ -92,13 +93,13 @@ export function buildCoordinatorPrompt(profiles: Map<string, SubagentProfile>): 
 Available agents:
 ${formatAvailableAgents(profiles)}
 
-Use Agent only for external Claude Code or Codex CLI delegation. Use the native subagent system for Pi-backed agents.
+Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation. Use the native subagent system for Pi-backed agents.
 
 Guidelines:
 - Do not use subagents excessively; direct lookup is better when the target file, symbol, or value is already known.
 - If the user asks for parallel work, launch independent Agent calls in the same assistant response.
 - Subagents start fresh and do not inherit parent messages, tool results, or reasoning. Brief them with all needed context.
-- Agent profiles are external-only in this fork; available profiles should be backend-qualified Claude/Codex agents.
+- Agent profiles are external-only in this fork; available profiles should be backend-qualified Claude/Codex/Antigravity agents.
 - The Agent final message is returned to you as the tool result. Relay what matters to the user.
 
 Example usage:

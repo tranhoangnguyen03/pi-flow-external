@@ -1,6 +1,6 @@
 {
   "name": "@tranhoangnguyen0310/pi-flow-external",
-  "version": "1.0.10-external.0",
+  "version": "1.0.10-external.1",
   "description": "External Claude Code and Codex delegation for pi.",
   "type": "module",
   "main": "./index.ts",

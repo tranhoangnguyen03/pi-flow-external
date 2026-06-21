@@ -6,6 +6,7 @@ This fork intentionally narrows pi-flow's `Agent` and `workflow` subagent lanes 
 
 - **Claude Code** via profiles with `backend: claude`
 - **Codex CLI** via profiles with `backend: codex`
+- **Antigravity** via profiles with `backend: agy`
 
 Use pi's native subagent system for Pi-backed agents such as scout, reviewer, planner, worker, or oracle. Use this extension only when you explicitly want another agent harness.
 
@@ -25,20 +26,21 @@ That keeps prompts predictable across projects:
 - "Use scout/reviewer/planner" means native Pi subagents.
 - "Ask Claude Code" means an `Agent` profile named like `claude-*`.
 - "Ask Codex" means an `Agent` profile named like `codex-*`.
+- "Ask Antigravity" means an `Agent` profile named like `agy-*`.
 
 ## Install
 
 After publishing this fork to npm:
 
 ```bash
-pi install npm:@davidus-tranus/pi-flow-external
+pi install npm:@tranhoangnguyen0310/pi-flow-external
 ```
 
 For local development, install from this checkout if your pi installation supports local extension paths.
 
 ## Define external profiles
 
-Custom profiles live in `~/.pi/agent/subagents/<name>.md`. Only profiles whose frontmatter sets `backend: claude` or `backend: codex` are shown to, and accepted by, `Agent`/`workflow`.
+Custom profiles live in `~/.pi/agent/subagents/<name>.md`. Only profiles whose frontmatter sets `backend: claude`, `backend: codex`, or `backend: agy` are shown to, and accepted by, `Agent`/`workflow`.
 
 Recommended naming convention:
 
@@ -47,6 +49,8 @@ claude-explorer.md
 claude-reviewer.md
 codex-explorer.md
 codex-reviewer.md
+agy-explorer.md
+agy-reviewer.md
 ```
 
 Claude example:

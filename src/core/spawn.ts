@@ -18,6 +18,7 @@ import {
 } from "./progress.ts";
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
+import { spawnAgySubagent } from "./agy.ts";
 import type { SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 
@@ -93,6 +94,22 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
 async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentToolResult> {
   if (params.profile.backend === "codex") {
     return spawnCodexSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+    });
+  }
+  if (params.profile.backend === "agy") {
+    return spawnAgySubagent({
       toolCallId: params.toolCallId,
       description: params.description,
       prompt: params.prompt,

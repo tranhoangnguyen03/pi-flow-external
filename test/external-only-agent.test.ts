@@ -39,14 +39,15 @@ describe("external-only Agent policy", () => {
     disposeSession(session);
   });
 
-  it("keeps explicit Claude/Codex custom profiles in the external roster", () => {
+  it("keeps explicit Claude/Codex/Antigravity custom profiles in the external roster", () => {
     const subagentsDir = join(agentDir, "subagents");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-explorer.md"), `---\ndescription: Explore through Claude Code.\nbackend: claude\nmodel: sonnet\n---\n\nExplore read-only.\n`);
     writeFileSync(join(subagentsDir, "codex-reviewer.md"), `---\ndescription: Review through Codex CLI.\nbackend: codex\nmodel: gpt-5.4-mini\n---\n\nReview read-only.\n`);
+    writeFileSync(join(subagentsDir, "agy-planner.md"), `---\ndescription: Plan through Antigravity.\nbackend: agy\nmodel: default\n---\n\nPlan read-only.\n`);
     writeFileSync(join(subagentsDir, "local-reviewer.md"), `---\ndescription: Local pi reviewer.\nbackend: pi\n---\n\nReview locally.\n`);
 
     const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
-    expect([...profiles.keys()].sort()).toEqual(["claude-explorer", "codex-reviewer"]);
+    expect([...profiles.keys()].sort()).toEqual(["agy-planner", "claude-explorer", "codex-reviewer"]);
   });
 });

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SubagentBackend, SubagentProfile, ThinkingLevel } from "./types.ts";
 
-const EXTERNAL_AGENT_BACKENDS: SubagentBackend[] = ["codex", "claude"];
+const EXTERNAL_AGENT_BACKENDS: SubagentBackend[] = ["codex", "claude", "agy"];
 
 const VALID_PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -30,7 +30,7 @@ function parseBackend(value: unknown): SubagentBackend | "invalid" {
     return "pi";
   }
   const backend = optionalString(value);
-  if (backend === "pi" || backend === "codex" || backend === "claude") {
+  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy") {
     return backend;
   }
   return "invalid";
@@ -176,5 +176,5 @@ export function filterExternalAgentProfiles(profiles: Map<string, SubagentProfil
 }
 
 export function formatExternalAgentPolicyError(profile: SubagentProfile): string {
-  return `Profile "${profile.name}" uses backend "${profile.backend}". This Agent tool is configured for external delegation only; use Claude/Codex profiles (backend: claude or backend: codex) here, and use the native subagent system for Pi-backed agents.`;
+  return `Profile "${profile.name}" uses backend "${profile.backend}". This Agent tool is configured for external delegation only; use Claude/Codex profiles (backend: claude, backend: codex, or backend: agy) here, and use the native subagent system for Pi-backed agents.`;
 }

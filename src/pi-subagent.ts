@@ -62,7 +62,7 @@ const agentToolParameters = Type.Object({
   }),
   subagent_type: Type.Optional(
     Type.String({
-      description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude or backend: codex.",
+      description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude, backend: codex, or backend: agy.",
     }),
   ),
 });
@@ -97,7 +97,7 @@ interface CreateAgentToolOptions {
 }
 
 const PROGRESS_STATUSES: SubagentProgressNode["status"][] = ["queued", "running", "done", "error", "aborted"];
-const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude"];
+const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy"];
 
 function shouldEnableProgress(ctx: ExtensionContext): boolean {
   if (!ctx.hasUI) {
@@ -292,7 +292,7 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Delegate to an external Claude Code or Codex CLI subagent profile from ~/.pi/agent/subagents/*.md. Prompts must be self-contained.",
+    description: "Delegate to an external Claude Code, Codex CLI, or Antigravity subagent profile from ~/.pi/agent/subagents/*.md. Prompts must be self-contained.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     promptGuidelines: AGENT_PROMPT_GUIDELINES,
     parameters: agentToolParameters,
