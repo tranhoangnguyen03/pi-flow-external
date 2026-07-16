@@ -727,11 +727,11 @@ describe("workflow tool rendering", () => {
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
     expect(text).toContain("Workflow(audit)");
     expect(text).toContain("running");
-    expect(text).toContain("running · 1/3");
+    expect(text).toContain("running · 1 done · 1 active · 0 queued · 1 failed / 3");
     // scan phase is complete (beta done) -> ✓ header; unphased bucket has a failure.
-    expect(text).toContain("✓ scan done · 1/1");
+    expect(text).toContain("✓ scan done · 1 done · 0 active · 0 queued · 0 failed / 1");
     expect(text).toContain("✓ Codex Agent(codex-reviewer, beta)");
-    expect(text).toContain("✗ unphased failed · 0/2");
+    expect(text).toContain("✗ unphased failed · 0 done · 1 active · 0 queued · 1 failed / 2");
     expect(text).toContain("Pi Agent(explorer: alpha)");
     expect(text).toContain("✗ Claude Agent(claude-reviewer, gamma)");
     // declared phase renders before the unphased bucket.
@@ -752,7 +752,7 @@ describe("workflow tool rendering", () => {
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
     // Active phase is visible and marked current, not collapsed to the flat list.
-    expect(text).toContain("▶ scan running · 0/0");
+    expect(text).toContain("▶ scan running · 0 done · 0 active · 0 queued · 0 failed / 0");
   });
 
   it("does not keep the final current phase running after workflow completion", () => {
@@ -767,8 +767,8 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("✓ review done · 1/1");
-    expect(text).not.toContain("▶ review running · 1/1");
+    expect(text).toContain("✓ review done · 1 done · 0 active · 0 queued · 0 failed / 1");
+    expect(text).not.toContain("▶ review running");
   });
 
   it("marks failed current phases as failed", () => {
@@ -794,8 +794,8 @@ describe("workflow tool rendering", () => {
     };
     const failedAgentText = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: failedAgent }, {}, theme));
     const failedEmptyText = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: failedEmpty }, {}, theme));
-    expect(failedAgentText).toContain("✗ verify failed · 0/1");
-    expect(failedEmptyText).toContain("✗ verify failed · 0/0");
+    expect(failedAgentText).toContain("✗ verify failed · 0 done · 0 active · 0 queued · 1 failed / 1");
+    expect(failedEmptyText).toContain("✗ verify failed · 0 done · 0 active · 0 queued · 0 failed / 0");
   });
 
   it("shows planned meta phases before they are reached", () => {
@@ -811,9 +811,9 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("▶ scan running · 0/1");
-    expect(text).toContain("· review planned · 0/0");
-    expect(text).toContain("· fix planned · 0/0");
+    expect(text).toContain("▶ scan running · 0 done · 1 active · 0 queued · 0 failed / 1");
+    expect(text).toContain("· review planned · 0 done · 0 active · 0 queued · 0 failed / 0");
+    expect(text).toContain("· fix planned · 0 done · 0 active · 0 queued · 0 failed / 0");
     expect(text.indexOf("scan")).toBeLessThan(text.indexOf("review"));
     expect(text.indexOf("review")).toBeLessThan(text.indexOf("fix"));
     expect(text).toContain("Agent(agent: scan-a)");
@@ -848,7 +848,7 @@ describe("workflow tool rendering", () => {
       agents: Array.from({ length: 8 }, (_, i) => ({
         index: i + 1,
         label: `a${i + 1}`,
-        status: "running" as const,
+        status: (i < 7 ? "error" : "running") as const,
       })),
       logs: [],
     };
@@ -856,7 +856,7 @@ describe("workflow tool rendering", () => {
     // Earliest agents are shown; the "not shown" marker stands for the later ones
     // and must come after the visible rows.
     expect(text).toContain("Agent(agent, a1)");
-    expect(text).toContain("... 2 agent(s) not shown");
+    expect(text).toContain("... 2 agent(s) not shown (1 failed)");
     expect(text.indexOf("a1")).toBeLessThan(text.indexOf("not shown"));
     expect(text).not.toContain("a8");
   });
@@ -904,6 +904,7 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
+    expect(text).toContain("running · 0 done · 4 active · 4 queued · 0 failed / 8");
     expect(text).toContain("Agent(agent: r1)");
     expect(text).toContain("activity-1");
     expect(text).toContain("◌ Agent(agent, q1) queued");
@@ -931,8 +932,8 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("✓ loop1:opt done · 2/2");
-    expect(text).toContain("▶ loop2:opt running · 0/8");
+    expect(text).toContain("✓ loop1:opt done · 2 done · 0 active · 0 queued · 0 failed / 2");
+    expect(text).toContain("▶ loop2:opt running · 0 done · 8 active · 0 queued · 0 failed / 8");
     expect(text).toContain("... 2 more");
     expect(text.indexOf("loop1:opt")).toBeLessThan(text.indexOf("loop2:opt"));
   });
@@ -977,7 +978,7 @@ describe("workflow tool rendering", () => {
     );
     expect(completedText).toContain("Workflow(done-flow)");
     expect(completedText).toContain("completed");
-    expect(completedText).toContain("completed · 1/1");
+    expect(completedText).toContain("completed · 1 done · 0 active · 0 queued · 0 failed / 1");
 
     const failed: WorkflowToolDetails = {
       name: "broke",

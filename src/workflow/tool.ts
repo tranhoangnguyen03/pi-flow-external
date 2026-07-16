@@ -443,6 +443,15 @@ function workflowRunningCount(details: WorkflowToolDetails): number {
   return details.agents.filter((agent) => agent.status === "running").length;
 }
 
+function formatAgentCounts(done: number, active: number, queued: number, failed: number, total: number): string {
+  return `${done} done · ${active} active · ${queued} queued · ${failed} failed / ${total}`;
+}
+
+function hiddenFailureCount(agents: WorkflowAgentSnapshot[], shown: WorkflowAgentSnapshot[]): number {
+  const visible = new Set(shown);
+  return agents.filter((agent) => !visible.has(agent) && isFailedWorkflowAgent(agent)).length;
+}
+
 function renderPhaseTree(container: Container, details: WorkflowToolDetails, theme: Theme, frame: number): void {
   const runningCount = workflowRunningCount(details);
   for (const phase of orderedPhases(details)) {
@@ -465,7 +474,7 @@ function renderPhaseTree(container: Container, details: WorkflowToolDetails, the
     const marker = phaseStatus === "failed" ? "✗" : phaseStatus === "done" ? "✓" : phaseStatus === "running" ? "▶" : "·";
     container.addChild(
       new Text(
-        `  ${theme.fg(pErr ? "error" : "muted", `${marker} ${phase ?? "unphased"} ${phaseStatus} · ${pDone}/${agents.length}`)}`,
+        `  ${theme.fg(pErr ? "error" : "muted", `${marker} ${phase ?? "unphased"} ${phaseStatus} · ${formatAgentCounts(pDone, pRun, pQueued, pErr, agents.length)}`)}`,
         0,
         0,
       ),
@@ -476,7 +485,8 @@ function renderPhaseTree(container: Container, details: WorkflowToolDetails, the
     }
     const hidden = agents.length - shown.length;
     if (hidden > 0) {
-      container.addChild(new Text(`    ${theme.fg("muted", `... ${hidden} more`)}`, 0, 0));
+      const hiddenFailed = hiddenFailureCount(agents, shown);
+      container.addChild(new Text(`    ${theme.fg("muted", `... ${hidden} more${hiddenFailed ? ` (${hiddenFailed} failed)` : ""}`)}`, 0, 0));
     }
   }
 }
@@ -492,14 +502,18 @@ function renderFlatAgents(container: Container, details: WorkflowToolDetails, th
   // renderPhaseTree), standing for what continues below.
   const hiddenAgents = details.agents.length - renderedAgents.length;
   if (hiddenAgents > 0) {
-    container.addChild(new Text(`  ${theme.fg("muted", `... ${hiddenAgents} agent(s) not shown`)}`, 0, 0));
+    const hiddenFailed = hiddenFailureCount(details.agents, renderedAgents);
+    container.addChild(new Text(`  ${theme.fg("muted", `... ${hiddenAgents} agent(s) not shown${hiddenFailed ? ` (${hiddenFailed} failed)` : ""}`)}`, 0, 0));
   }
 }
 
 function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, frame: number): Container {
   const container = new Container();
   const done = details.agents.filter((agent) => isCompletedSubagentStatus(agent.status)).length;
-  const counts = `${done}/${details.agents.length}`;
+  const active = workflowRunningCount(details);
+  const queued = details.agents.filter((agent) => agent.status === "queued").length;
+  const failed = details.agents.filter(isFailedWorkflowAgent).length;
+  const counts = formatAgentCounts(done, active, queued, failed, details.agents.length);
   container.addChild(
     new Text(
       `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${details.status} · ${counts}`)}`,
