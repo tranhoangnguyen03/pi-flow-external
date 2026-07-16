@@ -60,11 +60,10 @@ const agentToolParameters = Type.Object({
   prompt: Type.String({
     description: "The self-contained task briefing to send to the subagent.",
   }),
-  subagent_type: Type.Optional(
-    Type.String({
-      description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude, backend: codex, or backend: agy.",
-    }),
-  ),
+  subagent_type: Type.String({
+    minLength: 1,
+    description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude, backend: codex, or backend: agy.",
+  }),
 });
 
 type AgentToolParams = Static<typeof agentToolParameters>;
@@ -134,11 +133,12 @@ function normalizeSubagentTimeoutMs(value: number | string | boolean | undefined
   return parsed;
 }
 
-function normalizeSubagentType(value: string | undefined): SubagentType {
-  if (value === undefined || value.trim() === "") {
-    return "claude-explorer";
-  }
+function normalizeSubagentType(value: string): SubagentType {
   return value.trim();
+}
+
+function formatSubagentTypeForDisplay(value: unknown): string {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : "profile";
 }
 
 function formatProfileNames(profiles: Map<string, SubagentProfile>): string {
@@ -309,7 +309,7 @@ function createAgentTool(
       const profile = profiles.get(subagentType);
       if (!profile) {
         return textResult(
-          `Unknown external subagent_type "${params.subagent_type}". Available external agents: ${formatProfileNames(profiles)}. Use the native subagent system for Pi-backed agents.`,
+          `Unknown external subagent_type "${subagentType}". Available external agents: ${formatProfileNames(profiles)}. Use the native subagent system for Pi-backed agents.`,
           {
             description: params.description,
             subagentType: "unknown",
@@ -428,8 +428,8 @@ function createAgentTool(
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const subagentType = normalizeSubagentType(args.subagent_type);
-      const backend = getProfileBackend(subagentType);
+      const subagentType = formatSubagentTypeForDisplay(args.subagent_type);
+      const backend = subagentType === "profile" ? undefined : getProfileBackend(subagentType);
       const description = typeof args.description === "string" ? args.description.trim() : "";
       return new Text(
         `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${description ? ` ${theme.fg("dim", description)}` : ""}`,
