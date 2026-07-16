@@ -14,11 +14,13 @@ function emptyUsage(): SubagentUsage {
 export function buildAgyArgs({
   profile,
   thinkingLevel,
+  prompt,
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
+  prompt: string;
 }): string[] {
-  const args = ["--print", "--dangerously-skip-permissions"];
+  const args = ["--dangerously-skip-permissions"];
   if (profile.model) {
     args.push("--model", profile.model);
   }
@@ -26,6 +28,7 @@ export function buildAgyArgs({
     // agy does not expose a separate effort flag in 1.0.10; keep the profile
     // field accepted for parity but communicate it via the prompt instead.
   }
+  args.push("-p", prompt);
   return args;
 }
 
@@ -99,15 +102,19 @@ export async function spawnAgySubagent(params: {
     if (params.signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
-    const proc = spawn(AGY_COMMAND, buildAgyArgs({ profile: params.profile, thinkingLevel: params.thinkingLevel }), {
+    const proc = spawn(AGY_COMMAND, buildAgyArgs({
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      prompt: taskPrompt,
+    }), {
       cwd: params.ctx.cwd,
       env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     child = proc;
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("agy stdin/stdout/stderr pipes were not available");
+    if (!proc.stdout || !proc.stderr) {
+      throw new Error("agy stdout/stderr pipes were not available");
     }
     abortHandler = () => abortChild(proc);
     params.signal?.addEventListener("abort", abortHandler, { once: true });
@@ -126,11 +133,9 @@ export async function spawnAgySubagent(params: {
       }
     });
     proc.stderr.on("data", (chunk) => stderrBuffer.append(String(chunk)));
-    proc.stdin.on("error", () => undefined);
 
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
     const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       proc.once("error", reject);
       proc.once("close", (code, signal) => resolve({ code, signal }));
