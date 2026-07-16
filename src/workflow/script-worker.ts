@@ -159,6 +159,11 @@ function requestAgent(prompt, options) {
   });
 }
 
+function observeDiscardedRejection(promise) {
+  promise.catch(() => {});
+  return promise;
+}
+
 function agent(prompt, agentOptions = {}) {
   if (!acceptingAgentCalls) {
     throw new Error("agent() cannot be called after the workflow body has returned");
@@ -178,9 +183,9 @@ function agent(prompt, agentOptions = {}) {
     return observation.promise;
   };
   return {
-    then: (onFulfilled, onRejected) => start().then(onFulfilled, onRejected),
-    catch: (onRejected) => start().catch(onRejected),
-    finally: (onFinally) => start().finally(onFinally),
+    then: (onFulfilled, onRejected) => observeDiscardedRejection(start().then(onFulfilled, onRejected)),
+    catch: (onRejected) => observeDiscardedRejection(start().catch(onRejected)),
+    finally: (onFinally) => observeDiscardedRejection(start().finally(onFinally)),
     [Symbol.toStringTag]: "Promise",
   };
 }
