@@ -7,7 +7,7 @@ import type {
   SubagentUsage,
 } from "../types.ts";
 
-export const MAX_ACTIVITY_LINES = 2;
+export const MAX_ACTIVITY_LINES = 4;
 export const PROGRESS_UPDATE_INTERVAL_MS = 250;
 export const PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
 

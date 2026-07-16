@@ -22,6 +22,7 @@ import { createSubagentExtension } from "../src/pi-subagent.ts";
 import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
 import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
+import { createProgressEmitter } from "../src/core/progress.ts";
 import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("pi-subagent rendering", () => {
@@ -226,9 +227,71 @@ describe("pi-subagent rendering", () => {
       expect(text).toContain("Read src/types.ts");
       expect(text).toContain("Read app.py");
       expect(text).toContain("Read config.yaml");
+
+      const compactRunning = {
+        ...result,
+        details: {
+          ...result.details,
+          activeCount: 5,
+          progress: {
+            ...result.details.progress,
+            activity: ["Read src/types.ts", "Comparing token validation paths"],
+            activityCount: 2,
+          },
+        },
+      };
+      const compactRunningText = renderToText(captured.renderResult(compactRunning, {}, theme, {}));
+      expect(compactRunningText).toContain("-- Comparing token validation paths");
+      expect(compactRunningText).not.toContain("Read src/types.ts");
+
+      const compactDone = {
+        content: [{ type: "text" as const, text: "done" }],
+        details: {
+          description: "Review permissions",
+          subagentType: "reviewer" as const,
+          backend: "claude" as const,
+          status: "done" as const,
+          result: "\n\nFound 2 missing checks\nFull details follow",
+        },
+      };
+      const compactDoneText = renderToText(captured.renderResult(compactDone, {}, theme, {}));
+      expect(compactDoneText).toContain("-> Found 2 missing checks");
+      expect(compactDoneText).not.toContain("Full details follow");
+
+      const hiddenTail = "COMPACT_TAIL_MUST_NOT_RENDER";
+      const longActivity = `${"Inspecting nested token validation paths ".repeat(8)}${hiddenTail}`;
+      const compactLong = {
+        ...compactRunning,
+        details: {
+          ...compactRunning.details,
+          progress: {
+            ...compactRunning.details.progress,
+            activity: [longActivity],
+            activityCount: 1,
+          },
+        },
+      };
+      const compactLongText = renderToText(captured.renderResult(compactLong, {}, theme, {}));
+      expect(compactLongText).not.toContain(hiddenTail);
     } finally {
       dateNow.mockRestore();
     }
+  });
+
+  it("retains the four latest progress events", () => {
+    const emitter = createProgressEmitter({
+      toolCallId: "rolling-progress",
+      description: "Inspect repo",
+      subagentType: "explorer",
+      enabled: true,
+      onProgress: undefined,
+    });
+
+    for (const line of ["one", "two", "three", "four", "five"]) {
+      emitter.addActivity(line);
+    }
+
+    expect(emitter.progress?.activity).toEqual(["two", "three", "four", "five"]);
   });
 
   it("folds long progress activity lines only in the rendered subagent window", async () => {

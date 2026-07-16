@@ -153,8 +153,16 @@ export function renderCompactSubagentNode(
     ? `${status}: ${node.error}`
     : "";
   const meta = [runtime, detail].filter(Boolean).join(" ");
+  const summary = status === "running"
+    ? node.activity?.at(-1)
+    : status === "done"
+      ? node.result?.split("\n").find((line) => line.trim())?.trim()
+      : undefined;
+  const preview = summary
+    ? ` ${theme.fg("muted", `${status === "running" ? "--" : "->"} ${formatActivityLineForDisplay(summary)}`)}`
+    : "";
   return new Text(
-    `${indent}${subagentMarker(status, theme, frame)} ${theme.fg(bodyColor, compactTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}`,
+    `${indent}${subagentMarker(status, theme, frame)} ${theme.fg(bodyColor, compactTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}${preview}`,
     0,
     0,
   );
