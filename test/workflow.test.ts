@@ -180,6 +180,17 @@ describe("runWorkflow", () => {
     expect(seen).toEqual(["general-purpose", "explorer"]);
   });
 
+  it("requires subagent_type when the configured default is null", async () => {
+    await expect(
+      runWorkflow(`${META}return await agent('hello', { label: 'missing-type' });`, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(4),
+        runAgent: echo,
+        defaultSubagentType: null,
+      }),
+    ).rejects.toThrow(/agent subagent_type is required/);
+  });
+
   it("exposes args to the script", async () => {
     const result = await runWorkflow(`${META}return await agent('use ' + args.topic, { label: 'x' });`, {
       cwd: "/tmp",

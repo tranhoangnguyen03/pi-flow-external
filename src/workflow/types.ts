@@ -82,7 +82,7 @@ export interface RunWorkflowOptions {
   /** Shared global concurrency cap; agent() queues on this. */
   limiter: ConcurrencyLimiter;
   runAgent: WorkflowAgentRunner;
-  defaultSubagentType?: string;
+  defaultSubagentType?: string | null;
   limits?: Partial<WorkflowLimits>;
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;

@@ -83,7 +83,7 @@ export async function runWorkflow<T = unknown>(
   };
   const resumeAgentResults = options.resumeAgentResults ?? [];
   const limiter = options.limiter;
-  const defaultSubagentType = options.defaultSubagentType ?? DEFAULT_SUBAGENT_TYPE;
+  const defaultSubagentType = options.defaultSubagentType === undefined ? DEFAULT_SUBAGENT_TYPE : options.defaultSubagentType;
   const runtimeAbortController = new AbortController();
   const compositeSignal = AbortSignal.any(
     [options.signal, runtimeAbortController.signal].filter((signal): signal is AbortSignal => Boolean(signal)),
@@ -152,7 +152,12 @@ export async function runWorkflow<T = unknown>(
     const taskPrompt = requireString(prompt, "agent prompt");
     const opts = normalizeAgentOptions(agentOptions);
     const assignedPhase = opts.phase ?? state.currentPhase;
-    const subagentType = opts.subagentType ?? defaultSubagentType;
+    const subagentType = opts.subagentType?.trim() ? opts.subagentType : defaultSubagentType;
+    if (!subagentType?.trim()) {
+      const error = new WorkflowFatalError("agent subagent_type is required");
+      abortRuntime(error);
+      throw error;
+    }
 
     const index = ++state.agentCount;
     const label = opts.label || defaultAgentLabel(assignedPhase, index);
