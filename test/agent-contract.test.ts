@@ -134,6 +134,13 @@ describe("pi-subagent agent contract", () => {
     expect(rootContext?.systemPrompt).toContain('User asks "ask Claude Code to explore this repo"');
     expect(rootContext?.systemPrompt).toContain("single-fact lookup");
     expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
+    expect(rootContext?.systemPrompt).toContain(
+      "agent('...', { label: '...', subagent_type: 'claude-explorer' })",
+    );
+    expect(rootContext?.systemPrompt).toContain(
+      'agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema:',
+    );
+    expect(rootContext?.systemPrompt).not.toContain("pi-backend tool allowlist");
 
     disposeSession(session);
   });

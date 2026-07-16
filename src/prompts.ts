@@ -29,7 +29,7 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
   "The script's first statement must be `export const meta = { name: 'short_name', description: 'non-empty description' }`. meta must be a plain literal.",
   "Available globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Every workflow must call agent() at least once and return a JSON-serializable value (use null if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.",
   "Write plain JavaScript only. Do not use TypeScript syntax, import/require, fs, Date APIs, or Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is a cooperative lint, not a sandbox.",
-  "parallel() takes functions, not promises: `await parallel(items.map(item => () => agent('...', { label: '...' })))`. Results come back in input order.",
+  "parallel() takes functions, not promises: `await parallel(items.map(item => () => agent('...', { label: '...', subagent_type: 'claude-explorer' })))`. Results come back in input order.",
   "pipeline(items, ...stages) runs each item through the stages in order while different items run concurrently; each stage receives (previousValue, originalItem, index). Prefer pipeline() for multi-stage work — there is no barrier between stages. Reach for parallel() only when you genuinely need all results together, e.g. dedup or a zero-count early exit.",
   "Give each agent() a unique short `label` and pick a backend-qualified `subagent_type` so it uses that external profile's configured backend, model, thinking level, and prompt.",
   "Pass a JSON Schema as agent()'s `schema` option whenever the script must branch, route, filter, or aggregate on a result: the subagent is forced to return one validated object (agent() resolves to that object instead of text), so `if (r.kind === ...)` / `flags.filter(...)` are reliable. Omit `schema` for prose findings you only read or synthesize.",
@@ -73,14 +73,14 @@ Inline script contract:
 - First statement: \`export const meta = { name: 'short_name', description: 'non-empty' }\` (a plain literal; \`phases\` optional).
 - Globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Call agent() at least once and return a JSON-serializable value (use \`null\` if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.
 - Plain JavaScript only; no imports, no Date APIs, no Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is cooperative lint, not a sandbox.
-- parallel() takes thunks: \`await parallel(items.map(i => () => agent('...', { label: '...' })))\`. pipeline(items, ...stages) pipelines each item through stages while items run concurrently — prefer it for multi-stage work (no barrier between stages); use parallel() only when you need all results together.
+- parallel() takes thunks: \`await parallel(items.map(i => () => agent('...', { label: '...', subagent_type: 'claude-explorer' })))\`. pipeline(items, ...stages) pipelines each item through stages while items run concurrently — prefer it for multi-stage work (no barrier between stages); use parallel() only when you need all results together.
 
-Each agent() spawns a fresh subagent. Set \`subagent_type\` to use a profile's backend, model, thinking, prompt, and pi-backend tool allowlist:
+Each agent() spawns a fresh subagent. Set \`subagent_type\` to use a profile's backend, model, thinking level, and system prompt:
 ${formatAvailableAgents(profiles)}
 
 agent() options: \`label\` (short unique id), \`phase\` (progress group), \`subagent_type\` (profile above), and \`schema\` (a JSON Schema). Pass \`schema\` when the script must branch, route, filter, or aggregate on the result: the subagent is forced to return one validated object and agent() resolves to that object instead of free text. Omit \`schema\` for prose findings you only synthesize. Example — classify, then dispatch:
 \`\`\`
-const r = await agent("Classify " + file, { label: "classify", schema: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } } });
+const r = await agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } } });
 if (r.kind === "entry") { /* ... */ }
 \`\`\`
 
