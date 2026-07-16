@@ -440,15 +440,7 @@ function createAgentTool(
     renderResult(result, _options, theme) {
       const details = result.details as SubagentToolDetails;
       return renderSubagentNode(
-        details.progress ?? {
-          description: details.description,
-          subagentType: details.subagentType,
-          backend: details.backend,
-          status: details.status,
-          result: details.result,
-          error: details.error,
-          usage: details.usage,
-        },
+        details.progress ?? details,
         theme,
         details.frame ?? 0,
         details.activeCount ?? (details.status === "running" ? 1 : 0),

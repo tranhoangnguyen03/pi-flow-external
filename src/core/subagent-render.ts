@@ -20,6 +20,7 @@ export interface RenderableSubagentNode {
   activityCount?: number;
   result?: string;
   error?: string;
+  timedOut?: boolean;
   usage?: SubagentUsage;
 }
 
@@ -79,10 +80,11 @@ export function formatUsage(usage: SubagentUsage): string {
   return parts.join(" ");
 }
 
-export function subagentMarker(status: SubagentRunStatus, theme: Theme, frame: number): string {
+export function subagentMarker(status: SubagentRunStatus, theme: Theme, frame: number, timedOut = false): string {
   if (status === "running") return theme.fg("accent", SPINNER_FRAMES[frame % SPINNER_FRAMES.length]);
   if (status === "queued") return theme.fg("muted", "◌");
   if (isCompletedSubagentStatus(status)) return theme.fg("success", "✓");
+  if (timedOut) return theme.fg("warning", "⏱");
   if (status === "aborted") return theme.fg("warning", "⊘");
   return theme.fg("error", "✗");
 }
@@ -150,7 +152,7 @@ export function renderCompactSubagentNode(
   const bodyColor = status === "error" || status === "aborted" ? "error" : "muted";
   const runtime = formatRuntimeAndUsage(node, now);
   const detail = node.error && (status === "error" || status === "aborted")
-    ? `${status}: ${node.error}`
+    ? `${node.timedOut ? "timed out" : status}: ${node.error}`
     : "";
   const meta = [runtime, detail].filter(Boolean).join(" ");
   const summary = status === "running"
@@ -162,7 +164,7 @@ export function renderCompactSubagentNode(
     ? ` ${theme.fg("muted", `${status === "running" ? "--" : "->"} ${formatActivityLineForDisplay(summary)}`)}`
     : "";
   return new Text(
-    `${indent}${subagentMarker(status, theme, frame)} ${theme.fg(bodyColor, compactTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}${preview}`,
+    `${indent}${subagentMarker(status, theme, frame, node.timedOut)} ${theme.fg(bodyColor, compactTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}${preview}`,
     0,
     0,
   );
@@ -180,7 +182,7 @@ export function renderRichSubagentNode(
   const meta = formatRuntimeAndUsage({ ...node, status }, now);
   container.addChild(
     new Text(
-      `${indent}${subagentMarker(status, theme, frame)} ${theme.bold(richTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}`,
+      `${indent}${subagentMarker(status, theme, frame, node.timedOut)} ${theme.bold(richTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}`,
       0,
       0,
     ),

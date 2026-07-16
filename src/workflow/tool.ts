@@ -188,6 +188,7 @@ export function createWorkflowTool(
               agent.activityCount = details.progress.activityCount;
               agent.result = details.progress.result;
               agent.error = details.progress.error;
+              agent.timedOut = details.progress.timedOut;
               agent.usage = details.progress.usage;
               agent.status = details.progress.status;
               emit();
@@ -206,6 +207,7 @@ export function createWorkflowTool(
           agent.status = resultDetails.status;
           agent.result = resultDetails.result;
           agent.error = resultDetails.error;
+          agent.timedOut = resultDetails.timedOut;
           agent.usage = resultDetails.usage;
           if (progress) {
             agent.startedAt = progress.startedAt;

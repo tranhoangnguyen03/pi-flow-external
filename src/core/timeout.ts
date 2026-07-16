@@ -86,6 +86,7 @@ export function markSubagentTimedOut(
           ...rest,
           status: "aborted" as const,
           error: message,
+          timedOut: true,
           endedAt: rest.endedAt ?? Date.now(),
         };
       })()
@@ -95,6 +96,7 @@ export function markSubagentTimedOut(
     ...rest,
     status: "aborted",
     error: message,
+    timedOut: true,
     ...(progress ? { progress } : {}),
   };
 }

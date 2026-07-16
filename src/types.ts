@@ -53,6 +53,7 @@ export interface WorkflowAgentSnapshot {
   activityCount?: number;
   result?: string;
   error?: string;
+  timedOut?: boolean;
   usage?: SubagentUsage;
 }
 
@@ -104,6 +105,7 @@ export interface SubagentProgressNode {
   activityCount: number;
   result?: string;
   error?: string;
+  timedOut?: boolean;
   usage?: SubagentUsage;
 }
 
@@ -114,6 +116,7 @@ export interface SubagentToolDetails {
   status: SubagentRunStatus;
   result?: string;
   error?: string;
+  timedOut?: boolean;
   usage?: SubagentUsage;
   progress?: SubagentProgressNode;
   /** Number of currently running subagents, used to choose rich vs compact live rendering. */

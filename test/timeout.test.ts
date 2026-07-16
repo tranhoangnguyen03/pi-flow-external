@@ -27,9 +27,11 @@ describe("subagent timeout helpers", () => {
     const timedOut = markSubagentTimedOut(details, 20);
 
     expect(timedOut.status).toBe("aborted");
+    expect(timedOut.timedOut).toBe(true);
     expect(timedOut.error).toBe("Subagent timed out after 20ms");
     expect(timedOut.result).toBeUndefined();
     expect(timedOut.progress?.status).toBe("aborted");
+    expect(timedOut.progress?.timedOut).toBe(true);
     expect(timedOut.progress?.error).toBe("Subagent timed out after 20ms");
     expect(timedOut.progress?.result).toBeUndefined();
   });

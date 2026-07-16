@@ -149,6 +149,21 @@ describe("pi-subagent rendering", () => {
     expect(abortedText).toContain("⊘");
     expect(abortedText).toContain("aborted: User aborted");
 
+    const timedOutText = renderToText(captured.renderResult({
+      content: [{ type: "text" as const, text: "x" }],
+      details: {
+        description: "Slow task",
+        subagentType: "general-purpose" as const,
+        backend: "pi" as const,
+        status: "aborted" as const,
+        timedOut: true,
+        error: "Subagent timed out after 10 minutes",
+      },
+    }, {}, theme, {}));
+    expect(timedOutText).toContain("⏱");
+    expect(timedOutText).toContain("timed out: Subagent timed out after 10 minutes");
+    expect(timedOutText).not.toContain("⊘");
+
     const unknownCallText = renderToText(
       captured.renderCall(
         { description: "Bad", subagent_type: "ghost", prompt: "..." },
