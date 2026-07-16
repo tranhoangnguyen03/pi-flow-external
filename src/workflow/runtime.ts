@@ -152,7 +152,8 @@ export async function runWorkflow<T = unknown>(
     const taskPrompt = requireString(prompt, "agent prompt");
     const opts = normalizeAgentOptions(agentOptions);
     const assignedPhase = opts.phase ?? state.currentPhase;
-    const subagentType = opts.subagentType?.trim() ? opts.subagentType : defaultSubagentType;
+    const trimmedSubagentType = opts.subagentType?.trim();
+    const subagentType = trimmedSubagentType || defaultSubagentType;
     if (!subagentType?.trim()) {
       const error = new WorkflowFatalError("agent subagent_type is required");
       abortRuntime(error);
