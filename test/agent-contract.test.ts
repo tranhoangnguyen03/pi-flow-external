@@ -72,14 +72,15 @@ describe("pi-subagent agent contract", () => {
     disposeSession(session);
   });
 
-  it("marks description and prompt required, subagent_type optional, and adds no tag/label fields", async () => {
+  it("marks description, prompt, and subagent_type required, and adds no tag/label fields", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
     const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown> } | undefined;
     expect(schema?.required).toContain("description");
     expect(schema?.required).toContain("prompt");
-    expect(schema?.required ?? []).not.toContain("subagent_type");
+    expect(schema?.required).toContain("subagent_type");
+    expect(schema?.properties.subagent_type).toMatchObject({ type: "string", minLength: 1 });
     expect(schema?.properties).not.toHaveProperty("tag");
     expect(schema?.properties).not.toHaveProperty("label");
 
@@ -133,6 +134,13 @@ describe("pi-subagent agent contract", () => {
     expect(rootContext?.systemPrompt).toContain('User asks "ask Claude Code to explore this repo"');
     expect(rootContext?.systemPrompt).toContain("single-fact lookup");
     expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
+    expect(rootContext?.systemPrompt).toContain(
+      "agent('...', { label: '...', subagent_type: 'claude-explorer' })",
+    );
+    expect(rootContext?.systemPrompt).toContain(
+      'agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema:',
+    );
+    expect(rootContext?.systemPrompt).not.toContain("pi-backend tool allowlist");
 
     disposeSession(session);
   });

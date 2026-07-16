@@ -1,7 +1,7 @@
 {
   "name": "@tranhoangnguyen0310/pi-flow-external",
   "version": "1.0.10-external.2",
-  "description": "External Claude Code and Codex delegation for pi.",
+  "description": "External Claude Code, Codex CLI, and Antigravity delegation for pi.",
   "type": "module",
   "main": "./index.ts",
   "exports": "./index.ts",
@@ -20,7 +20,9 @@
     "workflow",
     "multi-agent",
     "codex",
-    "claude"
+    "claude",
+    "agy",
+    "antigravity"
   ],
   "license": "MIT",
   "scripts": {
@@ -54,7 +56,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/tranhoangnguyen03/pi-flow-external/main/assets/subagents.png"
+    "image": "https://raw.githubusercontent.com/tranhoangnguyen03/pi-flow-external/main/assets/pi-flow.png"
   },
   "engines": {
     "node": ">=22.19.0"

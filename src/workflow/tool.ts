@@ -255,6 +255,7 @@ export function createWorkflowTool(
           signal,
           limiter: options.getLimiter(),
           runAgent,
+          defaultSubagentType: null,
           resumeAgentResults,
           onLog: (message) => {
             snapshot.logs.push(message);
