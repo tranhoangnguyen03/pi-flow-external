@@ -109,7 +109,6 @@ Antigravity profile, `~/.pi/agent/subagents/agy-reviewer.md`:
 ---
 description: Code review through Antigravity.
 backend: agy
-model: gemini-3-pro
 thinking: high
 ---
 
