@@ -29,6 +29,7 @@ import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
+import { registerProfileCreator } from "./profile-creator.ts";
 import type {
   SubagentBackend,
   SubagentExtensionOptions,
@@ -90,6 +91,7 @@ interface SubagentUsageStatusState {
 }
 
 interface CreateAgentToolOptions {
+  getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
@@ -501,6 +503,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
     const usageStatusState = createUsageStatusState();
     const toolOptions: CreateAgentToolOptions = {
+      getLimiter: () => syncMaxConcurrentSubagents().limiter,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
       updateStatus: (ctx, toolCallId, usage) => {
@@ -512,6 +515,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
 
     pi.registerTool(createAgentTool(syncMaxConcurrentSubagents, toolOptions));
+    registerProfileCreator(pi, toolOptions);
     if (workflowEnabled) {
       pi.registerTool(
         createWorkflowTool({

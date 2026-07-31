@@ -848,7 +848,7 @@ describe("workflow tool rendering", () => {
       agents: Array.from({ length: 8 }, (_, i) => ({
         index: i + 1,
         label: `a${i + 1}`,
-        status: (i < 7 ? "error" : "running") as const,
+        status: i < 7 ? "error" as const : "running" as const,
       })),
       logs: [],
     };
@@ -1002,6 +1002,7 @@ describe("workflow tool registration", () => {
     const flags = new Map<string, boolean | string>();
     return {
       registerTool: (tool: { name: string }) => names.push(tool.name),
+      registerCommand: () => {},
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },
@@ -1021,6 +1022,6 @@ describe("workflow tool registration", () => {
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent"]);
+    expect(names).toEqual(["Agent", "pi_flow_profile_create"]);
   });
 });

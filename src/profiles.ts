@@ -60,14 +60,11 @@ function parseToolList(value: unknown): string[] | "invalid" {
   return tools.length > 0 ? tools : "invalid";
 }
 
-function parseProfileFile(filePath: string, name: string, options: { requireBody: boolean }): SubagentProfile | undefined {
-  let content: string;
-  try {
-    content = readFileSync(filePath, "utf-8");
-  } catch {
-    return undefined;
-  }
-
+export function parseSubagentProfileContent(
+  content: string,
+  name: string,
+  options: { requireBody: boolean } = { requireBody: false },
+): SubagentProfile | undefined {
   let parsed: { frontmatter: Record<string, unknown>; body: string };
   try {
     parsed = parseFrontmatter<Record<string, unknown>>(content);
@@ -100,6 +97,14 @@ function parseProfileFile(filePath: string, name: string, options: { requireBody
     tools,
     systemPrompt: body || undefined,
   };
+}
+
+function parseProfileFile(filePath: string, name: string, options: { requireBody: boolean }): SubagentProfile | undefined {
+  try {
+    return parseSubagentProfileContent(readFileSync(filePath, "utf-8"), name, options);
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadCustomSubagentProfiles(agentDir = getAgentDir()): Map<string, SubagentProfile> {

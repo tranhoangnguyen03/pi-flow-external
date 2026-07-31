@@ -73,7 +73,17 @@ External profiles run those CLIs in no-approval/dangerous modes (`claude ... --d
 
 No usable external profiles are bundled. Create backend-qualified profiles in `~/.pi/agent/subagents/*.md` before `Agent` or `workflow` can run. Project-only package installation still reads profiles from that global agent directory; project-local profiles are not currently supported.
 
-## Define external profiles
+## Create an external profile
+
+Recommended: start an AI-assisted interview in Pi:
+
+```text
+/pi-flow-profile create
+```
+
+Pi asks one question at a time, recommends a backend, and compiles the answers into a profile for your review. Generated names must start with the selected backend (`claude-`, `codex-`, or `agy-`). After confirmation, pi-flow stages the profile and smoke-tests the real backend from an empty temporary working directory without applying the proposed profile instructions. A successful test installs it in `~/.pi/agent/subagents/`; a failed test removes the staged profile. If cleanup itself fails, pi-flow reports the residual path for manual removal. The selected CLI still runs in the no-approval mode described above, so use this flow only in a trusted environment.
+
+## Define external profiles manually
 
 Custom profiles live in `~/.pi/agent/subagents/<name>.md`. Valid profile names use lowercase letters, numbers, and hyphens. Only profiles whose frontmatter sets `backend: claude`, `backend: codex`, or `backend: agy` are shown to, and accepted by, `Agent`/`workflow`.
 

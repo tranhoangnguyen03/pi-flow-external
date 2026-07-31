@@ -275,6 +275,7 @@ model: custom-codex-model
 Codex prompt.`);
     const fakeCodexPath = join(binDir, "codex");
     writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+import 'node:process';
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-test-session' }));
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'unknown model done' } }));

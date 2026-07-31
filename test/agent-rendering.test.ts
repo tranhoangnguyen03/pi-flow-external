@@ -62,6 +62,7 @@ describe("pi-subagent rendering", () => {
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },
+      registerCommand: () => {},
       getFlag: (name: string) => flags.get(name),
       on: () => {},
       getThinkingLevel: () => "high",
@@ -195,6 +196,7 @@ describe("pi-subagent rendering", () => {
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },
+      registerCommand: () => {},
       getFlag: (name: string) => flags.get(name),
       on: () => {},
       getThinkingLevel: () => "high",
@@ -321,6 +323,7 @@ describe("pi-subagent rendering", () => {
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },
+      registerCommand: () => {},
       getFlag: (name: string) => flags.get(name),
       on: () => {},
       getThinkingLevel: () => "high",
