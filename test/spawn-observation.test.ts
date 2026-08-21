@@ -6,21 +6,28 @@ describe("external nested-agent observation", () => {
     expect(hasNestedAgentActivity({
       type: "assistant",
       message: { content: [{ type: "tool_use", name: "Agent" }] },
-    })).toBe(true);
+    }, "claude")).toBe(true);
 
     expect(hasNestedAgentActivity({
       type: "item.completed",
       item: { type: "collab_tool_call", tool: "spawn_agent" },
-    })).toBe(true);
+    }, "codex")).toBe(true);
 
     expect(hasNestedAgentActivity({
       event: "step_update",
       step_update: { step_type: "tool", tool_name: "spawn_agent" },
-    })).toBe(true);
+    }, "agy")).toBe(true);
+  });
 
+  it("ignores generic values and terminal structured output", () => {
+    expect(hasNestedAgentActivity({ type: "agent" }, "claude")).toBe(false);
     expect(hasNestedAgentActivity({
       type: "item.completed",
-      item: { type: "command_execution", command: "npm test" },
-    })).toBe(false);
+      item: { type: "command_execution", name: "wait" },
+    }, "codex")).toBe(false);
+    expect(hasNestedAgentActivity({
+      event: "result",
+      result: { status: "SUCCESS", structured_output: { type: "agent" } },
+    }, "agy")).toBe(false);
   });
 });

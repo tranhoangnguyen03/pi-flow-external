@@ -11,6 +11,7 @@ import {
   spawnAgySubagent,
 } from "../src/core/agy.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
+import { MAX_STDOUT_LINE_CHARS } from "../src/core/stream.ts";
 
 describe("pi-subagent agy backend", () => {
   let tempDir = "";
@@ -25,17 +26,17 @@ describe("pi-subagent agy backend", () => {
   });
 
   it("builds a current headless stream-json invocation", () => {
-    const prompt = "--leading-dash with spaces\nand a newline\n{\"type\":\"object\"}";
     const outputSchema = { type: "object", required: ["answer"] };
     const args = buildAgyArgs({
       profile: { name: "agy-reviewer", description: "Agy", backend: "agy", model: "best" },
       thinkingLevel: "high",
-      prompt,
       outputSchema,
     });
     expect(args).toEqual([
       "--dangerously-skip-permissions",
       "--output-format",
+      "stream-json",
+      "--input-format",
       "stream-json",
       "--model",
       "best",
@@ -43,8 +44,6 @@ describe("pi-subagent agy backend", () => {
       "high",
       "--json-schema",
       JSON.stringify(outputSchema),
-      "-p",
-      prompt,
     ]);
     expect(normalizeAgyEffort("xhigh")).toBe("high");
     expect(normalizeAgyEffort("minimal")).toBe("low");
@@ -137,14 +136,18 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
       "--dangerously-skip-permissions",
       "--output-format",
       "stream-json",
+      "--input-format",
+      "stream-json",
       "--model",
       "default",
       "--effort",
       "high",
-      "-p",
-      "Agy reviewer prompt.\n\nReview the latest diff.",
     ]);
-    expect(agyRun.stdin).toBe("");
+    expect(agyRun.stdin).toBe(`${JSON.stringify({
+      event: "user",
+      message: { content: "Agy reviewer prompt.\n\nReview the latest diff." },
+    })}\n`);
+    expect(agyRun.args.join(" ")).not.toContain("Review the latest diff.");
     expect(JSON.stringify(rootContinuationContext?.messages)).toContain("agy child done");
 
     const recordsRoot = join(agentDir, "pi-flow-external", "runs");
@@ -278,6 +281,34 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-er
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("status ERROR: provider unavailable");
     expect(result.details).toMatchObject({ conversationId: "agy-error-result" });
+  });
+
+  it("fails clearly when agy emits an oversized newline-terminated stdout line", async () => {
+    const binDir = join(tempDir, "bin-agy-oversize");
+    mkdirSync(binDir, { recursive: true });
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
+console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'must not pass' } }));
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnAgySubagent({
+      toolCallId: "agy-oversize",
+      description: "Agy oversize",
+      prompt: "Trigger oversize stdout.",
+      profile: { name: "agy-oversize", description: "Test.", backend: "agy" },
+      thinkingLevel: undefined,
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("agy emitted a stdout line over");
   });
 
   it("kills an agy child if abort lands after process spawn", async () => {

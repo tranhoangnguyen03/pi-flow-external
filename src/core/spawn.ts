@@ -20,7 +20,7 @@ import {
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent } from "./agy.ts";
-import type { SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
+import type { SubagentBackend, SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 
@@ -74,34 +74,41 @@ function runRecordsDirectory(): string {
   return configured ? resolve(configured) : join(getAgentDir(), "pi-flow-external", "runs");
 }
 
-export function hasNestedAgentActivity(value: unknown): boolean {
-  const pending: Array<{ value: unknown; parentKey: string }> = [{ value, parentKey: "" }];
-  let inspected = 0;
-  while (pending.length && inspected++ < 20_000) {
-    const current = pending.pop()!;
-    if (Array.isArray(current.value)) {
-      for (const item of current.value) pending.push({ value: item, parentKey: current.parentKey });
-      continue;
-    }
-    if (current.value === null || typeof current.value !== "object") {
-      if (typeof current.value !== "string") continue;
-      const normalized = current.value.trim().toLowerCase().replaceAll("-", "_");
-      if (
-        ["tool_name", "name", "type", "tool"].includes(current.parentKey) &&
-        ["agent", "collab_tool_call", "spawn_agent", "invoke_subagent", "send_input", "resume_agent", "wait", "wait_agent", "close_agent"].includes(normalized)
-      ) {
-        return true;
-      }
-      continue;
-    }
-    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
-      const normalizedKey = key.toLowerCase();
-      if (normalizedKey === "subagent_info" && child !== undefined && child !== null) {
-        return true;
-      }
-      pending.push({ value: child, parentKey: normalizedKey });
-    }
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function isNestedToolName(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return ["agent", "spawn_agent", "invoke_subagent", "send_input", "resume_agent", "wait_agent", "close_agent"]
+    .includes(value.trim().toLowerCase().replaceAll("-", "_"));
+}
+
+export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend): boolean {
+  const event = asRecord(value);
+  if (!event) return false;
+
+  if (backend === "claude") {
+    const message = asRecord(event.message);
+    return event.type === "assistant" && Array.isArray(message?.content) && message.content.some((content) => {
+      const block = asRecord(content);
+      return block?.type === "tool_use" && isNestedToolName(block.name);
+    });
   }
+
+  if (backend === "codex") {
+    const item = asRecord(event.item);
+    return typeof event.type === "string" && event.type.startsWith("item.") && item?.type === "collab_tool_call";
+  }
+
+  if (backend === "agy") {
+    const update = asRecord(event.step_update);
+    return event.event === "step_update" && update?.step_type === "tool" &&
+      (isNestedToolName(update.tool_name) || asRecord(update.subagent_info) !== undefined);
+  }
+
   return false;
 }
 
@@ -169,7 +176,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
     backendEventCount++;
     const hadNestedActivity = nestedActivitySeen;
     try {
-      nestedActivitySeen ||= hasNestedAgentActivity(event);
+      nestedActivitySeen ||= hasNestedAgentActivity(event, params.profile.backend);
     } catch {
       // Observation must never change the backend run's result.
     }

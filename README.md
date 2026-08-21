@@ -212,7 +212,7 @@ not deleted automatically. Override the directory with
 `PI_FLOW_EXTERNAL_RUNS_DIR` if needed. If persistence fails, the completed run
 is labeled `record unavailable` instead of pretending the evidence was saved.
 
-Antigravity must be recent enough to support `--output-format stream-json`.
+Antigravity 1.1.15 or newer is required for `--input-format stream-json` and `--output-format stream-json`.
 
 From this checkout, summarize the collected evidence with:
 

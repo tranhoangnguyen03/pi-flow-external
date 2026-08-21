@@ -339,10 +339,9 @@ setTimeout(() => {
     mkdirSync(binDir, { recursive: true });
     const fakeClaudePath = join(binDir, "claude");
     writeFileSync(fakeClaudePath, `#!/usr/bin/env node
-process.stdin.resume();
-process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
-  setTimeout(() => process.exit(0), 50);
-});
+for await (const _chunk of process.stdin) {}
+console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'must not pass', usage: { input_tokens: 1, output_tokens: 1 } }));
 `);
     chmodSync(fakeClaudePath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -368,6 +367,6 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("claude emitted a stdout line over");
-    expect(result.details.error).toContain("without a newline");
+    expect(result.details.error).toContain("chars");
   });
 });

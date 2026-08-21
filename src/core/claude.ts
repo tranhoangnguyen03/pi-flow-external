@@ -458,10 +458,8 @@ export async function spawnClaudeSubagent(params: {
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        // A single newline-free line this large means the stream is unparseable.
-        // Fail loudly instead of silently dropping what might be real output.
-        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
+      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
+        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
         abortChild(proc);
         return;

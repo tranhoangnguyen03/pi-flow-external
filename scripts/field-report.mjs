@@ -34,27 +34,61 @@ async function loadRecords(baseDirectory) {
 
   const loaded = await Promise.all(entries
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("run_"))
-    .map(async (entry) => {
-      try {
-        const document = JSON.parse(await readFile(join(baseDirectory, entry.name, "summary.json"), "utf8"));
-        return {
-          ...document.summary,
-          runId: document.runId || entry.name,
-          startedAt: document.startedAt,
-          finishedAt: document.finishedAt,
-          recordIncomplete: false,
-        };
-      } catch {
-        return loadIncompleteRecord(baseDirectory, entry.name);
-      }
-    }));
+    .map((entry) => loadRecord(baseDirectory, entry.name)));
   return loaded.filter(Boolean);
 }
 
-async function loadIncompleteRecord(baseDirectory, runId) {
-  let events = [];
+async function loadRecord(baseDirectory, runId) {
+  const events = await loadEvents(baseDirectory, runId);
   try {
-    events = (await readFile(join(baseDirectory, runId, "events.ndjson"), "utf8"))
+    const document = JSON.parse(await readFile(join(baseDirectory, runId, "summary.json"), "utf8"));
+    const summary = document?.summary;
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+      return loadIncompleteRecord(runId, events);
+    }
+
+    const problems = [];
+    if (document.version !== 1) problems.push("unsupported or missing record version");
+    if (document.runId !== runId) problems.push("run ID mismatch");
+    if (typeof document.startedAt !== "string" || typeof document.finishedAt !== "string") {
+      problems.push("missing timestamps");
+    }
+    const writeErrorCount = finite(document.writeErrorCount);
+    const eventCount = finite(document.eventCount);
+    const attemptedEventCount = finite(document.attemptedEventCount);
+    const backendEventCount = events.filter((event) => event.type === "backend_event").length;
+    if (!["claude", "codex", "agy"].includes(summary.backend)) problems.push("missing or unknown backend");
+    if (typeof summary.profile !== "string" || !summary.profile) problems.push("missing profile");
+    if (!["done", "error", "aborted"].includes(summary.status)) problems.push("missing or unknown status");
+    if (writeErrorCount === undefined) problems.push("missing write error count");
+    else if (writeErrorCount > 0) problems.push(`${writeErrorCount} record write errors`);
+    if (eventCount === undefined || attemptedEventCount === undefined) {
+      problems.push("missing event counts");
+    } else {
+      if (eventCount !== attemptedEventCount) problems.push(`${attemptedEventCount - eventCount} events were not persisted`);
+      if (eventCount !== events.length) problems.push(`summary counts ${eventCount} events but ${events.length} are readable`);
+    }
+    if (finite(summary.backendEventCount) !== backendEventCount) {
+      problems.push(`summary counts ${finite(summary.backendEventCount) ?? 0} backend events but ${backendEventCount} are readable`);
+    }
+
+    return {
+      ...summary,
+      runId,
+      backendEventCount,
+      startedAt: document.startedAt,
+      finishedAt: document.finishedAt,
+      ...(problems.length ? { error: [summary.error, ...problems].filter(Boolean).join("; ") } : {}),
+      recordIncomplete: problems.length > 0,
+    };
+  } catch {
+    return loadIncompleteRecord(runId, events);
+  }
+}
+
+async function loadEvents(baseDirectory, runId) {
+  try {
+    return (await readFile(join(baseDirectory, runId, "events.ndjson"), "utf8"))
       .split(/\r?\n/)
       .filter(Boolean)
       .map((line) => {
@@ -66,9 +100,11 @@ async function loadIncompleteRecord(baseDirectory, runId) {
       })
       .filter(Boolean);
   } catch {
-    // A run directory with no readable files is still useful failure evidence.
+    return [];
   }
+}
 
+function loadIncompleteRecord(runId, events) {
   const started = events.find((event) => event.type === "run_started");
   const finished = events.findLast((event) => event.type === "run_finished");
   const recoveredSummary = finished?.data?.summary || {};
@@ -79,9 +115,8 @@ async function loadIncompleteRecord(baseDirectory, runId) {
     profile: recoveredSummary.profile || started?.data?.profile?.name || "unknown",
     description: recoveredSummary.description || started?.data?.description,
     status: recoveredSummary.status || "incomplete",
-    error: recoveredSummary.error || "summary.json is missing or unreadable",
-    backendEventCount: finite(recoveredSummary.backendEventCount)
-      ?? events.filter((event) => event.type === "backend_event").length,
+    error: recoveredSummary.error || "summary.json is missing, unreadable, or malformed",
+    backendEventCount: events.filter((event) => event.type === "backend_event").length,
     startedAt: started?.timestamp,
     finishedAt: finished?.timestamp,
     recordIncomplete: true,

@@ -298,10 +298,10 @@ setTimeout(() => {
     mkdirSync(binDir, { recursive: true });
     const fakeCodexPath = join(binDir, "codex");
     writeFileSync(fakeCodexPath, `#!/usr/bin/env node
-process.stdin.resume();
-process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
-  setTimeout(() => process.exit(0), 50);
-});
+for await (const _chunk of process.stdin) {}
+console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'must not pass' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
 `);
     chmodSync(fakeCodexPath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -327,7 +327,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("codex emitted a stdout line over");
-    expect(result.details.error).toContain("without a newline");
+    expect(result.details.error).toContain("chars");
   });
 
   it("does not add unknown codex model cost to the status line", async () => {

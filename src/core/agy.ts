@@ -170,17 +170,17 @@ function agyActivityFromEvent(event: Record<string, unknown>): string | undefine
 export function buildAgyArgs({
   profile,
   thinkingLevel,
-  prompt,
   outputSchema,
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
-  prompt: string;
   outputSchema?: unknown;
 }): string[] {
   const args = [
     "--dangerously-skip-permissions",
     "--output-format",
+    "stream-json",
+    "--input-format",
     "stream-json",
   ];
   if (profile.model) {
@@ -193,7 +193,6 @@ export function buildAgyArgs({
   if (outputSchema !== undefined && outputSchema !== null) {
     args.push("--json-schema", JSON.stringify(outputSchema));
   }
-  args.push("-p", prompt);
   return args;
 }
 
@@ -312,17 +311,16 @@ export async function spawnAgySubagent(params: {
     const proc = spawn(AGY_COMMAND, buildAgyArgs({
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
-      prompt: taskPrompt,
       outputSchema: params.outputSchema,
     }), {
       cwd: params.ctx.cwd,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     child = proc;
-    if (!proc.stdout || !proc.stderr) {
-      throw new Error("agy stdout/stderr pipes were not available");
+    if (!proc.stdin || !proc.stdout || !proc.stderr) {
+      throw new Error("agy stdin/stdout/stderr pipes were not available");
     }
     abortHandler = () => abortChild(proc);
     params.signal?.addEventListener("abort", abortHandler, { once: true });
@@ -332,13 +330,18 @@ export async function spawnAgySubagent(params: {
     }
     proc.stdout.setEncoding("utf8");
     proc.stderr.setEncoding("utf8");
+    proc.stdin.on("error", () => {
+      // If agy exits before reading stdin, the process close/error path below
+      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
+    });
+    proc.stdin.end(`${JSON.stringify({ event: "user", message: { content: taskPrompt } })}\n`);
     let stdoutBuffer = "";
     proc.stdout.on("data", (chunk) => {
       stdoutBuffer += String(chunk);
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        oversizeError ??= `agy emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
+      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
+        oversizeError ??= `agy emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
         abortChild(proc);
         return;
