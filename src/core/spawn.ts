@@ -7,6 +7,7 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { join, resolve } from "node:path";
 import {
   createProgressEmitter,
   extractFinalAssistantText,
@@ -20,7 +21,10 @@ import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent } from "./agy.ts";
 import type { SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
+import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
+
+const RUN_RECORDS_DIRECTORY_ENV = "PI_FLOW_EXTERNAL_RUNS_DIR";
 
 /**
  * The delegation tools a spawned child must never receive, so subagents cannot
@@ -57,6 +61,76 @@ export interface SpawnSubagentParams {
   customTools?: ToolDefinition[];
   /** JSON schema for CLI backends that can validate final text output natively. */
   outputSchema?: unknown;
+  /** Skip the local field record for internal probes such as profile smoke tests. */
+  recordRun?: boolean;
+}
+
+interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
+  onBackendEvent?: (event: unknown) => void;
+}
+
+function runRecordsDirectory(): string {
+  const configured = process.env[RUN_RECORDS_DIRECTORY_ENV]?.trim();
+  return configured ? resolve(configured) : join(getAgentDir(), "pi-flow-external", "runs");
+}
+
+export function hasNestedAgentActivity(value: unknown): boolean {
+  const pending: Array<{ value: unknown; parentKey: string }> = [{ value, parentKey: "" }];
+  let inspected = 0;
+  while (pending.length && inspected++ < 20_000) {
+    const current = pending.pop()!;
+    if (Array.isArray(current.value)) {
+      for (const item of current.value) pending.push({ value: item, parentKey: current.parentKey });
+      continue;
+    }
+    if (current.value === null || typeof current.value !== "object") {
+      if (typeof current.value !== "string") continue;
+      const normalized = current.value.trim().toLowerCase().replaceAll("-", "_");
+      if (
+        ["tool_name", "name", "type", "tool"].includes(current.parentKey) &&
+        ["agent", "collab_tool_call", "spawn_agent", "invoke_subagent", "send_input", "resume_agent", "wait", "wait_agent", "close_agent"].includes(normalized)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
+      const normalizedKey = key.toLowerCase();
+      if (normalizedKey === "subagent_info" && child !== undefined && child !== null) {
+        return true;
+      }
+      pending.push({ value: child, parentKey: normalizedKey });
+    }
+  }
+  return false;
+}
+
+function attachRunRecord(
+  result: AgentToolResult,
+  record: RunRecord,
+  backendEventCount: number,
+  nestedActivitySeen: boolean,
+  nestedTimeoutExtended: boolean,
+  effectiveTimeoutMs: number,
+  recordingError: string | undefined,
+): void {
+  const details = result.details as SubagentToolDetails;
+  details.runId = record.runId;
+  details.recordPath = record.directory;
+  details.backendEventCount = backendEventCount;
+  details.nestedActivitySeen = nestedActivitySeen;
+  details.nestedTimeoutExtended = nestedTimeoutExtended;
+  details.effectiveTimeoutMs = effectiveTimeoutMs;
+  details.recordingError = recordingError;
+  if (details.progress) {
+    details.progress.runId = record.runId;
+    details.progress.recordPath = record.directory;
+    details.progress.backendEventCount = backendEventCount;
+    details.progress.nestedActivitySeen = nestedActivitySeen;
+    details.progress.nestedTimeoutExtended = nestedTimeoutExtended;
+    details.progress.effectiveTimeoutMs = effectiveTimeoutMs;
+    details.progress.recordingError = recordingError;
+  }
 }
 
 function rewriteTimeoutResult(
@@ -75,23 +149,99 @@ function rewriteTimeoutResult(
 }
 
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
+  const startedAt = Date.now();
+  let backendEventCount = 0;
+  let nestedActivitySeen = false;
   const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
-  let result: AgentToolResult;
+  const record = params.recordRun === false
+    ? undefined
+    : createRunRecord({
+        directory: runRecordsDirectory(),
+        metadata: {
+          description: params.description,
+          prompt: params.prompt,
+          cwd: params.ctx.cwd,
+          timeoutMs: params.timeoutMs,
+          profile: params.profile,
+        },
+      });
+  const onBackendEvent = (event: unknown) => {
+    backendEventCount++;
+    const hadNestedActivity = nestedActivitySeen;
+    try {
+      nestedActivitySeen ||= hasNestedAgentActivity(event);
+    } catch {
+      // Observation must never change the backend run's result.
+    }
+    void record?.event("backend_event", { backend: params.profile.backend, event });
+    if (!hadNestedActivity && nestedActivitySeen && timeout.extendOnce()) {
+      void record?.event("nested_timeout_extended", {
+        configuredTimeoutMs: params.timeoutMs,
+        effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
+      });
+    }
+  };
   try {
-    result = await spawnSubagentRuntime({ ...params, signal: timeout.signal });
+    let result = await spawnSubagentRuntime({ ...params, signal: timeout.signal, onBackendEvent });
+    if (timeout.timedOut()) {
+      result = rewriteTimeoutResult(result, {
+        description: params.description,
+        profile: params.profile,
+        timeoutMs: timeout.effectiveTimeoutMs(),
+      });
+    }
+    if (record) {
+      const details = result.details as SubagentToolDetails;
+      await record.finish({
+        backend: params.profile.backend,
+        profile: params.profile.name,
+        model: params.profile.model,
+        description: params.description,
+        status: details.status,
+        timedOut: details.timedOut === true,
+        result: details.result,
+        error: details.error,
+        usage: details.usage,
+        durationMs: Date.now() - startedAt,
+        backendEventCount,
+        nestedActivitySeen,
+        nestedAgentControl: "allowed-observed",
+        nestedTimeoutExtended: timeout.wasExtended(),
+        configuredTimeoutMs: params.timeoutMs,
+        effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
+        permissionControl: "dangerous-bypass-prototype",
+      });
+      attachRunRecord(
+        result,
+        record,
+        backendEventCount,
+        nestedActivitySeen,
+        timeout.wasExtended(),
+        timeout.effectiveTimeoutMs(),
+        record.writeError?.message,
+      );
+    }
+    return result;
+  } catch (error) {
+    await record?.finish({
+      backend: params.profile.backend,
+      profile: params.profile.name,
+      description: params.description,
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt,
+      backendEventCount,
+      nestedActivitySeen,
+      nestedTimeoutExtended: timeout.wasExtended(),
+      effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
+    });
+    throw error;
   } finally {
     timeout.cleanup();
   }
-  return timeout.timedOut()
-    ? rewriteTimeoutResult(result, {
-        description: params.description,
-        profile: params.profile,
-        timeoutMs: params.timeoutMs,
-      })
-    : result;
 }
 
-async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentToolResult> {
+async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise<AgentToolResult> {
   if (params.profile.backend === "codex") {
     return spawnCodexSubagent({
       toolCallId: params.toolCallId,
@@ -104,6 +254,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progressEnabled: params.progressEnabled,
       onProgress: params.onProgress,
       onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
     });
@@ -120,6 +271,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progressEnabled: params.progressEnabled,
       onProgress: params.onProgress,
       onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
     });
@@ -136,6 +288,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progressEnabled: params.progressEnabled,
       onProgress: params.onProgress,
       onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
     });

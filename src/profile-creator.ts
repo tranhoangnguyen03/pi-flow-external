@@ -263,6 +263,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
                 onProgress: undefined,
                 onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
                 excludeTools: CHILD_EXCLUDED_TOOLS,
+                recordRun: false,
               });
               const details = result.details as { status?: string; error?: string };
               if (details.status === "aborted") {

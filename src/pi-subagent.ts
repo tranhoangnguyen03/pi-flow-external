@@ -218,7 +218,7 @@ function formatUsageStatus(totals: SubagentUsage, theme: Theme): string {
 
 function publishUsageStatus(ctx: ExtensionContext, state: SubagentUsageStatusState): void {
   const totals = getUsageTotals(state);
-  if (totals.input === 0 && totals.output === 0 && totals.cacheRead === 0 && totals.cacheWrite === 0 && totals.cost === 0) {
+  if (totals.input === 0 && totals.output === 0 && totals.cacheRead === 0 && totals.cacheWrite === 0) {
     ctx.ui.setStatus(STATUS_KEY, undefined);
     return;
   }

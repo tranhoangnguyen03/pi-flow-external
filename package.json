@@ -33,6 +33,7 @@
     "e2e:workflow-features": "node scripts/e2e/workflow-features.mjs",
     "e2e:codex-subagent": "node scripts/e2e/codex-subagent.mjs",
     "e2e:claude-subagent": "node scripts/e2e/claude-subagent.mjs",
+    "field-report": "node scripts/field-report.mjs",
     "test": "vitest run"
   },
   "peerDependencies": {

@@ -209,6 +209,13 @@ export function createWorkflowTool(
           agent.error = resultDetails.error;
           agent.timedOut = resultDetails.timedOut;
           agent.usage = resultDetails.usage;
+          agent.externalRunId = resultDetails.runId;
+          agent.recordPath = resultDetails.recordPath;
+          agent.backendEventCount = resultDetails.backendEventCount;
+          agent.nestedActivitySeen = resultDetails.nestedActivitySeen;
+          agent.nestedTimeoutExtended = resultDetails.nestedTimeoutExtended;
+          agent.effectiveTimeoutMs = resultDetails.effectiveTimeoutMs;
+          agent.recordingError = resultDetails.recordingError;
           if (progress) {
             agent.startedAt = progress.startedAt;
             agent.endedAt = progress.endedAt;

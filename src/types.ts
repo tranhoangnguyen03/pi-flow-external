@@ -55,6 +55,14 @@ export interface WorkflowAgentSnapshot {
   error?: string;
   timedOut?: boolean;
   usage?: SubagentUsage;
+  /** Local field-observation run ID for this external child. */
+  externalRunId?: string;
+  recordPath?: string;
+  backendEventCount?: number;
+  nestedActivitySeen?: boolean;
+  nestedTimeoutExtended?: boolean;
+  effectiveTimeoutMs?: number;
+  recordingError?: string;
 }
 
 export interface WorkflowToolDetails {
@@ -107,6 +115,19 @@ export interface SubagentProgressNode {
   error?: string;
   timedOut?: boolean;
   usage?: SubagentUsage;
+  /** Local field-observation run ID for this external invocation. */
+  runId?: string;
+  /** Directory containing the local event transcript and summary. */
+  recordPath?: string;
+  /** Number of structured backend events captured in the local transcript. */
+  backendEventCount?: number;
+  /** True when the backend stream exposed nested-agent activity. */
+  nestedActivitySeen?: boolean;
+  /** True when observed nested work received the one-time deadline extension. */
+  nestedTimeoutExtended?: boolean;
+  effectiveTimeoutMs?: number;
+  /** Set when the agent result is valid but its local observation record is incomplete. */
+  recordingError?: string;
 }
 
 export interface SubagentToolDetails {
@@ -119,6 +140,19 @@ export interface SubagentToolDetails {
   timedOut?: boolean;
   usage?: SubagentUsage;
   progress?: SubagentProgressNode;
+  /** Local field-observation run ID for this external invocation. */
+  runId?: string;
+  /** Directory containing the local event transcript and summary. */
+  recordPath?: string;
+  /** Number of structured backend events captured in the local transcript. */
+  backendEventCount?: number;
+  /** True when the backend stream exposed nested-agent activity. */
+  nestedActivitySeen?: boolean;
+  /** True when observed nested work received the one-time deadline extension. */
+  nestedTimeoutExtended?: boolean;
+  effectiveTimeoutMs?: number;
+  /** Set when the agent result is valid but its local observation record is incomplete. */
+  recordingError?: string;
   /** Number of currently running subagents, used to choose rich vs compact live rendering. */
   activeCount?: number;
   frame?: number;

@@ -1,8 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { markSubagentTimedOut } from "../src/core/timeout.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTimeoutSignal, markSubagentTimedOut } from "../src/core/timeout.ts";
 import type { SubagentToolDetails } from "../src/types.ts";
 
 describe("subagent timeout helpers", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("extends the deadline once when nested work appears", async () => {
+    vi.useFakeTimers();
+    const timeout = createTimeoutSignal(undefined, 100, "Nested child");
+
+    await vi.advanceTimersByTimeAsync(80);
+    expect(timeout.extendOnce()).toBe(true);
+    expect(timeout.wasExtended()).toBe(true);
+    expect(timeout.effectiveTimeoutMs()).toBe(180);
+    expect(timeout.extendOnce()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(timeout.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(timeout.signal?.aborted).toBe(true);
+    expect(timeout.timedOut()).toBe(true);
+    timeout.cleanup();
+  });
+
   it("treats a late successful result as timed out once the timeout has fired", () => {
     const details: SubagentToolDetails = {
       description: "Late child",
