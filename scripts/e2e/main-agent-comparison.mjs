@@ -116,7 +116,7 @@ function parseArgs(argv) {
   const options = {
     cwd: repoRoot,
     extension: path.join(repoRoot, "index.ts"),
-    model: "deepseek/deepseek-v4-flash",
+    model: "openai-codex/gpt-5.6-sol",
     thinking: "high",
     sessionRoot: path.join(tmpdir(), `pi-flow-main-agent-e2e-${Date.now()}`),
     timeoutMs: 0,
@@ -129,7 +129,7 @@ function parseArgs(argv) {
     withClaude: false,
     strictClaude: false,
     strictObserved: false,
-    claudeModel: "haiku",
+    claudeModel: "claude-sonnet-5",
     claudeEffort: "high",
     claudeTimeoutMs: 0,
     claudeMaxBudgetUsd: undefined,
@@ -203,7 +203,7 @@ handled the task directly. Behavior differences are reported but do not fail the
 run unless a scenario has an explicit expectedBehavior.
 
 Options:
-  --model <id>                   pi model (default: deepseek/deepseek-v4-flash)
+  --model <id>                   pi model (default: openai-codex/gpt-5.6-sol)
   --thinking <level>             pi thinking level (default: high)
   --session-root <dir>           artifact root (default: OS temp dir)
   --timeout-ms <ms>              per-pi-scenario timeout; 0 disables (default: 0)
@@ -221,7 +221,7 @@ Options:
   --with-claude                  also run Claude Code comparison
   --strict-claude                fail if a Claude Code scenario is incomplete or unexpected
   --strict-observed              fail incomplete observed scenarios too
-  --claude-model <id>            Claude Code model alias/id (default: haiku)
+  --claude-model <id>            Claude Code model alias/id (default: claude-sonnet-5)
   --claude-effort <level>        Claude Code effort (default: high)
   --claude-timeout-ms <ms>       per-Claude-scenario timeout; 0 disables (default: 0)
   --claude-max-budget-usd <usd>  optional Claude Code budget cap (default: unset)

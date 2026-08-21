@@ -17,8 +17,10 @@
 //
 // Usage:
 //   node scripts/e2e/workflow-features.mjs --model deepseek/deepseek-v4-flash --thinking high
-//   node scripts/e2e/workflow-features.mjs --model openai/gpt-5.4-mini --thinking high --keep
+//   node scripts/e2e/workflow-features.mjs --model openai-codex/gpt-5.6-sol --thinking high --keep
 //
+// The root Pi model authenticates separately from every delegated CLI. Verify it
+// first with `pi auth check --model <provider/model> --json`.
 // The run uses the caller's real ~/.pi/agent config (so provider/model resolution
 // and saved-workflow roots match production). It writes a temp fixture + sessions
 // under an OS temp dir and prints PASS/FAIL/INCONCLUSIVE per check.
@@ -31,6 +33,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -40,10 +43,18 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const extensionPath = path.join(repoRoot, "index.ts");
+const WORKFLOW_PROFILE_NAME = `zz-e2e-workflow-codex-${process.pid}`;
+let temporaryWorkflowProfilePath;
+
+process.on("exit", () => {
+  if (temporaryWorkflowProfilePath) {
+    try { unlinkSync(temporaryWorkflowProfilePath); } catch {}
+  }
+});
 
 function parseArgs(argv) {
   const options = {
-    model: "deepseek/deepseek-v4-flash",
+    model: "openai-codex/gpt-5.6-sol",
     thinking: "high",
     sessionRoot: path.join(tmpdir(), `pi-wf-features-${Date.now()}`),
     agentDir: process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"),
@@ -71,6 +82,15 @@ function parseArgs(argv) {
 
 function ensureDir(dir) {
   mkdirSync(dir, { recursive: true });
+}
+
+function installWorkflowProfile(agentDir) {
+  const subagentsDir = path.join(agentDir, "subagents");
+  const profilePath = path.join(subagentsDir, `${WORKFLOW_PROFILE_NAME}.md`);
+  ensureDir(subagentsDir);
+  if (existsSync(profilePath)) throw new Error(`Refusing to overwrite existing profile: ${profilePath}`);
+  writeFileSync(profilePath, `---\ndescription: Workflow feature E2E through Codex CLI.\nbackend: codex\nmodel: gpt-5.6-sol\nthinking: high\n---\n\nFollow the task exactly. Read fixture files as needed and do not edit them.\n`);
+  return profilePath;
 }
 
 function slug(text) {
@@ -134,6 +154,7 @@ const analyzed = await parallel(targets.map(function (f) {
     return agent("Read the file " + f + " in this repository and analyze it. Report the file path and the number of exported symbols.", {
       label: "analyze:" + f,
       phase: "collect",
+      subagent_type: "${WORKFLOW_PROFILE_NAME}",
       schema: { type: "object", required: ["file", "exportCount"], properties: { file: { type: "string" }, exportCount: { type: "number" } } }
     });
   };
@@ -141,7 +162,7 @@ const analyzed = await parallel(targets.map(function (f) {
 phase("refine");
 const refined = await pipeline(analyzed,
   function (a, original, i) {
-    return agent("In one short sentence, describe what the file " + (a && a.file) + " does. Plain text only, no preamble.", { label: "describe:" + i, phase: "refine" });
+    return agent("In one short sentence, describe what the file " + (a && a.file) + " does. Plain text only, no preamble.", { label: "describe:" + i, phase: "refine", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
   },
   function (sentence, original) {
     return { file: original.file, exportCount: original.exportCount, sentence: String(sentence).trim() };
@@ -154,18 +175,18 @@ const KITCHEN_SINK_ARGS = { repo: "widget-cli", files: ["src/report.js", "src/st
 const CONCURRENCY_PROBE = `export const meta = { name: "concurrency_probe", description: "Spawn more agents than the shared concurrency cap to verify queue-and-drain." };
 const out = await parallel([0, 1, 2, 3].map(function (n) {
   return function () {
-    return agent("Reply with exactly this text and nothing else: token-" + n, { label: "slot:" + n });
+    return agent("Reply with exactly this text and nothing else: token-" + n, { label: "slot:" + n, subagent_type: "${WORKFLOW_PROFILE_NAME}" });
   };
 }));
 return { count: out.filter(function (x) { return x !== null; }).length, tokens: out };`;
 
 const NONDET_PROBE = `export const meta = { name: "nondet_probe", description: "Intentionally nondeterministic; must be rejected before any subagent runs." };
 const stamp = Date.now();
-const reply = await agent("say hi", { label: "greet" });
+const reply = await agent("say hi", { label: "greet", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
 return { stamp: stamp, reply: reply };`;
 
 const SAVED_WORKFLOW = `export const meta = { name: "zz_e2e_saved_probe", description: "E2E saved-workflow probe: greet via one subagent and echo a token." };
-const reply = await agent("Reply with exactly this text and nothing else: saved-workflow-ok", { label: "greet" });
+const reply = await agent("Reply with exactly this text and nothing else: saved-workflow-ok", { label: "greet", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
 return { reply: String(reply).trim() };`;
 
 const SAVED_WORKFLOW_NAME = "zz_e2e_saved_probe";
@@ -181,6 +202,7 @@ const flags = await parallel(files.map(function (f) {
   return function () {
     return agent("Does the file " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "flag:" + f,
+      subagent_type: "${WORKFLOW_PROFILE_NAME}",
       schema: { type: "object", required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
   };
@@ -188,7 +210,7 @@ const flags = await parallel(files.map(function (f) {
 const deepDived = [];
 for (const r of flags) {
   if (r && r.importsKleur === true) {
-    const note = await agent("In one short sentence, say what " + r.file + " uses kleur for. Plain text only.", { label: "deep:" + r.file });
+    const note = await agent("In one short sentence, say what " + r.file + " uses kleur for. Plain text only.", { label: "deep:" + r.file, subagent_type: "${WORKFLOW_PROFILE_NAME}" });
     deepDived.push({ file: r.file, note: String(note).trim() });
   }
 }
@@ -200,6 +222,7 @@ const flags = await parallel(files.map(function (f) {
   return function () {
     return agent("Does " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "scan:" + f,
+      subagent_type: "${WORKFLOW_PROFILE_NAME}",
       schema: { type: "object", required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
   };
@@ -210,7 +233,7 @@ if (survivors.length === 0) {
   return { survivors: [], summarized: 0, earlyExit: true };
 }
 const summaries = await parallel(survivors.map(function (r) {
-  return function () { return agent("One short sentence describing " + r.file + ". Plain text only.", { label: "sum:" + r.file }); };
+  return function () { return agent("One short sentence describing " + r.file + ". Plain text only.", { label: "sum:" + r.file, subagent_type: "${WORKFLOW_PROFILE_NAME}" }); };
 }));
 return { survivors: survivors.map(function (r) { return r.file; }), summarized: summaries.filter(Boolean).length, earlyExit: false };`;
 
@@ -218,12 +241,13 @@ const ROUTE_PROBE = `export const meta = { name: "route_probe", description: "Cl
 const target = args.file;
 const c = await agent("Classify " + target + " as exactly one of: entry (a CLI entry point, e.g. reads process.argv or is declared as a bin), lib (an imported helper module), or test (a test file). Judge strictly from its source and role.", {
   label: "classify",
+  subagent_type: "${WORKFLOW_PROFILE_NAME}",
   schema: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } }
 });
 let follow;
-if (c && c.kind === "entry") follow = await agent("List the command-line argument(s) " + target + " reads. Plain text only.", { label: "route:entry" });
-else if (c && c.kind === "lib") follow = await agent("Name the function(s) " + target + " exports. Plain text only.", { label: "route:lib" });
-else follow = await agent("Name the test runner " + target + " uses. Plain text only.", { label: "route:test" });
+if (c && c.kind === "entry") follow = await agent("List the command-line argument(s) " + target + " reads. Plain text only.", { label: "route:entry", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
+else if (c && c.kind === "lib") follow = await agent("Name the function(s) " + target + " exports. Plain text only.", { label: "route:lib", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
+else follow = await agent("Name the test runner " + target + " uses. Plain text only.", { label: "route:test", subagent_type: "${WORKFLOW_PROFILE_NAME}" });
 return { kind: c && c.kind, follow: String(follow).trim() };`;
 
 // Discoverability: a natural-language task that REQUIRES branching on a typed
@@ -235,7 +259,7 @@ const DISCOVERABILITY_PROMPT = [
   "determine whether the file imports the \"kleur\" package. Then, ONLY for the files that DO import kleur, fan out a",
   "follow-up subagent that explains in one sentence how kleur is used there. Finally return an object listing which",
   "files imported kleur and the follow-up explanations. The script must decide which follow-ups to spawn based on the",
-  "per-file import result. Do not change any files.",
+  "per-file import result. Use subagent_type \"" + WORKFLOW_PROFILE_NAME + "\" for every agent() call. Do not change any files.",
 ].join(" ");
 
 // ---------------------------------------------------------------------------
@@ -851,6 +875,7 @@ async function main() {
     return;
   }
   ensureDir(options.sessionRoot);
+  temporaryWorkflowProfilePath = installWorkflowProfile(options.agentDir);
   const fixture = createFixture(options.sessionRoot);
   const ctx = {
     run: { model: options.model, thinking: options.thinking, agentDir: options.agentDir },
@@ -866,6 +891,7 @@ async function main() {
   console.log(`  fixture:     ${fixture}`);
   console.log(`  sessionRoot: ${options.sessionRoot}`);
   console.log(`  agentDir:    ${options.agentDir}`);
+  console.log(`  profile:     ${temporaryWorkflowProfilePath}`);
 
   // kitchen-sink first (resume depends on its persisted run); rest are independent.
   const registry = [

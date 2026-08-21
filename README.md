@@ -45,6 +45,13 @@ pi install -l npm:@tranhoangnguyen0310/pi-flow-external
 
 Project packages load after project trust. In a fresh project, `pi list --approve` can display a project package before trust so you can approve it.
 
+Update installed extensions and confirm the active package:
+
+```bash
+pi update --extensions
+pi list
+```
+
 Local development examples:
 
 ```bash
@@ -68,6 +75,14 @@ claude --version
 codex --version
 agy --version
 ```
+
+The root Pi model is a separate authentication boundary from those child CLIs. A working `claude`, `codex`, or `agy` login does not authenticate Pi's coordinator model. Verify the exact root model before a headless or E2E run:
+
+```bash
+pi auth check --model openai-codex/gpt-5.6-sol --json
+```
+
+The recommended baseline is root Pi `openai-codex/gpt-5.6-sol` with `high` thinking. Pass it explicitly to E2E scripts with `--root-model openai-codex/gpt-5.6-sol --root-thinking high`. Direct OpenAI models such as `openai/gpt-5.4-mini` require an OpenAI API key and are not covered by ChatGPT/Codex OAuth.
 
 External profiles run those CLIs in no-approval/dangerous modes (`claude ... --dangerously-skip-permissions`, `codex exec ... --dangerously-bypass-approvals-and-sandbox`, `agy --dangerously-skip-permissions`). Use them only in trusted repositories.
 
@@ -93,7 +108,7 @@ Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
 ---
 description: Repository exploration through Claude Code.
 backend: claude
-model: sonnet
+model: claude-sonnet-5
 thinking: high
 ---
 
@@ -106,7 +121,7 @@ Codex profile, `~/.pi/agent/subagents/codex-explorer.md`:
 ---
 description: Broad code search through Codex CLI.
 backend: codex
-model: gpt-5.4-mini
+model: gpt-5.6-sol
 thinking: high
 ---
 
@@ -119,6 +134,7 @@ Antigravity profile, `~/.pi/agent/subagents/agy-reviewer.md`:
 ---
 description: Code review through Antigravity.
 backend: agy
+model: gemini-3.7-flash-high
 thinking: high
 ---
 
@@ -165,7 +181,7 @@ Agent({
 });
 ```
 
-Subagents start fresh in the same working directory. Parent messages and tool results are not inherited, so prompts must be self-contained.
+Subagents start fresh in the same working directory. Parent messages and tool results are not inherited, so prompts must be self-contained. Backend-native helpers created by Claude, Codex, or Agy may use a different workspace; include explicit absolute paths and all required context when asking an external child to delegate further.
 
 The `workflow` tool is trusted JavaScript orchestration. Its `agent()` calls use the same external-only profile roster, and each child needs an explicit backend-qualified `subagent_type`.
 
@@ -179,8 +195,9 @@ pi --max-concurrent-subagents 4 --subagent-timeout-ms 600000
 
 Set `--subagent-timeout-ms` to `0` to disable the timeout. Values are milliseconds.
 When a structured backend event first reveals nested-agent work, pi-flow gives
-the external session one fresh timeout period, capped at twice the original
-deadline. It extends the deadline only once.
+the external session one fresh timeout period from the observation time, capped
+at twice the original deadline. It extends the deadline only once; it does not
+simply double every run's timeout.
 
 ## Field prototype: trustworthy returns
 
@@ -221,12 +238,23 @@ npm run field-report
 npm run field-report -- --json
 ```
 
+Interpret backend status and record integrity separately:
+
+- `status: done` plus a complete record means the backend returned a valid receipt.
+- `status: error` or `aborted` may still have complete, useful failure evidence.
+- `incompleteRecords > 0` means evidence is missing, malformed, or internally inconsistent, even if a backend summary says `done`.
+
+Failed and aborted external runs are not retried automatically. Preserve the receipt and retry only when the user requests it. See [`docs/field-testing.md`](docs/field-testing.md) for bounded real-backend scenarios and [`docs/releasing.md`](docs/releasing.md) for the maintainer release gate.
+
 ### Known prototype limits
 
 - All three backends still use their dangerous/no-approval modes.
 - Nested-agent detection depends on structured events. A helper started through
   a shell command or an unknown event name may remain invisible, and pi-flow
   does not provide operating-system process containment.
+- Backend-native nested helpers may use their own workspace instead of the
+  parent's repository. Supply explicit paths; pi-flow does not remap backend
+  workspaces.
 - The event log stores parsed structured events, not byte-for-byte stdout and
   stderr.
 - Record volume is not yet capped or rotated; clean the run directory during a
@@ -238,3 +266,12 @@ The useful field test is 20–30 real delegations. Check whether runs finish wit
 valid receipts, whether nested activity appears, whether the extra time helps,
 and where failures cluster. Cost is recorded when readily available, but it is
 optional and does not affect success.
+
+## Troubleshooting
+
+- **`No API key found` from root Pi:** choose an authenticated Pi model and verify it with `pi auth check --model <provider/model> --json`. Child CLI authentication is unrelated.
+- **Backend CLI works but no profile appears:** confirm the filename is backend-qualified, frontmatter uses the matching `backend`, and the file lives in `~/.pi/agent/subagents/`.
+- **Run failed but `incompleteRecords` is zero:** the backend failed and its evidence is intact; inspect `recentFailures` and the run's `summary.json`.
+- **`incompleteRecords` is nonzero:** inspect event/write-count mismatches before trusting the backend status.
+- **A nested helper cannot find repository files:** give it the repository's absolute path and relevant context; backend-native helpers may start elsewhere.
+- **Evidence contains sensitive text:** stop the trial and remove the run directory. Redaction is best-effort, not a secrecy boundary.
