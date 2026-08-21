@@ -17,7 +17,7 @@
 //
 // Usage:
 //   node scripts/e2e/workflow-features.mjs --model deepseek/deepseek-v4-flash --thinking high
-//   node scripts/e2e/workflow-features.mjs --model openai-codex/gpt-5.4-mini --thinking high --keep
+//   node scripts/e2e/workflow-features.mjs --model openai-codex/gpt-5.6-sol --thinking high --keep
 //
 // The root Pi model authenticates separately from every delegated CLI. Verify it
 // first with `pi auth check --model <provider/model> --json`.
@@ -45,7 +45,7 @@ const extensionPath = path.join(repoRoot, "index.ts");
 
 function parseArgs(argv) {
   const options = {
-    model: "deepseek/deepseek-v4-flash",
+    model: "openai-codex/gpt-5.6-sol",
     thinking: "high",
     sessionRoot: path.join(tmpdir(), `pi-wf-features-${Date.now()}`),
     agentDir: process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"),

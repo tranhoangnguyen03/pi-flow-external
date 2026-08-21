@@ -74,11 +74,14 @@ The explicit version and `latest` dist-tag must both resolve to the release. Com
 
 ## 8. Post-release check
 
-From a temporary Pi agent directory or trusted test project, update/install the package and confirm it loads:
+Install the exact published version into a temporary Pi agent directory so an older global installation cannot produce a false pass:
 
 ```bash
-pi update --extensions
-pi list
+export VERIFY_AGENT_DIR="$(mktemp -d /tmp/pi-flow-release-check.XXXXXX)"
+PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi install "npm:@tranhoangnguyen0310/pi-flow-external@<new-version>"
+PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi list
+rm -rf "$VERIFY_AGENT_DIR"
+unset VERIFY_AGENT_DIR
 ```
 
-Run a bounded receipt test from [`field-testing.md`](field-testing.md). Keep any resulting evidence private and remove temporary profiles afterward.
+Confirm `pi list` shows the exact version. Then run one bounded receipt test from [`field-testing.md`](field-testing.md). Keep resulting evidence private and remove temporary profiles afterward.

@@ -8,7 +8,7 @@
 //
 // Usage:
 //   node scripts/e2e/claude-subagent.mjs
-//   node scripts/e2e/claude-subagent.mjs --root-model openai-codex/gpt-5.4-mini --root-thinking medium --claude-model haiku --claude-thinking medium --keep
+//   node scripts/e2e/claude-subagent.mjs --root-model openai-codex/gpt-5.6-sol --root-thinking high --claude-model claude-sonnet-5 --claude-thinking high --keep
 // The root Pi model authenticates separately from the delegated Claude CLI.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -32,10 +32,10 @@ const extensionPath = path.join(repoRoot, "index.ts");
 
 function parseArgs(argv) {
   const options = {
-    rootModel: "openai/gpt-5.4-mini",
-    rootThinking: "medium",
-    claudeModel: "haiku",
-    claudeThinking: "medium",
+    rootModel: "openai-codex/gpt-5.6-sol",
+    rootThinking: "high",
+    claudeModel: "claude-sonnet-5",
+    claudeThinking: "high",
     agentDir: process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"),
     runRoot: path.join(tmpdir(), `pi-claude-subagent-e2e-${Date.now()}`),
     keep: false,
@@ -64,7 +64,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/e2e/claude-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai/gpt-5.4-mini; use openai-codex/gpt-5.4-mini with ChatGPT OAuth)\n  --root-thinking <level>         pi root thinking level (default: medium)\n  --claude-model <model>          Claude Code subagent model (default: haiku)\n  --claude-thinking <level>       profile thinking level passed to Claude Code (default: medium)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 240000)\n  --keep                          keep temp run root and temporary profile\n`);
+  console.log(`Usage: node scripts/e2e/claude-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai-codex/gpt-5.6-sol; ChatGPT OAuth)\n  --root-thinking <level>         pi root thinking level (default: high)\n  --claude-model <model>          Claude Code subagent model (default: claude-sonnet-5)\n  --claude-thinking <level>       profile thinking level passed to Claude Code (default: high)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 240000)\n  --keep                          keep temp run root and temporary profile\n`);
 }
 
 function ensureDir(dir) {

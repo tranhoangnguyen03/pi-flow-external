@@ -52,9 +52,11 @@
 - Modify: `scripts/e2e/claude-subagent.mjs`
 - Modify: `scripts/e2e/codex-subagent.mjs`
 - Modify: `scripts/e2e/workflow-features.mjs`
+- Modify: `scripts/e2e/main-agent-comparison.mjs`
 
 1. Update comments and help examples to distinguish the root Pi model from the delegated CLI model.
-2. Show `openai-codex/gpt-5.4-mini` as an OAuth-capable root-model override without changing script runtime defaults.
+2. Set the approved field defaults: root Pi `openai-codex/gpt-5.6-sol`, Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, and `high` thinking.
+3. Make the Codex E2E expected token derive from its selected model and thinking level.
 
 ### Task 5: Prepare and verify release
 
@@ -62,10 +64,11 @@
 - Modify: `package.json`
 - Modify: `package-lock.json`
 
-1. Bump the unpublished documentation release to `1.0.10-external.5` with `npm version 1.0.10-external.5 --no-git-tag-version`.
-2. Run `git diff --check`.
-3. Run `npm run check`; expect all active tests to pass.
-4. Run `npm pack --dry-run --json`; confirm both new guides and the updated runtime prompt are included.
-5. Run `npm audit --omit=dev --audit-level=high`; expect zero runtime vulnerabilities.
-6. Review the complete diff and request a read-only production review.
-7. Commit, push a branch, open a PR to `main`, merge after checks, then publish with `npm publish --access public --tag latest` and verify npm version/dist-tags.
+1. Package the active README, agent/context files, field-testing guide, and release guide.
+2. Bump the unpublished documentation release to `1.0.10-external.5` with `npm version 1.0.10-external.5 --no-git-tag-version`.
+3. Run `git diff --check`.
+4. Run `npm run check`; expect all active tests to pass.
+5. Run `npm pack --dry-run --json`; confirm both new guides and the updated runtime prompt are included.
+6. Run `npm audit --omit=dev --audit-level=high`; expect zero runtime vulnerabilities.
+7. Review the complete diff and request a read-only production review.
+8. Commit, push a branch, open a PR to `main`, merge after checks, then publish with `npm publish --access public --tag latest` and verify npm version/dist-tags.

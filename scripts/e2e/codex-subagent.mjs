@@ -3,13 +3,13 @@
 //
 // This creates a temporary custom subagent profile under the selected pi agent
 // dir, then runs a fresh `pi -p` session that is only allowed to use the Agent
-// tool. The selected profile uses `backend: codex`, `model: gpt-5.4-mini`, and
-// `thinking: medium`, so a successful run proves the root pi agent launched a
+// tool. The selected profile uses `backend: codex`, `model: gpt-5.6-sol`, and
+// `thinking: high`, so a successful run proves the root pi agent launched a
 // real Codex CLI child through the extension.
 //
 // Usage:
 //   node scripts/e2e/codex-subagent.mjs
-//   node scripts/e2e/codex-subagent.mjs --root-model openai-codex/gpt-5.4-mini --root-thinking medium --keep
+//   node scripts/e2e/codex-subagent.mjs --root-model openai-codex/gpt-5.6-sol --root-thinking high --keep
 // The root Pi model authenticates separately from the delegated Codex CLI.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -33,10 +33,10 @@ const extensionPath = path.join(repoRoot, "index.ts");
 
 function parseArgs(argv) {
   const options = {
-    rootModel: "openai/gpt-5.4-mini",
-    rootThinking: "medium",
-    codexModel: "gpt-5.4-mini",
-    codexThinking: "medium",
+    rootModel: "openai-codex/gpt-5.6-sol",
+    rootThinking: "high",
+    codexModel: "gpt-5.6-sol",
+    codexThinking: "high",
     agentDir: process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"),
     runRoot: path.join(tmpdir(), `pi-codex-subagent-e2e-${Date.now()}`),
     keep: false,
@@ -65,7 +65,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/e2e/codex-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai/gpt-5.4-mini; use openai-codex/gpt-5.4-mini with ChatGPT OAuth)\n  --root-thinking <level>         pi root thinking level (default: medium)\n  --codex-model <model>           Codex CLI subagent model (default: gpt-5.4-mini)\n  --codex-thinking <level>        profile thinking level passed to Codex (default: medium)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 180000)\n  --keep                          keep temp run root and temporary profile\n`);
+  console.log(`Usage: node scripts/e2e/codex-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai-codex/gpt-5.6-sol; ChatGPT OAuth)\n  --root-thinking <level>         pi root thinking level (default: high)\n  --codex-model <model>           Codex CLI subagent model (default: gpt-5.6-sol)\n  --codex-thinking <level>        profile thinking level passed to Codex (default: high)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 180000)\n  --keep                          keep temp run root and temporary profile\n`);
 }
 
 function ensureDir(dir) {
@@ -77,10 +77,10 @@ function shell(cmd, args, options = {}) {
   return result;
 }
 
-function writeFixture(runRoot) {
+function writeFixture(runRoot, tokenValue) {
   const fixture = path.join(runRoot, "fixture");
   ensureDir(fixture);
-  writeFileSync(path.join(fixture, "e2e-target.txt"), "gpt-5.4-mini-medium\n", "utf8");
+  writeFileSync(path.join(fixture, "e2e-target.txt"), `${tokenValue}\n`, "utf8");
   writeFileSync(path.join(fixture, "README.md"), "# Codex subagent E2E\n\nRead e2e-target.txt and report the token.\n", "utf8");
   shell("git", ["init", "-q"], { cwd: fixture });
   shell("git", ["add", "."], { cwd: fixture });
@@ -155,12 +155,14 @@ async function main() {
     return;
   }
 
+  const tokenValue = `${options.codexModel}-${options.codexThinking}`;
+  const expected = `CODEX_SUBAGENT_OK:${tokenValue}`;
   const profileName = `zz-e2e-codex-${Date.now()}`;
   const subagentsDir = path.join(options.agentDir, "subagents");
   const profilePath = path.join(subagentsDir, `${profileName}.md`);
   ensureDir(options.runRoot);
   ensureDir(subagentsDir);
-  const fixture = writeFixture(options.runRoot);
+  const fixture = writeFixture(options.runRoot, tokenValue);
   const sessionDir = path.join(options.runRoot, "sessions");
   ensureDir(sessionDir);
 
@@ -168,7 +170,6 @@ async function main() {
   writeFileSync(profilePath, profile, "utf8");
 
   const promptPath = path.join(options.runRoot, "prompt.md");
-  const expected = "CODEX_SUBAGENT_OK:gpt-5.4-mini-medium";
   writeFileSync(promptPath, `You are testing pi-flow Codex CLI backend.\n\nYou MUST call the Agent tool exactly once with subagent_type \"${profileName}\".\nUse description \"Codex CLI smoke\".\nThe subagent prompt must be:\n\nRead e2e-target.txt in the current working directory and reply with exactly this format and nothing else: CODEX_SUBAGENT_OK:<file content without surrounding whitespace>\n\nAfter the Agent result returns, reply with the subagent's exact final token line.\nExpected token line: ${expected}\n`, "utf8");
 
   const command = [

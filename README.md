@@ -79,10 +79,10 @@ agy --version
 The root Pi model is a separate authentication boundary from those child CLIs. A working `claude`, `codex`, or `agy` login does not authenticate Pi's coordinator model. Verify the exact root model before a headless or E2E run:
 
 ```bash
-pi auth check --model openai-codex/gpt-5.4-mini --json
+pi auth check --model openai-codex/gpt-5.6-sol --json
 ```
 
-Pass an authenticated root explicitly to E2E scripts, for example `--root-model openai-codex/gpt-5.4-mini`. Direct OpenAI models such as `openai/gpt-5.4-mini` require an OpenAI API key and are not covered by ChatGPT/Codex OAuth.
+The recommended baseline is root Pi `openai-codex/gpt-5.6-sol` with `high` thinking. Pass it explicitly to E2E scripts with `--root-model openai-codex/gpt-5.6-sol --root-thinking high`. Direct OpenAI models such as `openai/gpt-5.4-mini` require an OpenAI API key and are not covered by ChatGPT/Codex OAuth.
 
 External profiles run those CLIs in no-approval/dangerous modes (`claude ... --dangerously-skip-permissions`, `codex exec ... --dangerously-bypass-approvals-and-sandbox`, `agy --dangerously-skip-permissions`). Use them only in trusted repositories.
 
@@ -108,7 +108,7 @@ Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
 ---
 description: Repository exploration through Claude Code.
 backend: claude
-model: sonnet
+model: claude-sonnet-5
 thinking: high
 ---
 
@@ -121,7 +121,7 @@ Codex profile, `~/.pi/agent/subagents/codex-explorer.md`:
 ---
 description: Broad code search through Codex CLI.
 backend: codex
-model: gpt-5.4-mini
+model: gpt-5.6-sol
 thinking: high
 ---
 
@@ -134,6 +134,7 @@ Antigravity profile, `~/.pi/agent/subagents/agy-reviewer.md`:
 ---
 description: Code review through Antigravity.
 backend: agy
+model: gemini-3.7-flash-high
 thinking: high
 ---
 
