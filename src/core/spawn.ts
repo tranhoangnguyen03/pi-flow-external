@@ -105,7 +105,7 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
 
   if (backend === "agy") {
     const update = asRecord(event.step_update);
-    return event.event === "step_update" && update?.step_type === "tool" &&
+    return event.event === "step_update" && (update?.step_type === "tool" || update?.step_type === "subagent") &&
       (isNestedToolName(update.tool_name) || asRecord(update.subagent_info) !== undefined);
   }
 

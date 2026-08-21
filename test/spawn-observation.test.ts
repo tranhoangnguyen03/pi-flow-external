@@ -17,6 +17,15 @@ describe("external nested-agent observation", () => {
       event: "step_update",
       step_update: { step_type: "tool", tool_name: "spawn_agent" },
     }, "agy")).toBe(true);
+
+    expect(hasNestedAgentActivity({
+      event: "step_update",
+      step_update: {
+        step_type: "subagent",
+        tool_name: "invoke_subagent",
+        subagent_info: { subagents: [{ type_name: "research" }] },
+      },
+    }, "agy")).toBe(true);
   });
 
   it("ignores generic values and terminal structured output", () => {
