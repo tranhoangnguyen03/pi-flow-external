@@ -369,7 +369,7 @@ describe("profile creator", () => {
     const fakeBackend = join(binDir, backend);
     const successOutput = backend === "codex"
       ? `console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'PI_FLOW_PROFILE_OK' } }));\nconsole.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));`
-      : `console.log('PI_FLOW_PROFILE_OK');`;
+      : `console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'PI_FLOW_PROFILE_OK', usage: { input_tokens: 1, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 2 } } }));`;
     writeFileSync(fakeBackend, `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nlet stdin = '';\nfor await (const chunk of process.stdin) stdin += chunk;\nwriteFileSync(${JSON.stringify(runPath)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), stdin }));\n${successOutput}\n`);
     chmodSync(fakeBackend, 0o755);
     process.env.PATH = `${binDir}:${originalPath ?? ""}`;

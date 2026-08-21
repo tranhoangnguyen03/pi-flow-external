@@ -210,6 +210,76 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     disposeSession(session);
   });
 
+  it("forwards every parsed claude stream event", async () => {
+    const binDir = join(tempDir, "bin-claude-events");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-events' }));
+console.log('not-json');
+console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 2 } } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 10, output_tokens: 2 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const eventTypes: Array<string | undefined> = [];
+    const result = await spawnClaudeSubagent({
+      toolCallId: "claude-events",
+      description: "Claude event forwarding",
+      prompt: "Report completion.",
+      profile: {
+        name: "claude-events",
+        description: "Claude event forwarding profile.",
+        backend: "claude",
+        model: "sonnet",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+      onBackendEvent: (event) => {
+        eventTypes.push((event as { type?: string }).type);
+        if ((event as { type?: string }).type === "assistant") throw new Error("observer failed");
+      },
+    });
+
+    expect(result.details.status).toBe("done");
+    expect(eventTypes).toEqual(["system", "assistant", "result"]);
+  });
+
+  it("does not accept a Claude result that does not affirm success", async () => {
+    const binDir = join(tempDir, "bin-claude-no-terminal");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'plausible but unverified' }], usage: { input_tokens: 10, output_tokens: 2 } } }));
+console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnClaudeSubagent({
+      toolCallId: "claude-no-terminal",
+      description: "Claude no terminal",
+      prompt: "Return without a terminal event.",
+      profile: { name: "claude-no-terminal", description: "Test.", backend: "claude" },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("did not affirm success");
+  });
+
   it("kills a claude child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-claude-abort-race");
     const markerPath = join(tempDir, "claude-child-completed");
@@ -269,10 +339,9 @@ setTimeout(() => {
     mkdirSync(binDir, { recursive: true });
     const fakeClaudePath = join(binDir, "claude");
     writeFileSync(fakeClaudePath, `#!/usr/bin/env node
-process.stdin.resume();
-process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
-  setTimeout(() => process.exit(0), 50);
-});
+for await (const _chunk of process.stdin) {}
+console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'must not pass', usage: { input_tokens: 1, output_tokens: 1 } }));
 `);
     chmodSync(fakeClaudePath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -298,6 +367,6 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("claude emitted a stdout line over");
-    expect(result.details.error).toContain("without a newline");
+    expect(result.details.error).toContain("chars");
   });
 });

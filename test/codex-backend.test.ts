@@ -169,6 +169,75 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     disposeSession(session);
   });
 
+  it("forwards every parsed codex stream event", async () => {
+    const binDir = join(tempDir, "bin-codex-events");
+    mkdirSync(binDir, { recursive: true });
+    const fakeCodexPath = join(binDir, "codex");
+    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-events' }));
+console.log('not-json');
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } }));
+`);
+    chmodSync(fakeCodexPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const eventTypes: Array<string | undefined> = [];
+    const result = await spawnCodexSubagent({
+      toolCallId: "codex-events",
+      description: "Codex event forwarding",
+      prompt: "Report completion.",
+      profile: {
+        name: "codex-events",
+        description: "Codex event forwarding profile.",
+        backend: "codex",
+        model: "gpt-5.4-mini",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+      onBackendEvent: (event) => {
+        eventTypes.push((event as { type?: string }).type);
+        if ((event as { type?: string }).type === "item.completed") throw new Error("observer failed");
+      },
+    });
+
+    expect(result.details.status).toBe("done");
+    expect(eventTypes).toEqual(["thread.started", "item.completed", "turn.completed"]);
+  });
+
+  it("does not accept final text without a terminal codex event", async () => {
+    const binDir = join(tempDir, "bin-codex-no-terminal");
+    mkdirSync(binDir, { recursive: true });
+    const fakeCodexPath = join(binDir, "codex");
+    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'plausible but unverified' } }));
+`);
+    chmodSync(fakeCodexPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnCodexSubagent({
+      toolCallId: "codex-no-terminal",
+      description: "Codex no terminal",
+      prompt: "Return without a terminal event.",
+      profile: { name: "codex-no-terminal", description: "Test.", backend: "codex" },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("without a terminal JSON event");
+  });
+
   it("kills a codex child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-abort-race");
     const markerPath = join(tempDir, "codex-child-completed");
@@ -229,10 +298,10 @@ setTimeout(() => {
     mkdirSync(binDir, { recursive: true });
     const fakeCodexPath = join(binDir, "codex");
     writeFileSync(fakeCodexPath, `#!/usr/bin/env node
-process.stdin.resume();
-process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
-  setTimeout(() => process.exit(0), 50);
-});
+for await (const _chunk of process.stdin) {}
+console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'must not pass' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
 `);
     chmodSync(fakeCodexPath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -258,7 +327,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("codex emitted a stdout line over");
-    expect(result.details.error).toContain("without a newline");
+    expect(result.details.error).toContain("chars");
   });
 
   it("does not add unknown codex model cost to the status line", async () => {

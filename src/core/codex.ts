@@ -329,6 +329,7 @@ export async function spawnCodexSubagent(params: {
   progressEnabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
+  onBackendEvent?: (event: unknown) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
 }): Promise<AgentToolResult> {
@@ -347,16 +348,29 @@ export async function spawnCodexSubagent(params: {
   let resultText = "";
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
+  let terminalSucceeded = false;
   let eventError: string | undefined;
   let diagnosticError: string | undefined;
+  let protocolError: string | undefined;
   let oversizeError: string | undefined;
   let child: ChildProcess | undefined;
   let schemaFile: Awaited<ReturnType<typeof createOutputSchemaFile>> = undefined;
   let abortHandler: (() => void) | undefined;
 
   const handleEvent = (event: Record<string, unknown>) => {
-    if (event.type === "turn.completed" || event.type === "turn.failed") {
+    try {
+      params.onBackendEvent?.(event);
+    } catch {
+      // Observation hooks must not change the backend result.
+    }
+    if (sawTerminalEvent) {
+      protocolError ??= "codex emitted an event after its terminal event";
+      return;
+    }
+    const isTerminal = event.type === "turn.completed" || event.type === "turn.failed";
+    if (isTerminal) {
       sawTerminalEvent = true;
+      terminalSucceeded = event.type === "turn.completed";
     }
     const activity = codexActivityFromEvent(event);
     if (activity) {
@@ -435,10 +449,8 @@ export async function spawnCodexSubagent(params: {
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        // A single newline-free line this large means the stream is unparseable.
-        // Fail loudly instead of silently dropping what might be real output.
-        oversizeError ??= `codex emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
+      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
+        oversizeError ??= `codex emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
         abortChild(proc);
         return;
@@ -483,6 +495,9 @@ export async function spawnCodexSubagent(params: {
     if (oversizeError) {
       throw new Error(oversizeError);
     }
+    if (protocolError) {
+      throw new Error(protocolError);
+    }
     if (eventError) {
       throw new Error(eventError);
     }
@@ -491,16 +506,18 @@ export async function spawnCodexSubagent(params: {
       const diagnostic = diagnosticError ? `: ${diagnosticError}` : "";
       throw new Error(`codex exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : diagnostic}`);
     }
-    if (!sawTerminalEvent && !resultText.trim()) {
-      // Hard-fail only when codex produced nothing usable. If it exited cleanly
-      // (code 0) with final text but no recognized terminal event — e.g. a CLI
-      // stream-format change renamed the event — accept the output rather than
-      // turning a good run into a failure.
+    if (!sawTerminalEvent) {
       throw new Error(diagnosticError ?? "codex exited without a terminal JSON event");
+    }
+    if (!terminalSucceeded) {
+      throw new Error("codex terminal event did not affirm success");
+    }
+    if (!resultText.trim()) {
+      throw new Error("codex reported completion without a final result");
     }
 
     params.onUsage(latestUsage);
-    const result = resultText.trim() || "(no final text output)";
+    const result = resultText.trim();
     if (progress) {
       progress.status = "done";
       progress.result = result;

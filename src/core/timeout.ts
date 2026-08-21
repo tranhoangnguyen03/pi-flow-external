@@ -3,6 +3,10 @@ import type { SubagentToolDetails } from "../types.ts";
 export interface TimeoutSignalState {
   signal: AbortSignal | undefined;
   timedOut: () => boolean;
+  /** Give observed nested work one fresh base timeout, capped at twice the original deadline. */
+  extendOnce: () => boolean;
+  wasExtended: () => boolean;
+  effectiveTimeoutMs: () => number;
   cleanup: () => void;
 }
 
@@ -28,21 +32,37 @@ export function subagentTimeoutMessage(timeoutMs: number): string {
 
 export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeoutMs: number, description: string): TimeoutSignalState {
   if (timeoutMs <= 0 || baseSignal?.aborted) {
-    return { signal: baseSignal, timedOut: () => false, cleanup: () => undefined };
+    return {
+      signal: baseSignal,
+      timedOut: () => false,
+      extendOnce: () => false,
+      wasExtended: () => false,
+      effectiveTimeoutMs: () => timeoutMs,
+      cleanup: () => undefined,
+    };
   }
 
   const timeoutController = new AbortController();
+  const startedAt = Date.now();
+  let deadline = startedAt + timeoutMs;
   let timedOut = false;
+  let extended = false;
   let cleanedUp = false;
-  const timer = setTimeout(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const fireTimeout = () => {
     timedOut = true;
     removeBaseAbortListener();
-    timeoutController.abort(new Error(`Subagent "${description}" timed out after ${formatDurationMs(timeoutMs)}`));
-  }, timeoutMs);
-  timer.unref?.();
+    timeoutController.abort(new Error(`Subagent "${description}" timed out after ${formatDurationMs(deadline - startedAt)}`));
+  };
 
   const clearTimer = () => {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+  };
+  const scheduleTimer = () => {
+    clearTimer();
+    timer = setTimeout(fireTimeout, Math.max(0, deadline - Date.now()));
+    timer.unref?.();
   };
   const onBaseAbort = () => {
     if (!timedOut) {
@@ -55,6 +75,7 @@ export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeout
   }
 
   baseSignal?.addEventListener("abort", onBaseAbort, { once: true });
+  scheduleTimer();
 
   const signal = baseSignal
     ? AbortSignal.any([baseSignal, timeoutController.signal])
@@ -63,6 +84,17 @@ export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeout
   return {
     signal,
     timedOut: () => timedOut,
+    extendOnce: () => {
+      if (extended || timedOut || cleanedUp) return false;
+      extended = true;
+      const nextDeadline = Math.min(Date.now() + timeoutMs, startedAt + (2 * timeoutMs));
+      if (nextDeadline <= deadline) return false;
+      deadline = nextDeadline;
+      scheduleTimer();
+      return true;
+    },
+    wasExtended: () => extended && deadline > startedAt + timeoutMs,
+    effectiveTimeoutMs: () => deadline - startedAt,
     cleanup: () => {
       if (cleanedUp) {
         return;

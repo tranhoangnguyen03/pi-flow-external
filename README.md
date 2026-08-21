@@ -178,3 +178,63 @@ pi --max-concurrent-subagents 4 --subagent-timeout-ms 600000
 ```
 
 Set `--subagent-timeout-ms` to `0` to disable the timeout. Values are milliseconds.
+When a structured backend event first reveals nested-agent work, pi-flow gives
+the external session one fresh timeout period, capped at twice the original
+deadline. It extends the deadline only once.
+
+## Field prototype: trustworthy returns
+
+This implementation is deliberately a field prototype. Its question is simple: can an
+unattended external run return a result with enough evidence to trust and debug
+it?
+
+For every normal `Agent` or workflow child run:
+
+- Claude Code, Codex CLI, and Antigravity must emit a recognized terminal
+  success event, return a non-empty result, and exit successfully.
+- Pi-flow does not block native Claude, Codex, or Antigravity subagents. When
+  the selected backend and its configuration use them, known nested-agent event
+  names are heuristically flagged and detected nested work receives the
+  one-time timeout extension described above.
+- Parsed backend events and a final summary are kept locally under
+  `~/.pi/agent/pi-flow-external/runs/<run-id>/`.
+
+Each run directory contains:
+
+- `events.ndjson`: the structured events received from the backend.
+- `summary.json`: status, duration, usage, result, and prototype control labels.
+
+The recorder makes no additional network requests; the delegated CLI still
+sends data to its configured AI provider. New run directories and files are
+private to the local user, but secret redaction is best-effort and records can
+still contain sensitive prompts, source excerpts, or tool output. Records are
+not deleted automatically. Override the directory with
+`PI_FLOW_EXTERNAL_RUNS_DIR` if needed. If persistence fails, the completed run
+is labeled `record unavailable` instead of pretending the evidence was saved.
+
+Antigravity 1.1.15 or newer is required for `--input-format stream-json` and `--output-format stream-json`.
+
+From this checkout, summarize the collected evidence with:
+
+```bash
+npm run field-report
+npm run field-report -- --json
+```
+
+### Known prototype limits
+
+- All three backends still use their dangerous/no-approval modes.
+- Nested-agent detection depends on structured events. A helper started through
+  a shell command or an unknown event name may remain invisible, and pi-flow
+  does not provide operating-system process containment.
+- The event log stores parsed structured events, not byte-for-byte stdout and
+  stderr.
+- Record volume is not yet capped or rotated; clean the run directory during a
+  long field trial.
+- Automatic retries, session resume, project-local profiles, and permission
+  tiers are intentionally postponed until real usage shows which matter.
+
+The useful field test is 20–30 real delegations. Check whether runs finish with
+valid receipts, whether nested activity appears, whether the extra time helps,
+and where failures cluster. Cost is recorded when readily available, but it is
+optional and does not affect success.

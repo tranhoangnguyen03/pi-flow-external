@@ -22,6 +22,14 @@ export interface RenderableSubagentNode {
   error?: string;
   timedOut?: boolean;
   usage?: SubagentUsage;
+  runId?: string;
+  recordPath?: string;
+  backendEventCount?: number;
+  nestedActivitySeen?: boolean;
+  nestedTimeoutExtended?: boolean;
+  effectiveTimeoutMs?: number;
+  recordingError?: string;
+  externalRunId?: string;
 }
 
 export function isActiveSubagentStatus(status: SubagentRunStatus): boolean {
@@ -73,9 +81,6 @@ export function formatUsage(usage: SubagentUsage): string {
   }
   if ((usage.cacheRead > 0 || usage.cacheWrite > 0) && usage.latestCacheHitRate !== undefined) {
     parts.push(`CH${usage.latestCacheHitRate.toFixed(1)}%`);
-  }
-  if (usage.cost) {
-    parts.push(`$${usage.cost.toFixed(3)}${usage.costKnown === false ? "+?" : ""}`);
   }
   return parts.join(" ");
 }
@@ -133,6 +138,18 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): strin
     if (usage) {
       parts.push(usage);
     }
+  }
+  const runId = node.runId ?? node.externalRunId;
+  if (node.recordingError) {
+    parts.push("record unavailable");
+  } else if (!isActiveSubagentStatus(node.status) && runId) {
+    parts.push(`run ${runId.slice(-8)}`);
+  }
+  if (node.nestedActivitySeen) {
+    parts.push("nested activity seen");
+  }
+  if (node.nestedTimeoutExtended) {
+    parts.push("timeout extended");
   }
   return parts.join(" ");
 }

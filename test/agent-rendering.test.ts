@@ -239,7 +239,8 @@ describe("pi-subagent rendering", () => {
       const text = renderToText(captured.renderResult(result, {}, theme, {}));
 
       expect(text).toContain("Pi Agent(explorer: Research repo)");
-      expect(text).toContain("2s ↑81k ↓4.9k R602k CH94.7% $0.850");
+      expect(text).toContain("2s ↑81k ↓4.9k R602k CH94.7%");
+      expect(text).not.toContain("$0.850");
       expect(text).toContain("... +2 earlier events");
       expect(text).toContain("Read src/types.ts");
       expect(text).toContain("Read app.py");

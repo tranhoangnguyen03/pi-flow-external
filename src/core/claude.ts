@@ -332,6 +332,7 @@ export async function spawnClaudeSubagent(params: {
   progressEnabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
+  onBackendEvent?: (event: unknown) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
 }): Promise<AgentToolResult> {
@@ -352,7 +353,9 @@ export async function spawnClaudeSubagent(params: {
   let resultText = "";
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
+  let terminalSucceeded = false;
   let eventError: string | undefined;
+  let protocolError: string | undefined;
   let oversizeError: string | undefined;
   let child: ChildProcess | undefined;
   let abortHandler: (() => void) | undefined;
@@ -372,8 +375,19 @@ export async function spawnClaudeSubagent(params: {
     emitter.emitSoon();
   };
   const handleEvent = (event: Record<string, unknown>) => {
-    if (event.type === "result" || event.type === "error") {
+    try {
+      params.onBackendEvent?.(event);
+    } catch {
+      // Observation hooks must not change the backend result.
+    }
+    if (sawTerminalEvent) {
+      protocolError ??= "claude emitted an event after its terminal event";
+      return;
+    }
+    const isTerminal = event.type === "result" || event.type === "error";
+    if (isTerminal) {
       sawTerminalEvent = true;
+      terminalSucceeded = event.type === "result" && event.subtype === "success" && event.is_error === false;
     }
     const activity = claudeActivityFromEvent(event);
     if (activity) {
@@ -396,6 +410,8 @@ export async function spawnClaudeSubagent(params: {
     const error = extractClaudeError(event);
     if (error) {
       eventError ??= error;
+    } else if (isTerminal && !terminalSucceeded) {
+      eventError ??= "claude terminal event did not affirm success";
     }
   };
 
@@ -442,10 +458,8 @@ export async function spawnClaudeSubagent(params: {
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        // A single newline-free line this large means the stream is unparseable.
-        // Fail loudly instead of silently dropping what might be real output.
-        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
+      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
+        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
         abortChild(proc);
         return;
@@ -490,6 +504,9 @@ export async function spawnClaudeSubagent(params: {
     if (oversizeError) {
       throw new Error(oversizeError);
     }
+    if (protocolError) {
+      throw new Error(protocolError);
+    }
     if (eventError) {
       throw new Error(eventError);
     }
@@ -497,16 +514,18 @@ export async function spawnClaudeSubagent(params: {
       const stderr = stderrBuffer.text().trim();
       throw new Error(`claude exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
     }
-    if (!sawTerminalEvent && !resultText.trim()) {
-      // Hard-fail only when claude produced nothing usable. If it exited cleanly
-      // (code 0) with final text but no recognized terminal event — e.g. a CLI
-      // stream-format change renamed the event — accept the output rather than
-      // turning a good run into a failure.
+    if (!sawTerminalEvent) {
       throw new Error("claude exited without a terminal JSON event");
+    }
+    if (!terminalSucceeded) {
+      throw new Error("claude terminal event did not affirm success");
+    }
+    if (!resultText.trim()) {
+      throw new Error("claude reported completion without a final result");
     }
 
     params.onUsage(latestUsage);
-    const result = resultText.trim() || "(no final text output)";
+    const result = resultText.trim();
     if (progress) {
       progress.status = "done";
       progress.result = result;
