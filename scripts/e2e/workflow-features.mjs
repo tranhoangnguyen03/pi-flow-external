@@ -17,8 +17,10 @@
 //
 // Usage:
 //   node scripts/e2e/workflow-features.mjs --model deepseek/deepseek-v4-flash --thinking high
-//   node scripts/e2e/workflow-features.mjs --model openai/gpt-5.4-mini --thinking high --keep
+//   node scripts/e2e/workflow-features.mjs --model openai-codex/gpt-5.4-mini --thinking high --keep
 //
+// The root Pi model authenticates separately from every delegated CLI. Verify it
+// first with `pi auth check --model <provider/model> --json`.
 // The run uses the caller's real ~/.pi/agent config (so provider/model resolution
 // and saved-workflow roots match production). It writes a temp fixture + sessions
 // under an OS temp dir and prints PASS/FAIL/INCONCLUSIVE per check.

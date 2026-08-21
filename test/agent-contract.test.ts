@@ -68,6 +68,12 @@ describe("pi-subagent agent contract", () => {
     expect(tool?.promptGuidelines).toContain(
       "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
     );
+    expect(tool?.promptGuidelines).toContain(
+      "Every Agent call requires an explicit backend-qualified subagent_type.",
+    );
+    expect(tool?.promptGuidelines).toContain(
+      "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
+    );
 
     disposeSession(session);
   });
@@ -134,6 +140,9 @@ describe("pi-subagent agent contract", () => {
     expect(rootContext?.systemPrompt).toContain('User asks "ask Claude Code to explore this repo"');
     expect(rootContext?.systemPrompt).toContain("single-fact lookup");
     expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
+    expect(rootContext?.systemPrompt).toContain("Every Agent call requires an explicit backend-qualified subagent_type");
+    expect(rootContext?.systemPrompt).toContain("Do not automatically retry a failed or aborted external run");
+    expect(rootContext?.systemPrompt).toContain("Backend-native nested agents may not inherit the parent working directory");
     expect(rootContext?.systemPrompt).toContain(
       "agent('...', { label: '...', subagent_type: 'claude-explorer' })",
     );

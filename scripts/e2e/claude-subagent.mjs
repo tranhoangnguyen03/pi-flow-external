@@ -8,7 +8,8 @@
 //
 // Usage:
 //   node scripts/e2e/claude-subagent.mjs
-//   node scripts/e2e/claude-subagent.mjs --root-model openai/gpt-5.4-mini --root-thinking medium --claude-model haiku --claude-thinking medium --keep
+//   node scripts/e2e/claude-subagent.mjs --root-model openai-codex/gpt-5.4-mini --root-thinking medium --claude-model haiku --claude-thinking medium --keep
+// The root Pi model authenticates separately from the delegated Claude CLI.
 
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -63,7 +64,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/e2e/claude-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai/gpt-5.4-mini)\n  --root-thinking <level>         pi root thinking level (default: medium)\n  --claude-model <model>          Claude Code subagent model (default: haiku)\n  --claude-thinking <level>       profile thinking level passed to Claude Code (default: medium)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 240000)\n  --keep                          keep temp run root and temporary profile\n`);
+  console.log(`Usage: node scripts/e2e/claude-subagent.mjs [options]\n\nOptions:\n  --root-model <provider/model>   pi root model (default: openai/gpt-5.4-mini; use openai-codex/gpt-5.4-mini with ChatGPT OAuth)\n  --root-thinking <level>         pi root thinking level (default: medium)\n  --claude-model <model>          Claude Code subagent model (default: haiku)\n  --claude-thinking <level>       profile thinking level passed to Claude Code (default: medium)\n  --agent-dir <dir>               pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                temp run root\n  --timeout-ms <ms>               pi process timeout (default: 240000)\n  --keep                          keep temp run root and temporary profile\n`);
 }
 
 function ensureDir(dir) {

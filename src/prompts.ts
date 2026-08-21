@@ -6,6 +6,7 @@ export const AGENT_PROMPT_SNIPPET =
 
 export const AGENT_PROMPT_GUIDELINES = [
   "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
+  "Every Agent call requires an explicit backend-qualified subagent_type.",
   "Use claude-* profiles for Claude Code strengths such as frontend/product review and nuanced repo exploration.",
   "Use codex-* profiles for Codex strengths such as broad code search, independent implementation review, and CLI-oriented investigation.",
   "Use agy-* profiles for Antigravity strengths such as autonomous planning, implementation, and repository-aware debugging.",
@@ -16,6 +17,8 @@ export const AGENT_PROMPT_GUIDELINES = [
   "Agent profiles are external-only in this fork. Use the native subagent system for Pi-backed scout/reviewer/planner style delegation.",
   "Clearly tell the subagent whether you expect read-only research or code changes.",
   "The Agent final message is returned to you as the tool result and is not shown to the user; relay what matters.",
+  "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
+  "Backend-native nested agents may not inherit the parent working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.",
 ];
 
 export const WORKFLOW_PROMPT_SNIPPET =
@@ -35,6 +38,8 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
   "Pass a JSON Schema as agent()'s `schema` option whenever the script must branch, route, filter, or aggregate on a result: the subagent is forced to return one validated object (agent() resolves to that object instead of text), so `if (r.kind === ...)` / `flags.filter(...)` are reliable. Omit `schema` for prose findings you only read or synthesize.",
   "Subagents are fresh sessions with no parent context. External CLI backends use their own tool surface. Include all needed context and paths in each agent() prompt.",
   "Failed agent()/parallel()/pipeline() branches resolve to null and are logged unless the workflow is aborted; check for nulls before synthesizing.",
+  "Do not automatically rerun failed workflow branches; preserve the failure and retry only when the user asks.",
+  "Backend-native nested agents may not inherit the workflow child's working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.",
 ];
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
@@ -100,7 +105,10 @@ Guidelines:
 - If the user asks for parallel work, launch independent Agent calls in the same assistant response.
 - Subagents start fresh and do not inherit parent messages, tool results, or reasoning. Brief them with all needed context.
 - Agent profiles are external-only in this fork; available profiles should be backend-qualified Claude/Codex/Antigravity agents.
+- Every Agent call requires an explicit backend-qualified subagent_type.
 - The Agent final message is returned to you as the tool result. Relay what matters to the user.
+- Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.
+- Backend-native nested agents may not inherit the parent working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.
 
 Example usage:
 - User asks "ask Claude Code to explore this repo": use Agent with a Claude-backed profile such as "claude-explorer".
