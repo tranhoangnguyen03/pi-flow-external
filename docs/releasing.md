@@ -33,7 +33,9 @@ npm pack --dry-run --json
 npm audit --omit=dev --audit-level=high
 ```
 
-Inspect the dry-run manifest. Confirm the expected version and required files, including `index.ts`, `README.md`, runtime sources, and operational scripts/docs. Runtime vulnerabilities block release; do not use `npm audit fix --force` as an automatic release step.
+Inspect the dry-run manifest. Confirm the expected version and required files, including `index.ts`, `README.md`, runtime sources, `scripts/field-report.mjs`, and operational docs. Development E2E scripts and tests must not be shipped. Runtime vulnerabilities block release; do not use `npm audit fix --force` as an automatic release step.
+
+Run the essential real-provider gate from [`field-testing.md`](field-testing.md): all three direct backends and one workflow. Run the nested timeout scenario only when nested detection or timeout behavior changed.
 
 ## 4. Review and merge the version bump
 
@@ -80,8 +82,10 @@ Install the exact published version into a temporary Pi agent directory so an ol
 export VERIFY_AGENT_DIR="$(mktemp -d /tmp/pi-flow-release-check.XXXXXX)"
 PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi install "npm:@tranhoangnguyen0310/pi-flow-external@<new-version>"
 PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi list
+PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi
+# In Pi: /external doctor, then /external settings
 rm -rf "$VERIFY_AGENT_DIR"
 unset VERIFY_AGENT_DIR
 ```
 
-Confirm `pi list` shows the exact version. Then run one bounded receipt test from [`field-testing.md`](field-testing.md). Keep resulting evidence private and remove temporary profiles afterward.
+Confirm `pi list` shows the exact version and both commands are available. Keep resulting evidence private and remove the temporary agent directory afterward.

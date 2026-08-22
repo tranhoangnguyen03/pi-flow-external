@@ -193,7 +193,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const creatorTool = defineTool({
     name: PROFILE_TOOL_NAME,
     label: "Create pi-flow profile",
-    description: "Finalize a profile after the /pi-flow-profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
+    description: "Finalize a profile during the /external profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
     parameters: profileParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const profile = normalizeProfile(params);

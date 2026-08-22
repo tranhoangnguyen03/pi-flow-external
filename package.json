@@ -8,7 +8,7 @@
   "files": [
     "index.ts",
     "src",
-    "scripts",
+    "scripts/field-report.mjs",
     "docs/field-testing.md",
     "docs/releasing.md",
     "AGENTS.md",
@@ -33,11 +33,7 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit && vitest run",
-    "e2e": "node scripts/e2e/main-agent-comparison.mjs",
-    "e2e:compare-claude": "node scripts/e2e/main-agent-comparison.mjs --with-claude",
-    "e2e:workflow-features": "node scripts/e2e/workflow-features.mjs",
-    "e2e:codex-subagent": "node scripts/e2e/codex-subagent.mjs",
-    "e2e:claude-subagent": "node scripts/e2e/claude-subagent.mjs",
+    "e2e": "node scripts/e2e/external.mjs",
     "field-report": "node scripts/field-report.mjs",
     "test": "vitest run"
   },

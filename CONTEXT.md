@@ -18,7 +18,11 @@ This package is a fork of pi-flow whose `Agent` and `workflow` tools are reserve
 - Native Pi work -> native subagent tool.
 - Claude Code / Codex CLI / Antigravity work -> this extension's `Agent` or `workflow`.
 
-The split is global and intentional to avoid tool ambiguity across projects. External children start in the requested working directory, but backend-native nested helpers may create or use a separate workspace; prompts that request further nesting should include explicit absolute paths and all required context.
+The split is global and intentional to avoid tool ambiguity across projects. The ordinary driver sees only `Agent` and `workflow`; the profile finalizer is activated only by `/external profile create`. External children start in the requested working directory, but backend-native nested helpers may create or use a separate workspace; prompts that request further nesting should include explicit absolute paths and all required context.
+
+## User control surface
+
+User operations are namespaced under `/external`: status, Doctor, settings, profiles, profile creation, workflows, runs, and help. Extension-owned concurrency and timeout defaults live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`; profiles remain authoritative for downstream backend/model/thinking metadata.
 
 ## Evidence boundary
 
