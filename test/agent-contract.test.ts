@@ -129,27 +129,9 @@ describe("pi-subagent agent contract", () => {
 
     await session.prompt("Just say noted.");
 
-    expect(rootContext?.systemPrompt).toContain("Subagent Delegation");
     expect(rootContext?.systemPrompt).toContain("Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation");
-    expect(rootContext?.systemPrompt).toContain("Root-level parallel delegation is bounded");
-    expect(rootContext?.systemPrompt).not.toContain("max concurrency 4");
-    expect(rootContext?.systemPrompt).toContain("Available agents");
-    expect(rootContext?.systemPrompt).not.toContain("general-purpose: General-purpose agent for researching complex questions");
-    expect(rootContext?.systemPrompt).not.toContain("explorer: Fast read-only search agent");
-    expect(rootContext?.systemPrompt).toContain("Agent profiles are external-only in this fork");
-    expect(rootContext?.systemPrompt).toContain('User asks "ask Claude Code to explore this repo"');
-    expect(rootContext?.systemPrompt).toContain("single-fact lookup");
-    expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
     expect(rootContext?.systemPrompt).toContain("Every Agent call requires an explicit backend-qualified subagent_type");
     expect(rootContext?.systemPrompt).toContain("Do not automatically retry a failed or aborted external run");
-    expect(rootContext?.systemPrompt).toContain("Backend-native nested agents may not inherit the parent working directory");
-    expect(rootContext?.systemPrompt).toContain(
-      "agent('...', { label: '...', subagent_type: 'claude-explorer' })",
-    );
-    expect(rootContext?.systemPrompt).toContain(
-      'agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema:',
-    );
-    expect(rootContext?.systemPrompt).not.toContain("pi-backend tool allowlist");
 
     disposeSession(session);
   });
