@@ -30,6 +30,7 @@ import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 import { registerProfileCreator } from "./profile-creator.ts";
+import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveExternalSettings } from "./settings.ts";
 import type {
   SubagentBackend,
   SubagentExtensionOptions,
@@ -40,8 +41,8 @@ import type {
   SubagentUsage,
 } from "./types.ts";
 
-const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
-const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS = DEFAULT_EXTERNAL_SETTINGS.maxConcurrentSubagents;
+const DEFAULT_SUBAGENT_TIMEOUT_MS = DEFAULT_EXTERNAL_SETTINGS.subagentTimeoutMs;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const STATUS_KEY = "pi-flow";
@@ -452,19 +453,21 @@ function createAgentTool(
 }
 
 export function createSubagentExtension(options: SubagentExtensionOptions = {}): ExtensionFactory {
-  const defaultMaxConcurrentSubagents = normalizeMaxConcurrentSubagents(
-    options.maxConcurrentSubagents,
-    DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-    "maxConcurrentSubagents",
-  );
-  const defaultSubagentTimeoutMs = normalizeSubagentTimeoutMs(
-    options.subagentTimeoutMs,
-    DEFAULT_SUBAGENT_TIMEOUT_MS,
-    "subagentTimeoutMs",
-  );
   const workflowEnabled = options.workflow !== false;
 
   return function subagentExtension(pi: ExtensionAPI) {
+    const loadedSettings = loadExternalSettings(getAgentDir());
+    const configuredSettings = resolveExternalSettings(loadedSettings.settings, options);
+    const defaultMaxConcurrentSubagents = normalizeMaxConcurrentSubagents(
+      configuredSettings.maxConcurrentSubagents,
+      DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+      "maxConcurrentSubagents",
+    );
+    const defaultSubagentTimeoutMs = normalizeSubagentTimeoutMs(
+      configuredSettings.subagentTimeoutMs,
+      DEFAULT_SUBAGENT_TIMEOUT_MS,
+      "subagentTimeoutMs",
+    );
     pi.registerFlag(MAX_CONCURRENT_SUBAGENTS_FLAG, {
       description: `Maximum number of pi-flow subagents that may run concurrently (default: ${defaultMaxConcurrentSubagents})`,
       type: "string",
