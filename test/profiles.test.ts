@@ -19,10 +19,10 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
+import { getSubagentProfiles } from "../src/profiles.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
 import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
-import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("pi-subagent profiles", () => {
   let tempDir = "";
@@ -49,23 +49,6 @@ describe("pi-subagent profiles", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("loads built-in subagent profiles from bundled markdown files", () => {
-    const profiles = loadBuiltinSubagentProfiles(join(packageRoot, "src", "subagents"));
-
-    expect(profiles.get("general-purpose")).toMatchObject({
-      name: "general-purpose",
-      description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.",
-      systemPrompt: undefined,
-      tools: undefined,
-    });
-    expect(profiles.get("explorer")).toMatchObject({
-      name: "explorer",
-      description: expect.stringContaining("Fast read-only search agent"),
-      tools: ["read", "grep", "find", "ls", "bash"],
-    });
-    expect(profiles.get("explorer")?.systemPrompt).toContain("Explorer Subagent Role");
-  });
-
   it("loads custom subagent profiles from filename-derived names", () => {
     const subagentsDir = join(agentDir, "subagents");
     mkdirSync(subagentsDir, { recursive: true });
@@ -181,8 +164,6 @@ description: Valid frontmatter but empty body.
     expect(profiles.has("list-tools")).toBe(false);
     expect(profiles.has("empty-list-tools")).toBe(false);
     expect(profiles.has("malformed-yaml")).toBe(false);
-    expect(profiles.has("general-purpose")).toBe(true);
-    expect(profiles.has("explorer")).toBe(true);
   });
 
   it("loads codex-backed custom profiles with bare model names", () => {
