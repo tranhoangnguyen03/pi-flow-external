@@ -62,10 +62,13 @@ function settingsText(options: ExternalCommandOptions): string {
 async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions): Promise<string> {
   const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()));
   const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))];
+  const settingsErrors = options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting"));
   const lines = [
-    options.settings.diagnostics.length
-      ? `✗ Settings: ${options.settings.diagnostics.join(" ")}`
-      : "✓ Settings: valid",
+    settingsErrors.length
+      ? `✗ Settings: ${settingsErrors.join(" ")}`
+      : options.settings.diagnostics.length
+        ? `⚠ Settings: ${options.settings.diagnostics.join(" ")}`
+        : "✓ Settings: valid",
     profiles.size ? `✓ Profiles: ${profiles.size} external` : "✗ Profiles: none configured",
   ];
   for (const backend of backends) {
