@@ -6,6 +6,7 @@ import {
   defineTool,
   getAgentDir,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -183,11 +184,16 @@ function profileReview(profile: SubagentProfile, path: string): string {
   return `Destination: ${path}\nBackend executable: ${profile.backend}\n\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
 }
 
+function setProfileCreatorActive(pi: ExtensionAPI, active: boolean): void {
+  const current = pi.getActiveTools().filter((name) => name !== PROFILE_TOOL_NAME);
+  pi.setActiveTools(active ? [...current, PROFILE_TOOL_NAME] : current);
+}
+
 export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreatorOptions): void {
-  pi.registerTool(defineTool({
+  const creatorTool = defineTool({
     name: PROFILE_TOOL_NAME,
     label: "Create pi-flow profile",
-    description: "Finalize a profile after the /pi-flow-profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
+    description: "Finalize a profile during the /external profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
     parameters: profileParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const profile = normalizeProfile(params);
@@ -329,36 +335,56 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
         });
       }
     },
-  }));
+  });
+  const executeCreator = creatorTool.execute.bind(creatorTool);
+  pi.registerTool({
+    ...creatorTool,
+    async execute(...args) {
+      try {
+        return await executeCreator(...args);
+      } finally {
+        setProfileCreatorActive(pi, false);
+      }
+    },
+  });
+  pi.on("session_start", () => setProfileCreatorActive(pi, false));
+  pi.on("input", (event) => {
+    if (event.source === "extension" && event.text === PROFILE_INTERVIEW_PROMPT) {
+      setProfileCreatorActive(pi, true);
+    }
+  });
 
   pi.registerCommand("pi-flow-profile", {
-    description: "Create an external agent profile through an AI-assisted interview",
+    description: "Deprecated: use /external profile create",
     getArgumentCompletions: (prefix) => "create".startsWith(prefix.trim())
       ? [{ value: "create", label: "create", description: "Start an AI-assisted profile interview" }]
       : null,
     handler: async (args, ctx) => {
       if (args.trim() !== "create") {
-        ctx.ui.notify("Usage: /pi-flow-profile create", "warning");
+        ctx.ui.notify("Usage: /external profile create", "warning");
         return;
       }
-      if (!ctx.hasUI) {
-        ctx.ui.notify("Profile creation requires interactive or RPC mode.", "error");
-        return;
-      }
-      if (!ctx.model) {
-        ctx.ui.notify("Select a Pi model before starting the profile interview.", "error");
-        return;
-      }
-
-      const result = await ctx.newSession({
-        parentSession: ctx.sessionManager.getSessionFile(),
-        withSession: async (newCtx) => {
-          await newCtx.sendUserMessage(PROFILE_INTERVIEW_PROMPT);
-        },
-      });
-      if (result.cancelled) {
-        ctx.ui.notify("Profile interview cancelled.", "info");
-      }
+      ctx.ui.notify("/pi-flow-profile is deprecated; use /external profile create.", "warning");
+      await startProfileInterview(ctx);
     },
   });
+}
+
+export async function startProfileInterview(ctx: ExtensionCommandContext): Promise<void> {
+  if (!ctx.hasUI) {
+    ctx.ui.notify("Profile creation requires interactive or RPC mode.", "error");
+    return;
+  }
+  if (!ctx.model) {
+    ctx.ui.notify("Select a Pi model before starting the profile interview.", "error");
+    return;
+  }
+
+  const result = await ctx.newSession({
+    parentSession: ctx.sessionManager.getSessionFile(),
+    withSession: async (newCtx) => {
+      await newCtx.sendUserMessage(PROFILE_INTERVIEW_PROMPT);
+    },
+  });
+  if (result.cancelled) ctx.ui.notify("Profile interview cancelled.", "info");
 }

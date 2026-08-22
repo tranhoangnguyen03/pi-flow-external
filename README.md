@@ -93,10 +93,49 @@ No usable external profiles are bundled. Create backend-qualified profiles in `~
 Recommended: start an AI-assisted interview in Pi:
 
 ```text
-/pi-flow-profile create
+/external profile create
 ```
 
+`/pi-flow-profile create` remains as a temporary deprecated alias.
+
 Pi asks one question at a time, recommends a backend, and compiles the answers into a profile for your review. Generated names must start with the selected backend (`claude-`, `codex-`, or `agy-`). After confirmation, pi-flow stages the profile and smoke-tests the real backend from an empty temporary working directory without applying the proposed profile instructions. A successful test installs it in `~/.pi/agent/subagents/`; a failed test removes the staged profile. If cleanup itself fails, pi-flow reports the residual path for manual removal. The selected CLI still runs in the no-approval mode described above, so use this flow only in a trusted environment.
+
+## Extension commands
+
+All user operations live under one namespace:
+
+```text
+/external
+/external doctor
+/external settings
+/external profiles
+/external profile create
+/external workflows
+/external runs
+/external help
+```
+
+`/external doctor` checks local settings, configured profiles, and the relevant CLI versions without running a model turn. It reports harness authentication as unverified because version checks do not prove account readiness. The ordinary driver agent sees only the `Agent` and `workflow` tools; the profile finalizer is activated only inside the profile interview.
+
+## Extension settings
+
+On first load the extension creates:
+
+```text
+$PI_CODING_AGENT_DIR/pi-flow-external/settings.json
+```
+
+Normally this is `~/.pi/agent/pi-flow-external/settings.json`:
+
+```json
+{
+  "version": 1,
+  "maxConcurrentSubagents": 12,
+  "subagentTimeoutMs": 7200000
+}
+```
+
+Edit the file, then run `/reload`. CLI flags override factory options, factory options override this file, and this file overrides built-in defaults. Invalid files do not prevent startup: the extension uses safe defaults and reports diagnostics through `/external doctor` and `/external settings`. Profiles remain the source of truth for backend, model, thinking level, and instructions; authentication remains owned by each external CLI.
 
 ## Define external profiles manually
 
@@ -187,7 +226,7 @@ The `workflow` tool is trusted JavaScript orchestration. Its `agent()` calls use
 
 ## Runtime guardrails
 
-Direct `Agent` calls and workflow `agent()` calls share one global concurrency cap and one wall-clock timeout guardrail. Defaults are 12 concurrent subagents and 2 hours per subagent.
+Direct `Agent` calls and workflow `agent()` calls share one global concurrency cap and one wall-clock timeout guardrail. Defaults are 12 concurrent subagents and 2 hours per subagent, configurable in the extension settings file or with startup flags.
 
 ```bash
 pi --max-concurrent-subagents 4 --subagent-timeout-ms 600000
@@ -262,10 +301,19 @@ Failed and aborted external runs are not retried automatically. Preserve the rec
 - Automatic retries, session resume, project-local profiles, and permission
   tiers are intentionally postponed until real usage shows which matter.
 
-The useful field test is 20–30 real delegations. Check whether runs finish with
-valid receipts, whether nested activity appears, whether the extra time helps,
-and where failures cluster. Cost is recorded when readily available, but it is
-optional and does not affect success.
+Real-provider checks are opt-in and change-triggered. Use the single E2E runner for the affected backend; run all three direct backends and one workflow before release. Cost is optional and does not affect success.
+
+## Development
+
+```bash
+npm test
+npm run e2e -- --backend claude
+npm run e2e -- --backend codex
+npm run e2e -- --backend agy
+npm run e2e -- --backend codex --workflow
+```
+
+`npm test` is deterministic and offline. The E2E command invokes real providers and consumes tokens. See [`docs/field-testing.md`](docs/field-testing.md).
 
 ## Troubleshooting
 

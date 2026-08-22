@@ -4,7 +4,9 @@
 
 This fork changes the original pi-flow contract: `Agent` is not a generic Pi subagent launcher. It delegates only to external Claude Code, Codex CLI, and Antigravity harnesses.
 
-- Registered tools: `Agent` and optional `workflow`.
+- Ordinary driver tools: `Agent` and optional `workflow`. `pi_flow_profile_create` is active only inside `/external profile create`.
+- User operations use `/external`; `/pi-flow-profile create` is a temporary deprecated alias.
+- Extension-owned concurrency and timeout defaults live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`. Profile backend/model/thinking metadata remains in `subagents/*.md`.
 - Every `Agent` call requires `description`, `prompt`, and an explicit backend-qualified `subagent_type`.
 - Valid profiles come from `~/.pi/agent/subagents/*.md` and set `backend: claude`, `backend: codex`, or `backend: agy`. Use matching names such as `claude-*`, `codex-*`, or `agy-*`; the assisted creator enforces that convention.
 - Profiles with `backend: pi` or a missing backend are filtered out and rejected.
@@ -26,6 +28,14 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 `workflow` remains trusted JavaScript orchestration over the same external-only profile roster. Every workflow `agent()` child needs an explicit backend-qualified `subagent_type`.
 
 Use workflows for requested fan-out or multi-agent orchestration across Claude/Codex/Antigravity lanes. Do not route native Pi subagents through `workflow`.
+
+## Essential test mandate
+
+- Keep one authoritative automated test per behavior at the lowest useful layer.
+- Test public contracts, trust/security boundaries, process lifecycle, cancellation/timeouts, profile rollback, workflow execution/resume, and receipt integrity.
+- Do not test cosmetic rendering variations, prompt prose fragments, trivial accessors, or a model's interpretation of instructions.
+- Do not repeat the same behavior at unit, integration, and E2E levels. A regression test must replace or extend overlapping coverage.
+- `npm test` must remain deterministic and offline. Real-provider E2E is opt-in and change-triggered through `npm run e2e -- --backend <claude|codex|agy> [--workflow]`.
 
 ## Verification and release
 

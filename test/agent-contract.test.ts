@@ -19,7 +19,7 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
+import { getSubagentProfiles } from "../src/profiles.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
 import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
 import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
@@ -129,27 +129,12 @@ describe("pi-subagent agent contract", () => {
 
     await session.prompt("Just say noted.");
 
-    expect(rootContext?.systemPrompt).toContain("Subagent Delegation");
-    expect(rootContext?.systemPrompt).toContain("Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation");
-    expect(rootContext?.systemPrompt).toContain("Root-level parallel delegation is bounded");
-    expect(rootContext?.systemPrompt).not.toContain("max concurrency 4");
-    expect(rootContext?.systemPrompt).toContain("Available agents");
-    expect(rootContext?.systemPrompt).not.toContain("general-purpose: General-purpose agent for researching complex questions");
-    expect(rootContext?.systemPrompt).not.toContain("explorer: Fast read-only search agent");
-    expect(rootContext?.systemPrompt).toContain("Agent profiles are external-only in this fork");
-    expect(rootContext?.systemPrompt).toContain('User asks "ask Claude Code to explore this repo"');
-    expect(rootContext?.systemPrompt).toContain("single-fact lookup");
-    expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
+    expect(rootContext?.systemPrompt).toContain("Agent is for external Claude Code, Codex CLI, and Antigravity profiles only");
     expect(rootContext?.systemPrompt).toContain("Every Agent call requires an explicit backend-qualified subagent_type");
     expect(rootContext?.systemPrompt).toContain("Do not automatically retry a failed or aborted external run");
-    expect(rootContext?.systemPrompt).toContain("Backend-native nested agents may not inherit the parent working directory");
-    expect(rootContext?.systemPrompt).toContain(
-      "agent('...', { label: '...', subagent_type: 'claude-explorer' })",
-    );
-    expect(rootContext?.systemPrompt).toContain(
-      'agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema:',
-    );
-    expect(rootContext?.systemPrompt).not.toContain("pi-backend tool allowlist");
+    expect(getToolNames(rootContext)).toContain("Agent");
+    expect(getToolNames(rootContext)).toContain("workflow");
+    expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
 
     disposeSession(session);
   });
@@ -175,7 +160,6 @@ describe("pi-subagent agent contract", () => {
 
     expect(rootContext?.systemPrompt).toContain("Saved workflows");
     expect(rootContext?.systemPrompt).toContain("audit-todos: Find TODOs and summarize debt. Use before cleanup planning.");
-    expect(rootContext?.systemPrompt).toContain("Use `{ name: 'saved-workflow-name', args }`");
 
     disposeSession(session);
   });

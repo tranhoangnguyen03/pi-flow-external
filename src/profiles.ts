@@ -1,14 +1,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SubagentBackend, SubagentProfile, ThinkingLevel } from "./types.ts";
 
 const EXTERNAL_AGENT_BACKENDS: SubagentBackend[] = ["codex", "claude", "agy"];
 
 const VALID_PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
-
-const BUNDLED_SUBAGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "subagents");
 
 export function isValidSubagentName(name: string): boolean {
   return VALID_PROFILE_NAME.test(name);
@@ -138,38 +135,8 @@ export function loadCustomSubagentProfiles(agentDir = getAgentDir()): Map<string
   return profiles;
 }
 
-export function loadBuiltinSubagentProfiles(dir = BUNDLED_SUBAGENTS_DIR): Map<string, SubagentProfile> {
-  const profiles = new Map<string, SubagentProfile>();
-  if (!existsSync(dir)) {
-    return profiles;
-  }
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return profiles;
-  }
-
-  for (const entry of entries) {
-    if (!entry.endsWith(".md")) {
-      continue;
-    }
-    const name = basename(entry, ".md");
-    if (!isValidSubagentName(name)) {
-      continue;
-    }
-    const profile = parseProfileFile(join(dir, entry), name, { requireBody: false });
-    if (profile) {
-      profiles.set(name, profile);
-    }
-  }
-
-  return profiles;
-}
-
 export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, SubagentProfile> {
-  return new Map([...loadBuiltinSubagentProfiles(), ...loadCustomSubagentProfiles(agentDir)]);
+  return loadCustomSubagentProfiles(agentDir);
 }
 
 export function isExternalAgentProfile(profile: SubagentProfile): boolean {

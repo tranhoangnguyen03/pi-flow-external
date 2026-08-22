@@ -7,39 +7,27 @@ export const AGENT_PROMPT_SNIPPET =
 export const AGENT_PROMPT_GUIDELINES = [
   "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
   "Every Agent call requires an explicit backend-qualified subagent_type.",
-  "Use claude-* profiles for Claude Code strengths such as frontend/product review and nuanced repo exploration.",
-  "Use codex-* profiles for Codex strengths such as broad code search, independent implementation review, and CLI-oriented investigation.",
-  "Use agy-* profiles for Antigravity strengths such as autonomous planning, implementation, and repository-aware debugging.",
-  "For a single-fact lookup where you already know the file, symbol, or value, search directly instead of spawning a subagent.",
-  "Once you delegate a search, do not also run the same search yourself; wait for the result and keep the conclusion, not raw file dumps.",
-  "If the user asks for parallel work, launch multiple Agent calls in the same assistant response.",
-  "Write self-contained subagent prompts: fresh subagents do not inherit parent conversation, tool results, or reasoning.",
-  "Agent profiles are external-only in this fork. Use the native subagent system for Pi-backed scout/reviewer/planner style delegation.",
-  "Clearly tell the subagent whether you expect read-only research or code changes.",
-  "The Agent final message is returned to you as the tool result and is not shown to the user; relay what matters.",
+  "Agent profiles are external-only; use native Pi subagents for Pi-backed work.",
+  "For a known file, symbol, or single fact, look it up directly instead of delegating.",
+  "Launch independent Agent calls together when the user asks for parallel work.",
+  "External agents start fresh; include all required context and absolute paths, and state whether edits are allowed.",
+  "Relay the Agent result to the user; the external agent's final message is returned only to the driver.",
   "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
-  "Backend-native nested agents may not inherit the parent working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.",
+  "Backend-native nested agents may use another workspace; include the absolute workspace path when requesting nested delegation.",
 ];
 
 export const WORKFLOW_PROMPT_SNIPPET =
   "Run a saved or ad-hoc trusted JavaScript workflow that fans subagents out and synthesizes their results, when the user asks for a workflow or multi-agent orchestration.";
 
 export const WORKFLOW_PROMPT_GUIDELINES = [
-  "Use workflow only when the user explicitly asks for a workflow, fan-out, or multi-agent orchestration, when a saved workflow matches the user's request, or when a task decomposes into many independent subagent runs that you then synthesize.",
-  "Prefer `workflow({ name, args })` when an available saved workflow matches the request. Use `workflow({ scriptPath, resumeFromRunId, args })` to rerun or resume an edited persisted script. Use inline `script` only for ad-hoc orchestration.",
-  "If the user asks to save a reusable workflow, copy or write a `.js` file directly to `~/.pi/agent/workflows/` for global scope or `.pi/workflows/` for project scope. Project workflows are ignored unless the project is trusted. The file must start with `export const meta = { name, description }`; use a filename that exactly matches the workflow name. After saving, invoke it with `workflow({ name, args })`.",
-  "For inline scripts, pass one raw JavaScript string in the `script` parameter. No Markdown fences, no prose around it. Inline runs in persisted sessions return `scriptPath` and `runId` for later editing/resume; in-memory runs may only return `runId`.",
-  "The script's first statement must be `export const meta = { name: 'short_name', description: 'non-empty description' }`. meta must be a plain literal.",
-  "Available globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Every workflow must call agent() at least once and return a JSON-serializable value (use null if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.",
-  "Write plain JavaScript only. Do not use TypeScript syntax, import/require, fs, Date APIs, or Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is a cooperative lint, not a sandbox.",
-  "parallel() takes functions, not promises: `await parallel(items.map(item => () => agent('...', { label: '...', subagent_type: 'claude-explorer' })))`. Results come back in input order.",
-  "pipeline(items, ...stages) runs each item through the stages in order while different items run concurrently; each stage receives (previousValue, originalItem, index). Prefer pipeline() for multi-stage work — there is no barrier between stages. Reach for parallel() only when you genuinely need all results together, e.g. dedup or a zero-count early exit.",
-  "Give each agent() a unique short `label` and pick a backend-qualified `subagent_type` so it uses that external profile's configured backend, model, thinking level, and prompt.",
-  "Pass a JSON Schema as agent()'s `schema` option whenever the script must branch, route, filter, or aggregate on a result: the subagent is forced to return one validated object (agent() resolves to that object instead of text), so `if (r.kind === ...)` / `flags.filter(...)` are reliable. Omit `schema` for prose findings you only read or synthesize.",
-  "Subagents are fresh sessions with no parent context. External CLI backends use their own tool surface. Include all needed context and paths in each agent() prompt.",
-  "Failed agent()/parallel()/pipeline() branches resolve to null and are logged unless the workflow is aborted; check for nulls before synthesizing.",
+  "Use workflow only for explicit workflow, fan-out, saved-workflow, or genuinely multi-stage requests.",
+  "Provide exactly one source: name for a saved workflow, scriptPath for a persisted workflow, or script for ad-hoc orchestration. Prefer saved workflows when one matches.",
+  "Inline workflow scripts must start with a literal export const meta = { name, description }, call agent() at least once, and return JSON-serializable data.",
+  "Every workflow agent() call needs a unique label, an explicit backend-qualified subagent_type, and a self-contained prompt.",
+  "parallel() takes thunks; use pipeline() when each item has multiple dependent stages.",
+  "Use a JSON Schema for agent results that control branching or aggregation.",
+  "Workflow scripts are trusted plain JavaScript, not a sandbox: no imports, filesystem globals, Date APIs, or Math.random().",
   "Do not automatically rerun failed workflow branches; preserve the failure and retry only when the user asks.",
-  "Backend-native nested agents may not inherit the workflow child's working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.",
 ];
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
@@ -65,54 +53,18 @@ function formatSavedWorkflows(workflows: SavedWorkflow[], maxItems = 20): string
 }
 
 export function buildWorkflowPrompt(profiles: Map<string, SubagentProfile>, savedWorkflows: SavedWorkflow[] = []): string {
-  return `# Dynamic Workflows
+  return `# External workflow roster
 
-The \`workflow\` tool runs a saved or ad-hoc trusted JavaScript script that orchestrates many subagents and synthesizes their results. Reach for it when the user asks for a workflow or fan-out, when a saved workflow matches the request, or when a task splits into many independent subagent runs.
+Profiles available to workflow agent() calls:
+${formatAvailableAgents(profiles)}${formatSavedWorkflows(savedWorkflows)}
 
-Tool input:
-- Use \`{ name: 'saved-workflow-name', args }\` for a saved workflow listed below.
-- Use \`{ scriptPath, args }\` to run a persisted script file. Add \`resumeFromRunId\` to reuse cached agent results from a previous run's unchanged prefix.
-- Use \`{ script, args }\` for ad-hoc orchestration. Inline runs in persisted sessions return \`scriptPath\` and \`runId\` for later editing/resume; in-memory runs may only return \`runId\`. Provide exactly one of \`name\`, \`scriptPath\`, or \`script\`.
-
-Inline script contract:
-- First statement: \`export const meta = { name: 'short_name', description: 'non-empty' }\` (a plain literal; \`phases\` optional).
-- Globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Call agent() at least once and return a JSON-serializable value (use \`null\` if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.
-- Plain JavaScript only; no imports, no Date APIs, no Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is cooperative lint, not a sandbox.
-- parallel() takes thunks: \`await parallel(items.map(i => () => agent('...', { label: '...', subagent_type: 'claude-explorer' })))\`. pipeline(items, ...stages) pipelines each item through stages while items run concurrently — prefer it for multi-stage work (no barrier between stages); use parallel() only when you need all results together.
-
-Each agent() spawns a fresh subagent. Set \`subagent_type\` to use a profile's backend, model, thinking level, and system prompt:
-${formatAvailableAgents(profiles)}
-
-agent() options: \`label\` (short unique id), \`phase\` (progress group), \`subagent_type\` (profile above), and \`schema\` (a JSON Schema). Pass \`schema\` when the script must branch, route, filter, or aggregate on the result: the subagent is forced to return one validated object and agent() resolves to that object instead of free text. Omit \`schema\` for prose findings you only synthesize. Example — classify, then dispatch:
-\`\`\`
-const r = await agent("Classify " + file, { label: "classify", subagent_type: "claude-explorer", schema: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } } });
-if (r.kind === "entry") { /* ... */ }
-\`\`\`
-
-Subagents do not inherit parent context — brief each agent() prompt fully. This fork exposes only external CLI backends through Agent/workflow agent(). Subagent fan-out is bounded by the same global concurrency cap as the Agent tool; the workflow queues excess agents and drains them as slots free.${formatSavedWorkflows(savedWorkflows)}`;
+Every workflow child requires an explicit backend-qualified subagent_type. Use the workflow tool schema for invocation details.`;
 }
 
 export function buildCoordinatorPrompt(profiles: Map<string, SubagentProfile>): string {
-  return `# Subagent Delegation
+  return `# External delegation roster
 
-Available agents:
 ${formatAvailableAgents(profiles)}
 
-Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation. Use the native subagent system for Pi-backed agents.
-
-Guidelines:
-- Do not use subagents excessively; direct lookup is better when the target file, symbol, or value is already known.
-- If the user asks for parallel work, launch independent Agent calls in the same assistant response.
-- Subagents start fresh and do not inherit parent messages, tool results, or reasoning. Brief them with all needed context.
-- Agent profiles are external-only in this fork; available profiles should be backend-qualified Claude/Codex/Antigravity agents.
-- Every Agent call requires an explicit backend-qualified subagent_type.
-- The Agent final message is returned to you as the tool result. Relay what matters to the user.
-- Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.
-- Backend-native nested agents may not inherit the parent working directory. Include explicit absolute workspace paths and required context when asking an external backend to delegate further.
-
-Example usage:
-- User asks "ask Claude Code to explore this repo": use Agent with a Claude-backed profile such as "claude-explorer".
-- User asks for broad Codex search: use Agent with a Codex-backed profile such as "codex-explorer".
-
-Root-level parallel delegation is bounded by the extension. If the running limit is reached, extra Agent calls queue and drain as slots free.`;
+Agent is for external Claude Code, Codex CLI, and Antigravity profiles only. Every call requires an explicit backend-qualified subagent_type and a self-contained prompt. Use native Pi subagents for Pi-backed work. Do not retry failed external runs unless the user asks.`;
 }
