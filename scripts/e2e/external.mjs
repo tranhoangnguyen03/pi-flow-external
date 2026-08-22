@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -12,13 +12,19 @@ const defaults = {
   agy: { model: "gemini-3.7-flash-high", thinking: "high" },
 };
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+let cleanupProfilePath;
+process.once("exit", () => {
+  if (cleanupProfilePath) {
+    try { unlinkSync(cleanupProfilePath); } catch {}
+  }
+});
 
 function parseArgs(argv) {
   const options = {
     backend: "codex",
     rootModel: "openai-codex/gpt-5.6-sol",
     rootThinking: "high",
-    agentDir: process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"),
+    agentDir: process.env.PI_CODING_AGENT_DIR,
     runRoot: path.join(tmpdir(), `pi-flow-external-e2e-${Date.now()}`),
     timeoutMs: 180_000,
     workflow: false,
@@ -44,13 +50,14 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option: ${arg}`);
   }
   if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, or agy");
+  options.agentDir ??= path.join(options.runRoot, "agent");
   options.model ??= defaults[options.backend].model;
   options.thinking ??= defaults[options.backend].thinking;
   return options;
 }
 
 function help() {
-  console.log(`Usage: npm run e2e -- [options]\n\n  --backend <claude|codex|agy>  external backend (default: codex)\n  --model <id>                  child model (backend default when omitted)\n  --thinking <level>            child thinking (default: high)\n  --root-model <provider/model> root Pi model (default: openai-codex/gpt-5.6-sol)\n  --root-thinking <level>       root thinking (default: high)\n  --workflow                    test workflow instead of direct Agent\n  --agent-dir <dir>             Pi agent directory\n  --run-root <dir>              temporary output directory\n  --timeout-ms <ms>             process timeout (default: 180000)\n  --keep                        preserve profile and output`);
+  console.log(`Usage: npm run e2e -- [options]\n\n  --backend <claude|codex|agy>  external backend (default: codex)\n  --model <id>                  child model (backend default when omitted)\n  --thinking <level>            child thinking (default: high)\n  --root-model <provider/model> root Pi model (default: openai-codex/gpt-5.6-sol)\n  --root-thinking <level>       root thinking (default: high)\n  --workflow                    test workflow instead of direct Agent\n  --agent-dir <dir>             Pi agent directory (default: isolated under run root)\n  --run-root <dir>              temporary output directory\n  --timeout-ms <ms>             process timeout (default: 180000)\n  --keep                        preserve profile and output`);
 }
 
 function walk(root) {
@@ -112,6 +119,7 @@ async function main() {
   const profileName = `zz-e2e-${options.backend}-${Date.now()}`;
   const profilePath = path.join(subagentsDir, `${profileName}.md`);
   writeFileSync(profilePath, `---\ndescription: Temporary ${options.backend} E2E profile.\nbackend: ${options.backend}\nmodel: ${options.model}\nthinking: ${options.thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`, { flag: "wx" });
+  if (!options.keep) cleanupProfilePath = profilePath;
 
   const childPrompt = `Read e2e-target.txt and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
   const workflow = `export const meta = { name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", subagent_type: ${JSON.stringify(profileName)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", subagent_type: ${JSON.stringify(profileName)} })\n]);\nreturn results;`;
@@ -149,6 +157,7 @@ async function main() {
   } finally {
     if (!options.keep) {
       try { unlinkSync(profilePath); } catch {}
+      cleanupProfilePath = undefined;
       rmSync(options.runRoot, { recursive: true, force: true });
     } else if (result) {
       writeFileSync(path.join(options.runRoot, "stdout.jsonl"), result.stdout);

@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createSubagentExtension } from "../src/pi-subagent.ts";
 import {
   DEFAULT_EXTERNAL_SETTINGS,
   loadExternalSettings,
-  resolveExternalSettings,
 } from "../src/settings.ts";
 
 const roots: string[] = [];
@@ -54,10 +55,44 @@ describe("external settings", () => {
     expect(malformed.diagnostics[0]).toMatch(/valid JSON/);
   });
 
-  it("resolves factory values over file values", () => {
-    expect(resolveExternalSettings(
-      { version: 1, maxConcurrentSubagents: 3, subagentTimeoutMs: 4_000 },
-      { maxConcurrentSubagents: 5 },
-    )).toEqual({ maxConcurrentSubagents: 5, subagentTimeoutMs: 4_000 });
+  it("applies file, factory, then CLI precedence through the extension", async () => {
+    const root = agentDir();
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ version: 1, maxConcurrentSubagents: 3, subagentTimeoutMs: 4_000 }));
+
+    const load = (factoryValue?: number) => {
+      const flags = new Map<string, { default: string }>();
+      const values = new Map<string, string>();
+      let settingsCommand: ((args: string, ctx: any) => Promise<void>) | undefined;
+      const pi = {
+        registerFlag: (name: string, options: { default: string }) => flags.set(name, options),
+        getFlag: (name: string) => values.get(name) ?? flags.get(name)?.default,
+        registerTool: vi.fn(),
+        registerCommand: (name: string, options: { handler: typeof settingsCommand }) => {
+          if (name === "external") settingsCommand = options.handler;
+        },
+        on: vi.fn(),
+        getThinkingLevel: () => "high",
+        getActiveTools: () => [],
+        setActiveTools: vi.fn(),
+      } as unknown as ExtensionAPI;
+      createSubagentExtension(factoryValue === undefined ? {} : { maxConcurrentSubagents: factoryValue })(pi);
+      return { flags, values, settingsCommand };
+    };
+
+    try {
+      expect(load().flags.get("max-concurrent-subagents")?.default).toBe("3");
+      const configured = load(5);
+      expect(configured.flags.get("max-concurrent-subagents")?.default).toBe("5");
+      configured.values.set("max-concurrent-subagents", "7");
+      const notices: string[] = [];
+      await configured.settingsCommand?.("settings", { ui: { notify: (text: string) => notices.push(text) } });
+      expect(notices.at(-1)).toContain("maxConcurrentSubagents: 7");
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
   });
 });
