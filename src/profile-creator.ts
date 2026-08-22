@@ -6,6 +6,7 @@ import {
   defineTool,
   getAgentDir,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -332,33 +333,36 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   }));
 
   pi.registerCommand("pi-flow-profile", {
-    description: "Create an external agent profile through an AI-assisted interview",
+    description: "Deprecated: use /external profile create",
     getArgumentCompletions: (prefix) => "create".startsWith(prefix.trim())
       ? [{ value: "create", label: "create", description: "Start an AI-assisted profile interview" }]
       : null,
     handler: async (args, ctx) => {
       if (args.trim() !== "create") {
-        ctx.ui.notify("Usage: /pi-flow-profile create", "warning");
+        ctx.ui.notify("Usage: /external profile create", "warning");
         return;
       }
-      if (!ctx.hasUI) {
-        ctx.ui.notify("Profile creation requires interactive or RPC mode.", "error");
-        return;
-      }
-      if (!ctx.model) {
-        ctx.ui.notify("Select a Pi model before starting the profile interview.", "error");
-        return;
-      }
-
-      const result = await ctx.newSession({
-        parentSession: ctx.sessionManager.getSessionFile(),
-        withSession: async (newCtx) => {
-          await newCtx.sendUserMessage(PROFILE_INTERVIEW_PROMPT);
-        },
-      });
-      if (result.cancelled) {
-        ctx.ui.notify("Profile interview cancelled.", "info");
-      }
+      ctx.ui.notify("/pi-flow-profile is deprecated; use /external profile create.", "warning");
+      await startProfileInterview(ctx);
     },
   });
+}
+
+export async function startProfileInterview(ctx: ExtensionCommandContext): Promise<void> {
+  if (!ctx.hasUI) {
+    ctx.ui.notify("Profile creation requires interactive or RPC mode.", "error");
+    return;
+  }
+  if (!ctx.model) {
+    ctx.ui.notify("Select a Pi model before starting the profile interview.", "error");
+    return;
+  }
+
+  const result = await ctx.newSession({
+    parentSession: ctx.sessionManager.getSessionFile(),
+    withSession: async (newCtx) => {
+      await newCtx.sendUserMessage(PROFILE_INTERVIEW_PROMPT);
+    },
+  });
+  if (result.cancelled) ctx.ui.notify("Profile interview cancelled.", "info");
 }

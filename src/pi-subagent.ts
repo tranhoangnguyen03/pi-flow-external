@@ -29,7 +29,8 @@ import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
-import { registerProfileCreator } from "./profile-creator.ts";
+import { registerProfileCreator, startProfileInterview } from "./profile-creator.ts";
+import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveExternalSettings } from "./settings.ts";
 import type {
   SubagentBackend,
@@ -519,6 +520,17 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.registerTool(createAgentTool(syncMaxConcurrentSubagents, toolOptions));
     registerProfileCreator(pi, toolOptions);
+    registerExternalCommand(pi, {
+      settings: loadedSettings,
+      getRuntimeSettings: () => {
+        const state = syncMaxConcurrentSubagents();
+        return {
+          maxConcurrentSubagents: state.maxConcurrentSubagents,
+          subagentTimeoutMs: state.subagentTimeoutMs,
+        };
+      },
+      startProfileInterview,
+    });
     if (workflowEnabled) {
       pi.registerTool(
         createWorkflowTool({
