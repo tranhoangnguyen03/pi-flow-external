@@ -129,9 +129,12 @@ describe("pi-subagent agent contract", () => {
 
     await session.prompt("Just say noted.");
 
-    expect(rootContext?.systemPrompt).toContain("Use Agent only for external Claude Code, Codex CLI, or Antigravity delegation");
+    expect(rootContext?.systemPrompt).toContain("Agent is for external Claude Code, Codex CLI, and Antigravity profiles only");
     expect(rootContext?.systemPrompt).toContain("Every Agent call requires an explicit backend-qualified subagent_type");
     expect(rootContext?.systemPrompt).toContain("Do not automatically retry a failed or aborted external run");
+    expect(getToolNames(rootContext)).toContain("Agent");
+    expect(getToolNames(rootContext)).toContain("workflow");
+    expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
 
     disposeSession(session);
   });
@@ -157,7 +160,6 @@ describe("pi-subagent agent contract", () => {
 
     expect(rootContext?.systemPrompt).toContain("Saved workflows");
     expect(rootContext?.systemPrompt).toContain("audit-todos: Find TODOs and summarize debt. Use before cleanup planning.");
-    expect(rootContext?.systemPrompt).toContain("Use `{ name: 'saved-workflow-name', args }`");
 
     disposeSession(session);
   });

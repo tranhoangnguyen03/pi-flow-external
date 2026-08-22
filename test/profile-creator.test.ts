@@ -38,9 +38,13 @@ type CreatorTool = { execute: (...args: any[]) => Promise<any> };
 
 function makeCreatorTool(limiter = new ConcurrencyLimiter(12)): CreatorTool {
   let tool: CreatorTool | undefined;
+  let activeTools: string[] = [];
   const pi = {
+    getActiveTools: () => activeTools,
+    setActiveTools: (names: string[]) => { activeTools = names; },
+    on: vi.fn(),
     registerCommand: vi.fn(),
-    registerTool: (definition: CreatorTool) => { tool = definition; },
+    registerTool: (definition: CreatorTool) => { tool = definition; activeTools.push("pi_flow_profile_create"); },
   } as unknown as ExtensionAPI;
   registerProfileCreator(pi, {
     getLimiter: () => limiter,
@@ -411,11 +415,16 @@ describe("profile creator", () => {
 
   it("starts a dedicated AI interview session for the create command", async () => {
     let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    let activeTools: string[] = [];
+    const events = new Map<string, (event: any) => void>();
     const pi = {
+      getActiveTools: () => activeTools,
+      setActiveTools: (names: string[]) => { activeTools = names; },
+      on: (name: string, handler: (event: any) => void) => { events.set(name, handler); },
       registerCommand: (name: string, options: { handler: typeof command }) => {
         if (name === "pi-flow-profile") command = options.handler;
       },
-      registerTool: vi.fn(),
+      registerTool: () => { activeTools.push("pi_flow_profile_create"); },
     } as unknown as ExtensionAPI;
     registerProfileCreator(pi, {
       getLimiter: () => new ConcurrencyLimiter(12),
@@ -438,6 +447,10 @@ describe("profile creator", () => {
     } as unknown as ExtensionCommandContext;
 
     expect(command).toBeDefined();
+    events.get("session_start")?.({});
+    expect(activeTools).not.toContain("pi_flow_profile_create");
+    events.get("input")?.({ source: "extension", text: PROFILE_INTERVIEW_PROMPT });
+    expect(activeTools).toContain("pi_flow_profile_create");
     await command!("create", ctx);
 
     expect(newSession).toHaveBeenCalledOnce();

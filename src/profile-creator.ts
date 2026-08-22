@@ -184,8 +184,13 @@ function profileReview(profile: SubagentProfile, path: string): string {
   return `Destination: ${path}\nBackend executable: ${profile.backend}\n\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
 }
 
+function setProfileCreatorActive(pi: ExtensionAPI, active: boolean): void {
+  const current = pi.getActiveTools().filter((name) => name !== PROFILE_TOOL_NAME);
+  pi.setActiveTools(active ? [...current, PROFILE_TOOL_NAME] : current);
+}
+
 export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreatorOptions): void {
-  pi.registerTool(defineTool({
+  const creatorTool = defineTool({
     name: PROFILE_TOOL_NAME,
     label: "Create pi-flow profile",
     description: "Finalize a profile after the /pi-flow-profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
@@ -330,7 +335,24 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
         });
       }
     },
-  }));
+  });
+  const executeCreator = creatorTool.execute.bind(creatorTool);
+  pi.registerTool({
+    ...creatorTool,
+    async execute(...args) {
+      try {
+        return await executeCreator(...args);
+      } finally {
+        setProfileCreatorActive(pi, false);
+      }
+    },
+  });
+  pi.on("session_start", () => setProfileCreatorActive(pi, false));
+  pi.on("input", (event) => {
+    if (event.source === "extension" && event.text === PROFILE_INTERVIEW_PROMPT) {
+      setProfileCreatorActive(pi, true);
+    }
+  });
 
   pi.registerCommand("pi-flow-profile", {
     description: "Deprecated: use /external profile create",
