@@ -35,10 +35,12 @@ export function buildClaudeArgs({
   profile,
   thinkingLevel,
   outputSchema,
+  effectiveUid = process.geteuid?.(),
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
   outputSchema?: unknown;
+  effectiveUid?: number;
 }): string[] {
   const args = [
     "-p",
@@ -46,8 +48,10 @@ export function buildClaudeArgs({
     "stream-json",
     "--verbose",
     "--no-session-persistence",
-    "--dangerously-skip-permissions",
   ];
+  args.push(...effectiveUid === 0
+    ? ["--permission-mode", "auto"]
+    : ["--dangerously-skip-permissions"]);
   if (profile.systemPrompt) {
     args.push("--append-system-prompt", profile.systemPrompt);
   }

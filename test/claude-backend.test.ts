@@ -53,6 +53,7 @@ describe("pi-subagent claude backend", () => {
   it("builds claude args and maps reported usage/cost", () => {
     const schema = { type: "object", required: ["answer"], properties: { answer: { type: "string" } } };
     const args = buildClaudeArgs({
+      effectiveUid: 501,
       thinkingLevel: "minimal",
       profile: {
         name: "claude-reviewer",
@@ -118,6 +119,43 @@ describe("pi-subagent claude backend", () => {
     });
     expect(extractClaudeCostUsd(resultEvent)).toBe(0.3);
     expect(extractClaudeCostUsd({ type: "result", modelUsage: resultEvent.modelUsage })).toBeCloseTo(0.3);
+  });
+
+  it("uses Claude auto permissions when running as root", () => {
+    const args = buildClaudeArgs({
+      effectiveUid: 0,
+      thinkingLevel: undefined,
+      profile: {
+        name: "claude-reviewer",
+        description: "Claude reviewer",
+        backend: "claude",
+      },
+    });
+
+    expect(args).toContain("auto");
+    expect(args).toContain("--permission-mode");
+    expect(args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it.runIf(typeof process.geteuid === "function" && typeof process.getuid === "function")("uses the effective UID by default", () => {
+    const runtime = process as NodeJS.Process & { getuid: () => number; geteuid: () => number };
+    const realUid = vi.spyOn(runtime, "getuid").mockReturnValue(501);
+    const effectiveUid = vi.spyOn(runtime, "geteuid").mockReturnValue(0);
+    try {
+      const args = buildClaudeArgs({
+        thinkingLevel: undefined,
+        profile: {
+          name: "claude-reviewer",
+          description: "Claude reviewer",
+          backend: "claude",
+        },
+      });
+      expect(args).toContain("auto");
+      expect(args).not.toContain("--dangerously-skip-permissions");
+    } finally {
+      realUid.mockRestore();
+      effectiveUid.mockRestore();
+    }
   });
 
   it("extracts claude final text from result, structured output, and assistant text", () => {
@@ -195,8 +233,14 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeArgs).toContain("--output-format");
     expect(claudeArgs).toContain("stream-json");
     expect(claudeArgs).toContain("--no-session-persistence");
-    expect(claudeArgs).toContain("--dangerously-skip-permissions");
-    expect(claudeArgs).not.toContain("--permission-mode");
+    if (process.geteuid?.() === 0) {
+      expect(claudeArgs).toContain("--permission-mode");
+      expect(claudeArgs).toContain("auto");
+      expect(claudeArgs).not.toContain("--dangerously-skip-permissions");
+    } else {
+      expect(claudeArgs).toContain("--dangerously-skip-permissions");
+      expect(claudeArgs).not.toContain("--permission-mode");
+    }
     expect(claudeArgs).toContain("--model");
     expect(claudeArgs).toContain("sonnet");
     expect(claudeArgs).toContain("--effort");

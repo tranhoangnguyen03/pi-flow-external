@@ -1,74 +1,45 @@
 # pi-flow external
 
-External Claude Code, Codex CLI, and Antigravity delegation for [pi](https://github.com/earendil-works/pi).
+External agent delegation for [pi](https://github.com/earendil-works/pi) through:
 
-This fork intentionally narrows pi-flow's `Agent` and `workflow` subagent lanes to external CLI backends only:
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) profiles with `backend: claude`
+- [Codex CLI](https://github.com/openai/codex) profiles with `backend: codex`
+- Antigravity profiles with `backend: agy`
 
-- **Claude Code** via profiles with `backend: claude`
-- **Codex CLI** via profiles with `backend: codex`
-- **Antigravity** via profiles with `backend: agy`
+The extension provides two tools:
 
-Use pi's native subagent system for Pi-backed agents such as scout, reviewer, planner, worker, or oracle. Use this extension only when you explicitly want another agent harness.
+- `Agent` runs one external profile.
+- `workflow` orchestrates multiple external profiles with trusted JavaScript.
 
-## Why this fork exists
-
-The upstream pi-flow package can launch Pi, Codex, and Claude subagents through the same `Agent` tool. That is powerful, but it creates routing ambiguity when pi also exposes a native subagent system.
-
-This fork enforces a global split:
-
-```text
-Native Pi delegation      -> native subagent tool
-External harnesses        -> Agent / workflow from this extension
-```
-
-That keeps prompts predictable across projects:
-
-- "Use scout/reviewer/planner" means native Pi subagents.
-- "Ask Claude Code" means an `Agent` profile named like `claude-*`.
-- "Ask Codex" means an `Agent` profile named like `codex-*`.
-- "Ask Antigravity" means an `Agent` profile named like `agy-*`.
+Both tools accept only external, backend-qualified profiles. Use pi's native subagent system for Pi-backed agents.
 
 ## Install
 
-Global install from npm; the `npm:` prefix is required:
+Global installation:
 
 ```bash
 pi install npm:@tranhoangnguyen0310/pi-flow-external
 pi list
 ```
 
-Project-only install:
+Project-only installation:
 
 ```bash
 pi install -l npm:@tranhoangnguyen0310/pi-flow-external
 ```
 
-Project packages load after project trust. In a fresh project, `pi list --approve` can display a project package before trust so you can approve it.
+Project packages load after project trust. Use `pi list --approve` to inspect and approve packages in a new project.
 
-Update installed extensions and confirm the active package:
+Update installed extensions with:
 
 ```bash
 pi update --extensions
 pi list
 ```
 
-Local development examples:
+## Requirements and security
 
-```bash
-cd /path/to/pi-flow-external
-pi install "$(pwd)"
-```
-
-Run once from a checkout without installing:
-
-```bash
-cd /path/to/pi-flow-external
-pi -e ./index.ts
-```
-
-## Prerequisites and onboarding
-
-This npm package installs the Pi extension only. It does not install or authenticate Claude Code (`claude`), Codex CLI (`codex`), or Antigravity (`agy`). At least one selected CLI must be installed, on `PATH`, and authenticated:
+Install and authenticate each external CLI you intend to use:
 
 ```bash
 claude --version
@@ -76,72 +47,67 @@ codex --version
 agy --version
 ```
 
-The root Pi model is a separate authentication boundary from those child CLIs. A working `claude`, `codex`, or `agy` login does not authenticate Pi's coordinator model. Verify the exact root model before a headless or E2E run:
+Pi's coordinator model and the external CLIs authenticate independently. A working Claude, Codex, or Antigravity login does not authenticate the root Pi model.
 
-```bash
-pi auth check --model openai-codex/gpt-5.6-sol --json
-```
+External agents normally run without approval prompts:
 
-The recommended baseline is root Pi `openai-codex/gpt-5.6-sol` with `high` thinking. Pass it explicitly to E2E scripts with `--root-model openai-codex/gpt-5.6-sol --root-thinking high`. Direct OpenAI models such as `openai/gpt-5.4-mini` require an OpenAI API key and are not covered by ChatGPT/Codex OAuth.
+- Claude: `--dangerously-skip-permissions`
+- Codex: `--dangerously-bypass-approvals-and-sandbox`
+- Antigravity: `--dangerously-skip-permissions`
 
-External profiles run those CLIs in no-approval/dangerous modes (`claude ... --dangerously-skip-permissions`, `codex exec ... --dangerously-bypass-approvals-and-sandbox`, `agy --dangerously-skip-permissions`). Use them only in trusted repositories.
+Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
-No usable external profiles are bundled. Create backend-qualified profiles in `~/.pi/agent/subagents/*.md` before `Agent` or `workflow` can run. Project-only package installation still reads profiles from that global agent directory; project-local profiles are not currently supported.
+## Quick start
 
-## Create an external profile
-
-Recommended: start an AI-assisted interview in Pi:
+Create a profile from Pi:
 
 ```text
 /external profile create
 ```
 
-`/pi-flow-profile create` remains as a temporary deprecated alias.
+The guided flow selects a backend, creates a backend-qualified profile, smoke-tests the real CLI, and installs the profile only after a successful test.
 
-Pi asks one question at a time, recommends a backend, and compiles the answers into a profile for your review. Generated names must start with the selected backend (`claude-`, `codex-`, or `agy-`). After confirmation, pi-flow stages the profile and smoke-tests the real backend from an empty temporary working directory without applying the proposed profile instructions. A successful test installs it in `~/.pi/agent/subagents/`; a failed test removes the staged profile. If cleanup itself fails, pi-flow reports the residual path for manual removal. The selected CLI still runs in the no-approval mode described above, so use this flow only in a trusted environment.
-
-## Extension commands
-
-All user operations live under one namespace:
+Check the resulting setup:
 
 ```text
-/external
 /external doctor
-/external settings
 /external profiles
-/external profile create
-/external workflows
-/external runs
-/external help
 ```
 
-`/external doctor` checks local settings, configured profiles, and the relevant CLI versions without running a model turn. It reports harness authentication as unverified because version checks do not prove account readiness. The ordinary driver agent sees only the `Agent` and `workflow` tools; the profile finalizer is activated only inside the profile interview.
-
-## Extension settings
-
-On first load the extension creates:
+Then delegate by naming the profile:
 
 ```text
-$PI_CODING_AGENT_DIR/pi-flow-external/settings.json
+Use the Agent tool with subagent_type "claude-explorer" to map this repository read-only.
 ```
 
-Normally this is `~/.pi/agent/pi-flow-external/settings.json`:
+## Commands
 
-```json
-{
-  "version": 1,
-  "maxConcurrentSubagents": 12,
-  "subagentTimeoutMs": 7200000
-}
+All user commands use the `/external` namespace:
+
+| Command | Purpose |
+|---|---|
+| `/external` | Show profile, workflow, and runtime-setting status |
+| `/external doctor` | Check settings, profiles, and configured CLI versions |
+| `/external settings` | Show effective concurrency and timeout settings |
+| `/external profiles` | List available external profiles |
+| `/external profile create` | Create and smoke-test a profile |
+| `/external workflows` | List saved workflows |
+| `/external runs` | Summarize recorded external runs |
+| `/external help` | Show the command reference |
+
+`/external doctor` verifies CLI availability, not provider authentication.
+
+## Profiles
+
+Profiles live in:
+
+```text
+~/.pi/agent/subagents/<name>.md
 ```
 
-Edit the file, then run `/reload`. CLI flags override factory options, factory options override this file, and this file overrides built-in defaults. Invalid files do not prevent startup: the extension uses safe defaults and reports diagnostics through `/external doctor` and `/external settings`. Profiles remain the source of truth for backend, model, thinking level, and instructions; authentication remains owned by each external CLI.
+Names may contain lowercase letters, numbers, and hyphens. A profile must declare `backend: claude`, `backend: codex`, or `backend: agy`, and its name should start with the matching backend name.
 
-## Define external profiles manually
-
-Custom profiles live in `~/.pi/agent/subagents/<name>.md`. Valid profile names use lowercase letters, numbers, and hyphens. Only profiles whose frontmatter sets `backend: claude`, `backend: codex`, or `backend: agy` are shown to, and accepted by, `Agent`/`workflow`.
-
-Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
+Example Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
 
 ```md
 ---
@@ -154,172 +120,135 @@ thinking: high
 Explore the repository read-only. Identify architecture, entry points, tests, configuration, risks, and recommended first-read files.
 ```
 
-Codex profile, `~/.pi/agent/subagents/codex-explorer.md`:
+Codex and Antigravity use the same format:
 
-```md
----
-description: Broad code search through Codex CLI.
+```yaml
 backend: codex
 model: gpt-5.6-sol
-thinking: high
----
-
-Search broadly and summarize findings with file references. Do not edit files.
 ```
 
-Antigravity profile, `~/.pi/agent/subagents/agy-reviewer.md`:
-
-```md
----
-description: Code review through Antigravity.
+```yaml
 backend: agy
 model: gemini-3.7-flash-high
-thinking: high
----
-
-Review the requested change for correctness, regressions, and missing validation. Do not edit files.
 ```
 
-Do not add `tools:` expecting it to control external CLI tools; external backends use their own tool surface. Profiles with `backend: pi` or missing `backend` are rejected by design. Use the native subagent system for those jobs.
+Profile instructions become the external agent's system instructions. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension.
 
-## Use from Pi
+Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 
-Natural request:
+## Agent usage
 
-```text
-Ask Claude Code to explore this repository read-only and summarize the architecture.
-```
-
-Exact/manual profile selection is more deterministic:
-
-```text
-Use the Agent tool with subagent_type "claude-explorer" to explore this repository read-only and summarize the architecture.
-```
-
-Parallel request using named profiles:
-
-```text
-In parallel, use the Agent tool with subagent_type "claude-explorer" to map the architecture and subagent_type "codex-explorer" to search for tests and entry points. Synthesize their findings.
-```
-
-Workflow/fan-out request:
-
-```text
-Use the workflow tool to fan out repository review with explicit external profiles "claude-explorer" and "codex-explorer", then synthesize the results.
-```
-
-Explicit profile naming is the most deterministic form. Every `Agent` call and every workflow `agent()` child requires `subagent_type`.
-
-## Advanced: tool-call shape
+A direct tool call requires `description`, `prompt`, and an explicit `subagent_type`:
 
 ```ts
 Agent({
-  description: "Claude repo map",
-  subagent_type: "claude-explorer",
+  description: "Claude repository map",
   prompt: "Map this repository read-only and summarize important files.",
+  subagent_type: "claude-explorer",
 });
 ```
 
-Subagents start fresh in the same working directory. Parent messages and tool results are not inherited, so prompts must be self-contained. Backend-native helpers created by Claude, Codex, or Agy may use a different workspace; include explicit absolute paths and all required context when asking an external child to delegate further.
+External agents start fresh in the requested working directory. They do not inherit parent messages, tool results, or reasoning, so prompts must include all required context.
 
-The `workflow` tool is trusted JavaScript orchestration. Its `agent()` calls use the same external-only profile roster, and each child needs an explicit backend-qualified `subagent_type`.
+Backend-native nested agents may start in another workspace. Include the repository's absolute path when asking an external agent to delegate further.
 
-## Runtime guardrails
+## Workflow usage
 
-Direct `Agent` calls and workflow `agent()` calls share one global concurrency cap and one wall-clock timeout guardrail. Defaults are 12 concurrent subagents and 2 hours per subagent, configurable in the extension settings file or with startup flags.
+The `workflow` tool runs trusted JavaScript that calls one or more external profiles and returns a JSON-serializable result. Every `agent()` child requires an explicit backend-qualified `subagent_type`.
+
+Example request:
+
+```text
+Use the workflow tool to ask "claude-explorer" for an architecture map and "codex-reviewer" for a risk review, then synthesize their findings.
+```
+
+Direct `Agent` calls and workflow children share the same concurrency and timeout controls.
+
+## Settings and runtime limits
+
+The extension creates:
+
+```text
+$PI_CODING_AGENT_DIR/pi-flow-external/settings.json
+```
+
+Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
+
+```json
+{
+  "version": 1,
+  "maxConcurrentSubagents": 12,
+  "subagentTimeoutMs": 7200000
+}
+```
+
+Edit the file and run `/reload`. Startup flags override extension factory options, which override this file, which overrides built-in defaults.
+
+Equivalent startup flags:
 
 ```bash
 pi --max-concurrent-subagents 4 --subagent-timeout-ms 600000
 ```
 
-Set `--subagent-timeout-ms` to `0` to disable the timeout. Values are milliseconds.
-When a structured backend event first reveals nested-agent work, pi-flow gives
-the external session one fresh timeout period from the observation time, capped
-at twice the original deadline. It extends the deadline only once; it does not
-simply double every run's timeout.
+Set `--subagent-timeout-ms 0` to disable the timeout.
 
-## Field prototype: trustworthy returns
+When a structured backend event reveals nested-agent work, the extension grants one fresh timeout period from that observation, capped at twice the original deadline. The extension does not otherwise retry failed or aborted runs.
 
-This implementation is deliberately a field prototype. Its question is simple: can an
-unattended external run return a result with enough evidence to trust and debug
-it?
+## Run records
 
-For every normal `Agent` or workflow child run:
+Each normal external run writes best-effort local evidence under:
 
-- Claude Code, Codex CLI, and Antigravity must emit a recognized terminal
-  success event, return a non-empty result, and exit successfully.
-- Pi-flow does not block native Claude, Codex, or Antigravity subagents. When
-  the selected backend and its configuration use them, known nested-agent event
-  names are heuristically flagged and detected nested work receives the
-  one-time timeout extension described above.
-- Parsed backend events and a final summary are kept locally under
-  `~/.pi/agent/pi-flow-external/runs/<run-id>/`.
+```text
+~/.pi/agent/pi-flow-external/runs/<run-id>/
+```
 
-Each run directory contains:
+Set `PI_FLOW_EXTERNAL_RUNS_DIR` to override the location. Each run contains:
 
-- `events.ndjson`: the structured events received from the backend.
-- `summary.json`: status, duration, usage, result, and prototype control labels.
+- `events.ndjson`: parsed structured backend events
+- `summary.json`: status, duration, usage, result, and record-integrity metadata
 
-The recorder makes no additional network requests; the delegated CLI still
-sends data to its configured AI provider. New run directories and files are
-private to the local user, but secret redaction is best-effort and records can
-still contain sensitive prompts, source excerpts, or tool output. Records are
-not deleted automatically. Override the directory with
-`PI_FLOW_EXTERNAL_RUNS_DIR` if needed. If persistence fails, the completed run
-is labeled `record unavailable` instead of pretending the evidence was saved.
+Records are private to the local user but may still contain sensitive prompts, source excerpts, and tool output. Redaction is best-effort, and records are not rotated automatically.
 
-Antigravity 1.1.15 or newer is required for `--input-format stream-json` and `--output-format stream-json`.
-
-From this checkout, summarize the collected evidence with:
+Summarize records from this checkout with:
 
 ```bash
 npm run field-report
 npm run field-report -- --json
 ```
 
-Interpret backend status and record integrity separately:
+A failed backend can still have complete diagnostic evidence. Treat `incompleteRecords > 0` as an evidence-integrity problem independent of backend status.
 
-- `status: done` plus a complete record means the backend returned a valid receipt.
-- `status: error` or `aborted` may still have complete, useful failure evidence.
-- `incompleteRecords > 0` means evidence is missing, malformed, or internally inconsistent, even if a backend summary says `done`.
+## Troubleshooting
 
-Failed and aborted external runs are not retried automatically. Preserve the receipt and retry only when the user requests it. See [`docs/field-testing.md`](docs/field-testing.md) for bounded real-backend scenarios and [`docs/releasing.md`](docs/releasing.md) for the maintainer release gate.
-
-### Known prototype limits
-
-- All three backends still use their dangerous/no-approval modes.
-- Nested-agent detection depends on structured events. A helper started through
-  a shell command or an unknown event name may remain invisible, and pi-flow
-  does not provide operating-system process containment.
-- Backend-native nested helpers may use their own workspace instead of the
-  parent's repository. Supply explicit paths; pi-flow does not remap backend
-  workspaces.
-- The event log stores parsed structured events, not byte-for-byte stdout and
-  stderr.
-- Record volume is not yet capped or rotated; clean the run directory during a
-  long field trial.
-- Automatic retries, session resume, project-local profiles, and permission
-  tiers are intentionally postponed until real usage shows which matter.
-
-Real-provider checks are opt-in and change-triggered. Use the single E2E runner for the affected backend; run all three direct backends and one workflow before release. Cost is optional and does not affect success.
+- **No external profiles:** run `/external profile create`, or verify that the profile is in `~/.pi/agent/subagents/` with a matching backend-qualified name.
+- **CLI available but authentication fails:** authenticate that CLI directly; Pi and every external backend keep separate credentials.
+- **Claude rejects `--dangerously-skip-permissions` under root:** reload the current extension version; root runs use Claude's `auto` permission mode.
+- **Nested agent cannot find the repository:** include the repository's absolute path and required context in the prompt.
+- **Run failed with complete records:** inspect the run's `summary.json` and `events.ndjson`; do not retry automatically unless requested.
+- **Sensitive content appears in evidence:** remove the affected run directory. Local redaction is not a secrecy boundary.
 
 ## Development
 
+Run the deterministic offline checks:
+
 ```bash
-npm test
+npm run check
+```
+
+Real-provider checks consume tokens. Point the runner at the authenticated Pi agent directory:
+
+```bash
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 npm run e2e -- --backend claude
 npm run e2e -- --backend codex
 npm run e2e -- --backend agy
 npm run e2e -- --backend codex --workflow
 ```
 
-`npm test` is deterministic and offline. The E2E command invokes real providers and consumes tokens. See [`docs/field-testing.md`](docs/field-testing.md).
+See [`docs/field-testing.md`](docs/field-testing.md) for provider checks and [`docs/releasing.md`](docs/releasing.md) for the release process.
 
-## Troubleshooting
+Run directly from a checkout with:
 
-- **`No API key found` from root Pi:** choose an authenticated Pi model and verify it with `pi auth check --model <provider/model> --json`. Child CLI authentication is unrelated.
-- **Backend CLI works but no profile appears:** confirm the filename is backend-qualified, frontmatter uses the matching `backend`, and the file lives in `~/.pi/agent/subagents/`.
-- **Run failed but `incompleteRecords` is zero:** the backend failed and its evidence is intact; inspect `recentFailures` and the run's `summary.json`.
-- **`incompleteRecords` is nonzero:** inspect event/write-count mismatches before trusting the backend status.
-- **A nested helper cannot find repository files:** give it the repository's absolute path and relevant context; backend-native helpers may start elsewhere.
-- **Evidence contains sensitive text:** stop the trial and remove the run directory. Redaction is best-effort, not a secrecy boundary.
+```bash
+pi -e ./index.ts
+```

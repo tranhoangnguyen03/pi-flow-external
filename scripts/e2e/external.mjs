@@ -111,7 +111,8 @@ async function main() {
   for (const directory of [fixture, sessionDir, evidenceDir, subagentsDir]) mkdirSync(directory, { recursive: true });
 
   const marker = `${options.backend.toUpperCase()}_EXTERNAL_OK:${options.model}-${options.thinking}`;
-  writeFileSync(path.join(fixture, "e2e-target.txt"), `${options.model}-${options.thinking}\n`);
+  const targetPath = path.join(fixture, "e2e-target.txt");
+  writeFileSync(targetPath, `${options.model}-${options.thinking}\n`);
   spawnSync("git", ["init", "-q"], { cwd: fixture });
   spawnSync("git", ["add", "."], { cwd: fixture });
   spawnSync("git", ["-c", "user.name=pi-flow-e2e", "-c", "user.email=e2e@example.invalid", "commit", "-qm", "fixture"], { cwd: fixture });
@@ -121,7 +122,7 @@ async function main() {
   writeFileSync(profilePath, `---\ndescription: Temporary ${options.backend} E2E profile.\nbackend: ${options.backend}\nmodel: ${options.model}\nthinking: ${options.thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`, { flag: "wx" });
   if (!options.keep) cleanupProfilePath = profilePath;
 
-  const childPrompt = `Read e2e-target.txt and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
+  const childPrompt = `Read ${JSON.stringify(targetPath)} and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
   const workflow = `export const meta = { name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", subagent_type: ${JSON.stringify(profileName)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", subagent_type: ${JSON.stringify(profileName)} })\n]);\nreturn results;`;
   const rootPrompt = options.workflow
     ? `Call workflow exactly once with this exact script:\n\n${workflow}\n\nReport the returned token lines.`

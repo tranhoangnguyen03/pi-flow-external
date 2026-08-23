@@ -1,11 +1,12 @@
 # Essential external field testing
 
-Real-provider checks consume tokens and run external CLIs in dangerous/no-approval modes. Use them only in a trusted checkout. Receipts can contain prompts and source excerpts despite best-effort redaction.
+Real-provider checks consume tokens and normally run external CLIs in dangerous/no-approval modes. Claude uses `auto` permission mode instead when its effective UID is 0. Use them only in a trusted checkout. Receipts can contain prompts and source excerpts despite best-effort redaction.
 
 ## Preparation
 
 ```bash
 cd /path/to/pi-flow-external
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 export ROOT_MODEL="openai-codex/gpt-5.6-sol"
 pi auth check --model "$ROOT_MODEL" --json
 claude --version
