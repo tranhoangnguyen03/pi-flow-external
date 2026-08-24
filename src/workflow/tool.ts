@@ -372,20 +372,17 @@ export function createWorkflowTool(
         clearInterval(heartbeat);
       }
     },
-    renderCall(args, theme, context) {
-      if (context.executionStarted) {
-        return new Text("", 0, 0);
-      }
+    renderCall(args, theme, _context) {
       const name = typeof args.name === "string" && args.name.trim() ? ` ${theme.fg("muted", args.name.trim())}` : "";
-      return new Text(`${theme.bold("Workflow")}${name}`, 0, 0);
+      return new Text(`${theme.bold("Workflow")}${name} · ${theme.fg("warning", "unsandboxed external agents")}`, 0, 0);
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, { expanded }, theme) {
       // Pure function of the snapshot: the spinner frame is carried on the
       // snapshot itself and advanced by the runtime heartbeat in execute(), so
       // there is no UI-side timer to leak when a row is torn down or rendered in
       // a non-live context (e.g. HTML export).
       const details = result.details as WorkflowToolDetails;
-      return renderWorkflowSnapshot(details, theme, details.frame ?? 0);
+      return renderWorkflowSnapshot(details, theme, details.frame ?? 0, expanded);
     },
   });
 }
@@ -459,7 +456,7 @@ function hiddenFailureCount(agents: WorkflowAgentSnapshot[], shown: WorkflowAgen
   return agents.filter((agent) => !visible.has(agent) && isFailedWorkflowAgent(agent)).length;
 }
 
-function renderPhaseTree(container: Container, details: WorkflowToolDetails, theme: Theme, frame: number): void {
+function renderPhaseTree(container: Container, details: WorkflowToolDetails, theme: Theme, frame: number, expanded: boolean): void {
   const runningCount = workflowRunningCount(details);
   for (const phase of orderedPhases(details)) {
     const agents = details.agents.filter((agent) => agent.phase === phase);
@@ -488,7 +485,7 @@ function renderPhaseTree(container: Container, details: WorkflowToolDetails, the
     );
     const shown = selectAgentsForRender(agents);
     for (const agent of shown) {
-      container.addChild(renderSubagentNode(agent, theme, frame, runningCount, "    "));
+      container.addChild(renderSubagentNode(agent, theme, frame, runningCount, "    ", Date.now(), expanded, false));
     }
     const hidden = agents.length - shown.length;
     if (hidden > 0) {
@@ -498,11 +495,11 @@ function renderPhaseTree(container: Container, details: WorkflowToolDetails, the
   }
 }
 
-function renderFlatAgents(container: Container, details: WorkflowToolDetails, theme: Theme, frame: number): void {
+function renderFlatAgents(container: Container, details: WorkflowToolDetails, theme: Theme, frame: number, expanded: boolean): void {
   const runningCount = workflowRunningCount(details);
   const renderedAgents = selectAgentsForRender(details.agents);
   for (const agent of renderedAgents) {
-    container.addChild(renderSubagentNode(agent, theme, frame, runningCount, "  "));
+    container.addChild(renderSubagentNode(agent, theme, frame, runningCount, "  ", Date.now(), expanded, false));
   }
   // selectAgentsForRender keeps the earliest agents, so the hidden ones are the
   // later indices — the "not shown" marker belongs after the visible rows (as in
@@ -514,16 +511,17 @@ function renderFlatAgents(container: Container, details: WorkflowToolDetails, th
   }
 }
 
-function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, frame: number): Container {
+function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, frame: number, expanded: boolean): Container {
   const container = new Container();
   const done = details.agents.filter((agent) => isCompletedSubagentStatus(agent.status)).length;
   const active = workflowRunningCount(details);
   const queued = details.agents.filter((agent) => agent.status === "queued").length;
   const failed = details.agents.filter(isFailedWorkflowAgent).length;
   const counts = formatAgentCounts(done, active, queued, failed, details.agents.length);
+  const access = details.status === "running" ? "external host access · " : "";
   container.addChild(
     new Text(
-      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${details.status} · ${counts}`)}`,
+      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${details.status} · ${access}${counts}`)}`,
       0,
       0,
     ),
@@ -532,9 +530,9 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
   // Phase-grouped tree when the workflow uses phase() (including before the first
   // agent in a phase starts); otherwise keep the flat list.
   if ((details.plannedPhases?.length ?? 0) > 0 || details.phases.length > 0 || details.agents.some((agent) => agent.phase)) {
-    renderPhaseTree(container, details, theme, frame);
+    renderPhaseTree(container, details, theme, frame, expanded);
   } else {
-    renderFlatAgents(container, details, theme, frame);
+    renderFlatAgents(container, details, theme, frame, expanded);
   }
 
   for (const line of details.logs.slice(-3)) {
@@ -543,6 +541,15 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
 
   if (details.error) {
     container.addChild(new Text(`  ${theme.fg("error", details.error)}`, 0, 0));
+  }
+
+  if (expanded && details.status !== "running") {
+    if (details.runId) {
+      container.addChild(new Text(`  ${theme.fg("dim", `Workflow evidence ${details.runId}`)}`, 0, 0));
+    }
+    if (details.journalPath) {
+      container.addChild(new Text(`  ${theme.fg("dim", `Journal ${details.journalPath}`)}`, 0, 0));
+    }
   }
 
   return container;

@@ -120,8 +120,11 @@ function richTitle(node: RenderableSubagentNode): string {
   return `${getBackendAgentLabel(node.backend)}(${nodeType(node)}${label ? `: ${label}` : ""})`;
 }
 
-function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): string {
+function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAccess = true): string {
   const parts: string[] = [];
+  if (showAccess && isActiveSubagentStatus(node.status)) {
+    parts.push("external host access");
+  }
   const startedAt = node.startedAt;
   if (typeof startedAt === "number") {
     const duration = formatDuration((node.endedAt ?? now) - startedAt);
@@ -141,9 +144,9 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): strin
   }
   const runId = node.runId ?? node.externalRunId;
   if (node.recordingError) {
-    parts.push("record unavailable");
+    parts.push("evidence incomplete");
   } else if (!isActiveSubagentStatus(node.status) && runId) {
-    parts.push(`run ${runId.slice(-8)}`);
+    parts.push(`evidence ${runId.slice(-8)}`);
   }
   if (node.nestedActivitySeen) {
     parts.push("nested activity seen");
@@ -164,10 +167,11 @@ export function renderCompactSubagentNode(
   frame: number,
   indent = "",
   now = Date.now(),
+  showAccess = true,
 ): Text {
   const status = node.status;
   const bodyColor = status === "error" || status === "aborted" ? "error" : "muted";
-  const runtime = formatRuntimeAndUsage(node, now);
+  const runtime = formatRuntimeAndUsage(node, now, showAccess);
   const detail = node.error && (status === "error" || status === "aborted")
     ? `${node.timedOut ? "timed out" : status}: ${node.error}`
     : "";
@@ -193,10 +197,11 @@ export function renderRichSubagentNode(
   frame: number,
   indent = "",
   now = Date.now(),
+  showAccess = true,
 ): Container {
   const container = new Container();
   const status = node.status;
-  const meta = formatRuntimeAndUsage({ ...node, status }, now);
+  const meta = formatRuntimeAndUsage({ ...node, status }, now, showAccess);
   container.addChild(
     new Text(
       `${indent}${subagentMarker(status, theme, frame, node.timedOut)} ${theme.bold(richTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}`,
@@ -229,8 +234,24 @@ export function renderSubagentNode(
   runningCount: number,
   indent = "",
   now = Date.now(),
+  expanded = false,
+  showAccess = true,
 ): Text | Container {
-  return shouldRenderRichSubagent(node, runningCount)
-    ? renderRichSubagentNode(node, theme, frame, indent, now)
-    : renderCompactSubagentNode(node, theme, frame, indent, now);
+  const rendered = shouldRenderRichSubagent(node, runningCount)
+    ? renderRichSubagentNode(node, theme, frame, indent, now, showAccess)
+    : renderCompactSubagentNode(node, theme, frame, indent, now, showAccess);
+  if (!expanded || isActiveSubagentStatus(node.status)) {
+    return rendered;
+  }
+
+  const container = new Container();
+  container.addChild(rendered);
+  if (node.recordPath) {
+    const events = node.backendEventCount === undefined ? "" : ` · ${node.backendEventCount} backend events`;
+    container.addChild(new Text(`${indent}  ${theme.fg("dim", `Evidence ${node.recordPath}${events}`)}`, 0, 0));
+  }
+  if (node.recordingError) {
+    container.addChild(new Text(`${indent}  ${theme.fg("warning", `Evidence incomplete: ${node.recordingError}`)}`, 0, 0));
+  }
+  return container;
 }
