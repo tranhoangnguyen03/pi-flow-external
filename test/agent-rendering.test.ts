@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
@@ -44,22 +44,21 @@ describe("delegation transparency rendering", () => {
   it("explains a direct delegation and links its expanded evidence receipt", () => {
     const profilesDir = join(agentDir, "subagents");
     mkdirSync(profilesDir, { recursive: true });
+    const profilePath = join(profilesDir, "claude-explorer.md");
     writeFileSync(
-      join(profilesDir, "claude-explorer.md"),
+      profilePath,
       "---\ndescription: Repository exploration through Claude Code.\nbackend: claude\n---\nExplore repositories read-only.\n",
     );
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
     const theme = makeMockTheme() as never;
 
-    const call = tool.renderCall?.(
-      {
-        description: "Map repository architecture",
-        prompt: "Map the repository read-only.",
-        subagent_type: "claude-explorer",
-      },
-      theme,
-      { cwd, executionStarted: true },
-    );
+    const callArgs = {
+      description: "Map repository architecture",
+      prompt: "Map the repository read-only.",
+      subagent_type: "claude-explorer",
+    };
+    const callContext = { cwd, executionStarted: true, state: {} };
+    const call = tool.renderCall?.(callArgs, theme, callContext);
     const callText = renderToText(call!);
     expect(callText).toContain("Delegating");
     expect(callText).toContain("Claude Code → claude-explorer");
@@ -67,6 +66,10 @@ describe("delegation transparency rendering", () => {
     expect(callText).toContain("Task Map repository architecture");
     expect(callText).toContain("Why Repository exploration through Claude Code.");
     expect(callText).toContain(`Workspace ${cwd}`);
+
+    unlinkSync(profilePath);
+    const cachedCall = tool.renderCall?.(callArgs, theme, callContext);
+    expect(renderToText(cachedCall!)).toContain("Why Repository exploration through Claude Code.");
 
     const running: SubagentToolDetails = {
       description: "Map repository architecture",

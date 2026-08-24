@@ -71,6 +71,13 @@ const agentToolParameters = Type.Object({
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
+type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description">;
+
+interface AgentRenderState {
+  profileType?: string;
+  profile?: AgentRenderProfile;
+}
+
 interface DelegationState {
   limiter: ConcurrencyLimiter;
   maxConcurrentSubagents: number;
@@ -423,7 +430,13 @@ function createAgentTool(
     },
     renderCall(args, theme, context) {
       const subagentType = formatSubagentTypeForDisplay(args.subagent_type);
-      const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
+      const state = context.state as AgentRenderState;
+      if (state.profileType !== subagentType) {
+        const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
+        state.profileType = subagentType;
+        state.profile = profile ? { backend: profile.backend, description: profile.description } : undefined;
+      }
+      const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
       const lines = [
