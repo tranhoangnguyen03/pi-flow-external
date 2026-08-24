@@ -57,6 +57,8 @@ External agents normally run without approval prompts:
 
 Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
+The TUI labels this boundary as `unsandboxed external CLI` before a direct run and `external host access` while work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
+
 ## Quick start
 
 Create a profile from Pi:
@@ -132,7 +134,7 @@ backend: agy
 model: gemini-3.7-flash-high
 ```
 
-Profile instructions become the external agent's system instructions. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension.
+Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension.
 
 Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 
@@ -151,6 +153,27 @@ Agent({
 External agents start fresh in the requested working directory. They do not inherit parent messages, tool results, or reasoning, so prompts must include all required context.
 
 Backend-native nested agents may start in another workspace. Include the repository's absolute path when asking an external agent to delegate further.
+
+## Delegation transparency
+
+Direct calls keep their intent card visible during execution:
+
+```text
+Delegating Claude Code → claude-explorer · unsandboxed external CLI
+Task Map repository architecture
+Why Repository exploration through Claude Code.
+Workspace /path/to/project
+⠋ Claude Code(claude-explorer, Map repository architecture) external host access · 12s
+```
+
+Completed rows show a short evidence identifier and result preview. Press **Ctrl+O** (the default tool-expansion binding) to reveal the local record path plus structured backend-event count:
+
+```text
+✓ Claude Code(claude-explorer, Map repository architecture) 42s evidence 8f21a004 -> Architecture mapped.
+  Evidence ~/.pi/agent/pi-flow-external/runs/run_... · 15 backend events
+```
+
+Workflows show access once at the workflow level, retain done/active/queued/failed counts, and expose child evidence plus the workflow journal when expanded. Raw backend events remain in local records rather than flooding the default terminal view.
 
 ## Workflow usage
 

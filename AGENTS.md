@@ -15,6 +15,14 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - Prompts must be self-contained because children do not inherit parent conversation, tool results, or reasoning.
 - Backend-native nested agents may use a different workspace. Include explicit absolute paths and required context when asking an external backend to delegate further.
 
+## Delegation transparency invariants
+
+- Treat each `description` as a concise user-facing task label. Profile descriptions are also user-visible as the declared reason for profile selection.
+- `unsandboxed external CLI` and `external host access` disclose the real execution boundary. Never present a read-only prompt as permission enforcement.
+- Keep direct intent visible during execution. Workflow access belongs once at the workflow level, not on every child row.
+- Keep default progress bounded and human-readable. Expanded output may reveal existing record paths, backend-event counts, workflow IDs, and journal paths.
+- Progress snapshots drive live presentation; persisted summaries and event logs remain the durable evidence source. Do not create a second UI-only record format.
+
 ## Receipt and evidence invariants
 
 - Success requires a recognized backend terminal-success event, a zero process exit, and a non-empty result.
