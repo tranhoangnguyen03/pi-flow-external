@@ -179,13 +179,6 @@ function isSubagentProgressNode(value: unknown): value is SubagentProgressNode {
   );
 }
 
-function getProfileBackend(subagentType: SubagentType | "unknown"): SubagentBackend | undefined {
-  if (subagentType === "unknown") {
-    return undefined;
-  }
-  return getSubagentProfiles(getAgentDir()).get(subagentType)?.backend;
-}
-
 function createUsageStatusState(): SubagentUsageStatusState {
   return {
     calls: new Map(),
@@ -429,25 +422,28 @@ function createAgentTool(
       }
     },
     renderCall(args, theme, context) {
-      if (context.executionStarted) {
-        return new Text("", 0, 0);
-      }
       const subagentType = formatSubagentTypeForDisplay(args.subagent_type);
-      const backend = subagentType === "profile" ? undefined : getProfileBackend(subagentType);
+      const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
+      const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
-      return new Text(
-        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${description ? ` ${theme.fg("dim", description)}` : ""}`,
-        0,
-        0,
-      );
+      const lines = [
+        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", "unsandboxed external CLI")}`,
+        description ? `${theme.fg("muted", "Task")} ${description}` : "",
+        profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
+        context.cwd ? `${theme.fg("muted", "Workspace")} ${context.cwd}` : "",
+      ].filter(Boolean);
+      return new Text(lines.join("\n"), 0, 0);
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, { expanded }, theme) {
       const details = result.details as SubagentToolDetails;
       return renderSubagentNode(
         details.progress ?? details,
         theme,
         details.frame ?? 0,
         details.activeCount ?? (details.status === "running" ? 1 : 0),
+        "",
+        Date.now(),
+        expanded,
       );
     },
   });

@@ -5,13 +5,13 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
     return "Pi Agent";
   }
   if (backend === "codex") {
-    return "Codex Agent";
+    return "Codex CLI";
   }
   if (backend === "claude") {
-    return "Claude Agent";
+    return "Claude Code";
   }
   if (backend === "agy") {
-    return "Antigravity Agent";
+    return "Antigravity";
   }
   return "Agent";
 }
