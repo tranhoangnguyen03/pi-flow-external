@@ -295,6 +295,36 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(eventTypes).toEqual(["system", "assistant", "result"]);
   });
 
+  it("uses the latest result when a background-agent notification adds one", async () => {
+    const binDir = join(tempDir, "bin-claude-two-results");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-two-results' }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'interim: waiting for background agent' }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, origin: { kind: 'task-notification' }, result: 'final audit answer', usage: { input_tokens: 10, output_tokens: 2 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnClaudeSubagent({
+      toolCallId: "claude-two-results",
+      description: "Claude two results",
+      prompt: "Report completion.",
+      profile: { name: "claude-two-results", description: "Test.", backend: "claude" },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("done");
+    expect(result.details.result).toBe("final audit answer");
+  });
+
   it("does not accept a Claude result that does not affirm success", async () => {
     const binDir = join(tempDir, "bin-claude-no-terminal");
     mkdirSync(binDir, { recursive: true });

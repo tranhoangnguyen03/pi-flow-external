@@ -38,6 +38,8 @@ describe("pi-subagent agy backend", () => {
       "stream-json",
       "--input-format",
       "stream-json",
+      "--print-timeout",
+      "15m",
       "--model",
       "best",
       "--effort",
@@ -138,6 +140,8 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
       "stream-json",
       "--input-format",
       "stream-json",
+      "--print-timeout",
+      "15m",
       "--model",
       "default",
       "--effort",
@@ -255,11 +259,12 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
     expect(result.details.error).toContain("without a terminal result event");
   });
 
-  it("fails a non-success terminal result even when agy exits zero", async () => {
+  it("prefers the agy terminal failure over the exit code", async () => {
     const binDir = join(tempDir, "bin-agy-error-result");
     mkdirSync(binDir, { recursive: true });
     const fakeAgyPath = join(binDir, "agy");
     writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+process.exitCode = 1;
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-error-result', status: 'ERROR', response: '', error: 'provider unavailable', usage: { input_tokens: 20, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 20 } } }));
 `);
     chmodSync(fakeAgyPath, 0o755);
@@ -280,6 +285,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-er
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("status ERROR: provider unavailable");
+    expect(result.details.error).toContain("exit code 1");
     expect(result.details).toMatchObject({ conversationId: "agy-error-result" });
   });
 

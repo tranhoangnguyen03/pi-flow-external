@@ -359,7 +359,6 @@ export async function spawnClaudeSubagent(params: {
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
   let eventError: string | undefined;
-  let protocolError: string | undefined;
   let oversizeError: string | undefined;
   let child: ChildProcess | undefined;
   let abortHandler: (() => void) | undefined;
@@ -384,14 +383,13 @@ export async function spawnClaudeSubagent(params: {
     } catch {
       // Observation hooks must not change the backend result.
     }
-    if (sawTerminalEvent) {
-      protocolError ??= "claude emitted an event after its terminal event";
-      return;
-    }
-    const isTerminal = event.type === "result" || event.type === "error";
-    if (isTerminal) {
+    // A result event ends a model turn, not the stream: when the child runs
+    // background agents, a task notification can run another turn and emit a
+    // later result. Process exit is the stream boundary; the latest result
+    // wins, and explicit error events stay fatal below.
+    if (event.type === "result") {
       sawTerminalEvent = true;
-      terminalSucceeded = event.type === "result" && event.subtype === "success" && event.is_error === false;
+      terminalSucceeded = event.subtype === "success" && event.is_error === false;
     }
     const activity = claudeActivityFromEvent(event);
     if (activity) {
@@ -414,7 +412,7 @@ export async function spawnClaudeSubagent(params: {
     const error = extractClaudeError(event);
     if (error) {
       eventError ??= error;
-    } else if (isTerminal && !terminalSucceeded) {
+    } else if (event.type === "result" && !terminalSucceeded) {
       eventError ??= "claude terminal event did not affirm success";
     }
   };
@@ -507,9 +505,6 @@ export async function spawnClaudeSubagent(params: {
     }
     if (oversizeError) {
       throw new Error(oversizeError);
-    }
-    if (protocolError) {
-      throw new Error(protocolError);
     }
     if (eventError) {
       throw new Error(eventError);

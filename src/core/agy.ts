@@ -182,6 +182,11 @@ export function buildAgyArgs({
     "stream-json",
     "--input-format",
     "stream-json",
+    // ponytail: fixed 15m print ceiling so agy's own 5m default cannot
+    // preempt the outer timeout; derive from subagentTimeoutMs if agy
+    // runs ever legitimately need more than 15 minutes.
+    "--print-timeout",
+    "15m",
   ];
   if (profile.model) {
     args.push("--model", profile.model);
@@ -389,19 +394,24 @@ export async function spawnAgySubagent(params: {
     if (protocolError) {
       throw new Error(protocolError);
     }
-    if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
-      throw new Error(`agy exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
-    }
+    const exitSuffix = closeResult.code !== 0
+      ? ` (exit code ${closeResult.code}${closeResult.signal ? `, signal ${closeResult.signal}` : ""})`
+      : "";
     if (!terminalResult) {
-      throw new Error("agy exited without a terminal result event");
+      const stderr = stderrBuffer.text().trim();
+      throw new Error(`agy exited without a terminal result event${exitSuffix}${stderr ? `: ${stderr}` : ""}`);
     }
     const terminalStatus = terminalResult.status?.trim().toUpperCase();
     if (!terminalStatus) {
       throw new Error("agy terminal result is missing status");
     }
     if (terminalStatus !== "SUCCESS") {
-      throw new Error(`agy failed with status ${terminalStatus}${terminalResult.error?.trim() ? `: ${terminalResult.error.trim()}` : ""}`);
+      // Prefer agy's own failure reason over the generic exit-code error.
+      throw new Error(`agy failed with status ${terminalStatus}${terminalResult.error?.trim() ? `: ${terminalResult.error.trim()}` : ""}${exitSuffix}`);
+    }
+    if (closeResult.code !== 0) {
+      const stderr = stderrBuffer.text().trim();
+      throw new Error(`agy exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
     }
     const result = textFromAgyResult(terminalResult)?.trim();
     if (!result) {
