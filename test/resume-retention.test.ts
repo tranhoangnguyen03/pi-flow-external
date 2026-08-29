@@ -24,7 +24,6 @@ function writeRecord(runsDir: string, runId: string, summary: unknown, complete 
     writeFileSync(join(directory, "summary.json"), JSON.stringify({ version: 1, runId, summary }));
   }
 }
-
 describe("resume resolution", () => {
   it("resolves a recorded session id for the same backend", async () => {
     const root = tempRoot();
@@ -61,11 +60,10 @@ describe("run record retention", () => {
       writeRecord(runsDir, `run_old${index}`, { backend: "claude", sessionId: `s${index}` });
       const path = join(runsDir, `run_old${index}`);
       const time = new Date(Date.now() - (10 - index) * 60_000);
-      rmSync(join(path, "summary.json"));
-      writeFileSync(join(path, "summary.json"), JSON.stringify({ summary: {} }), { flag: "w" });
-      // touch with explicit mtime
+      // touch with explicit mtime, preserving the runId completion marker
       const fs = await import("node:fs");
       fs.utimesSync(path, time, time);
+      fs.utimesSync(join(path, "summary.json"), time, time);
     }
     writeRecord(runsDir, "run_active", { backend: "claude" }, false);
     rmSync(join(runsDir, "run_active", "events.ndjson"));
@@ -77,6 +75,23 @@ describe("run record retention", () => {
     // Active/incomplete records are never candidates.
     const fs = await import("node:fs");
     expect(fs.existsSync(join(runsDir, "run_active"))).toBe(true);
+  });
+
+  it("keeps damaged or mismatched summaries instead of pruning them", async () => {
+    const root = tempRoot();
+    const runsDir = join(root, "runs");
+    writeRecord(runsDir, "run_a", { backend: "claude", sessionId: "s" });
+    writeRecord(runsDir, "run_b", { backend: "claude", sessionId: "s" });
+    writeFileSync(join(runsDir, "run_b", "summary.json"), "{not json");
+    writeRecord(runsDir, "run_c", { backend: "claude", sessionId: "s" });
+    // run_d's summary names a different run: damaged evidence.
+    writeRecord(runsDir, "run_d", { backend: "claude", sessionId: "s" });
+    writeFileSync(join(runsDir, "run_d", "summary.json"), JSON.stringify({ runId: "run_x", summary: {} }));
+    const fs = await import("node:fs");
+    const { pruned } = await pruneRunRecords(runsDir, 2);
+    expect(pruned).toEqual([]);
+    expect(fs.existsSync(join(runsDir, "run_d"))).toBe(true);
+    expect(fs.existsSync(join(runsDir, "run_b"))).toBe(true);
   });
 
   it("keeps everything when disabled", async () => {

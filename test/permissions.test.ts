@@ -3,7 +3,17 @@ import { buildPermissionArgs, permissionLabel, resolvePermission } from "../src/
 import { buildClaudeArgs } from "../src/core/claude.ts";
 import { buildCodexArgs } from "../src/core/codex.ts";
 import { buildAgyArgs } from "../src/core/agy.ts";
+import { renderCompactSubagentNode } from "../src/core/subagent-render.ts";
+import { normalizeAgentOptions } from "../src/workflow/runtime-values.ts";
+import { Theme } from "@earendil-works/pi-coding-agent";
 import type { SubagentProfile } from "../src/types.ts";
+
+function fakeTheme() {
+  const theme = new Theme({} as never, {} as never, "truecolor");
+  (theme as unknown as { fg: (color: string, text: string) => string }).fg = (_color, text) => text;
+  (theme as unknown as { bold: (text: string) => string }).bold = (text) => text;
+  return theme;
+}
 
 const profile = (backend: SubagentProfile["backend"]): SubagentProfile => ({
   name: `${backend}-agent`,
@@ -99,6 +109,71 @@ describe("permission tier argv mapping", () => {
     expect(resumed).toContain("--conversation");
     expect(resumed).toContain("conv-1");
     expect(resumed).toContain("--dangerously-skip-permissions");
+  });
+
+  it("locks exact codex argv for every tier in normal and resume forms", () => {
+    const base = (permission: "readonly" | "edit" | "danger") =>
+      buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, permission });
+    expect(base("readonly")).toEqual([
+      "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--", "-",
+    ]);
+    expect(base("edit")).toEqual([
+      "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "--", "-",
+    ]);
+    expect(base("danger")).toEqual([
+      "exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--", "-",
+    ]);
+    const resumed = (permission: "readonly" | "edit" | "danger") =>
+      buildCodexArgs({
+        prompt: "p",
+        profile: profile("codex"),
+        thinkingLevel: undefined,
+        permission,
+        resumeSessionId: "thread-9",
+      });
+    expect(resumed("readonly")).toEqual([
+      "exec", "--sandbox", "read-only", "resume", "thread-9", "--json", "--skip-git-repo-check", "--", "-",
+    ]);
+    expect(resumed("edit")).toEqual([
+      "exec", "--sandbox", "workspace-write", "resume", "thread-9", "--json", "--skip-git-repo-check", "--", "-",
+    ]);
+    expect(resumed("danger")).toEqual([
+      "exec", "--sandbox", "danger-full-access", "resume", "thread-9", "--json", "--skip-git-repo-check", "--", "-",
+    ]);
+  });
+
+  it("rejects non-finite workflow budget options", () => {
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => normalizeAgentOptions({ max_budget_usd: invalid })).toThrow(/finite/);
+    }
+    expect(normalizeAgentOptions({ max_budget_usd: 1.5 }).maxBudgetUsd).toBe(1.5);
+  });
+
+  it("renders tier, denial, and budget disclosure tags on receipts", () => {
+    const toText = (component: { render: (width: number) => string[] }) => (component.render(100) ?? []).join("\n");
+    const node = {
+      backend: "agy" as const,
+      status: "done" as const,
+      subagentType: "agy-reviewer",
+      description: "task",
+      permission: "readonly" as const,
+      permissionEnforced: false,
+      permissionDenials: 2,
+      maxBudgetUsd: 4,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: true },
+      startedAt: Date.now() - 1000,
+      endedAt: Date.now(),
+    };
+    const text = toText(renderCompactSubagentNode(node, fakeTheme(), 0, "", 0, false));
+    expect(text).toContain("readonly (advisory)");
+    expect(text).toContain("2 permission denials");
+    expect(text).toContain("budget unenforceable");
+    const claudeNode = { ...node, backend: "claude" as const, permission: "danger" as const };
+    delete (claudeNode as Record<string, unknown>).permissionEnforced;
+    delete (claudeNode as Record<string, unknown>).permissionDenials;
+    const claudeText = toText(renderCompactSubagentNode(claudeNode, fakeTheme(), 0, "", 0, false));
+    expect(claudeText).not.toContain("advisory");
+    expect(claudeText).not.toContain("budget unenforceable");
   });
 });
 

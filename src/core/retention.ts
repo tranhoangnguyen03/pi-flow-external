@@ -1,4 +1,4 @@
-import { readdir, rm, stat } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -38,9 +38,14 @@ export async function pruneRunRecords(
     }
     const directory = join(runsDirectory, entry);
     try {
-      await stat(join(directory, "summary.json"));
+      // A summary is only a completion marker when it parses and matches its
+      // run directory; damaged or partial evidence stays untouched.
+      const summary = JSON.parse(await readFile(join(directory, "summary.json"), "utf8")) as Record<string, unknown>;
+      if (summary.runId !== entry) {
+        continue;
+      }
     } catch {
-      // Incomplete or active: never eligible for pruning.
+      // Incomplete, active, or damaged: never eligible for pruning.
       continue;
     }
     completed.push({ directory, mtimeMs: (await stat(directory)).mtimeMs });

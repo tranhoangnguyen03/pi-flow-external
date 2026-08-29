@@ -128,6 +128,7 @@ interface CreateAgentToolOptions {
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  getDefaultPermission: () => PermissionTier;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
 }
 
@@ -469,12 +470,10 @@ function createAgentTool(
       const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
-      const tier = typeof args.permission === "string"
-        ? (args.permission as PermissionTier)
-        : profile?.permission;
-      const tierLabel = tier
-        ? permissionLabel(resolvePermission(tier, backend ?? "claude"))
-        : "unsandboxed external CLI";
+      const tier = (typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined)
+        ?? profile?.permission
+        ?? options.getDefaultPermission();
+      const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
       const lines = [
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`, 
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
@@ -558,6 +557,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getLimiter: () => syncMaxConcurrentSubagents().limiter,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
+      getDefaultPermission: () => rootState.defaultPermission,
       updateStatus: (ctx, toolCallId, usage) => {
         if (!ctx.hasUI) {
           return;
