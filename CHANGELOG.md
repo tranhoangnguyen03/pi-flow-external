@@ -2,7 +2,9 @@
 
 All notable changes to pi-flow external are documented here.
 
-## [Unreleased]
+## [1.2.0-external.0] - 2026-08-29
+
+Implements the orchestrator-decided tiers design ([#11](https://github.com/tranhoangnguyen03/pi-flow-external/issues/11)), live-verified against Claude Code 2.1.239, codex-cli 0.150.1, and agy 1.1.22.
 
 ### Added
 
