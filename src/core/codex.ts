@@ -13,7 +13,8 @@ import {
   MAX_STDERR_CHARS,
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
-import type { SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import { buildPermissionArgs } from "./permissions.ts";
 
 const CODEX_COMMAND = "codex";
 const FORCE_KILL_DELAY_MS = 3000;
@@ -100,18 +101,19 @@ export function buildCodexArgs({
   profile,
   thinkingLevel,
   outputSchemaPath,
+  permission = "danger",
+  resumeSessionId,
 }: {
   prompt: string;
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
   outputSchemaPath?: string;
+  permission?: PermissionTier;
+  resumeSessionId?: string;
 }): string[] {
-  const args = [
-    "exec",
-    "--json",
-    "--skip-git-repo-check",
-    "--dangerously-bypass-approvals-and-sandbox",
-  ];
+  const args = resumeSessionId
+    ? ["exec", ...buildPermissionArgs(permission, "codex"), "resume", resumeSessionId, "--json", "--skip-git-repo-check"]
+    : ["exec", "--json", "--skip-git-repo-check", ...buildPermissionArgs(permission, "codex")];
   if (profile.systemPrompt) {
     args.push("-c", buildConfigOverrideArg("developer_instructions", profile.systemPrompt));
   }
@@ -172,6 +174,13 @@ export function extractCodexUsage(event: Record<string, unknown>): CodexTokenUsa
   }
   const info = asRecord(payload.info);
   return info ? parseUsageRecord(info.last_token_usage) : undefined;
+}
+
+export function extractCodexSessionId(event: Record<string, unknown>): string | undefined {
+  if (event.type !== "thread.started") {
+    return undefined;
+  }
+  return typeof event.thread_id === "string" && event.thread_id ? event.thread_id : undefined;
 }
 
 function textFromCodexValue(value: unknown): string | undefined {
@@ -332,6 +341,8 @@ export async function spawnCodexSubagent(params: {
   onBackendEvent?: (event: unknown) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
+  permission?: PermissionTier;
+  resumeSessionId?: string;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
@@ -346,6 +357,7 @@ export async function spawnCodexSubagent(params: {
   const progress = emitter.progress;
   let latestUsage = emptyUsage(params.profile.model);
   let resultText = "";
+  let sessionId: string | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
@@ -371,6 +383,10 @@ export async function spawnCodexSubagent(params: {
     if (isTerminal) {
       sawTerminalEvent = true;
       terminalSucceeded = event.type === "turn.completed";
+    }
+    const eventSessionId = extractCodexSessionId(event);
+    if (eventSessionId) {
+      sessionId = eventSessionId;
     }
     const activity = codexActivityFromEvent(event);
     if (activity) {
@@ -415,6 +431,8 @@ export async function spawnCodexSubagent(params: {
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
       outputSchemaPath: schemaFile?.path,
+      permission: params.permission,
+      resumeSessionId: params.resumeSessionId,
     });
 
     const proc = spawn(CODEX_COMMAND, args, {
@@ -531,6 +549,7 @@ export async function spawnCodexSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
@@ -554,6 +573,7 @@ export async function spawnCodexSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {

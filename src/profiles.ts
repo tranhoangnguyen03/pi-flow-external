@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { SubagentBackend, SubagentProfile, ThinkingLevel } from "./types.ts";
+import type { PermissionTier, SubagentBackend, SubagentProfile, ThinkingLevel } from "./types.ts";
 
 const EXTERNAL_AGENT_BACKENDS: SubagentBackend[] = ["codex", "claude", "agy"];
 
@@ -57,6 +57,26 @@ function parseToolList(value: unknown): string[] | "invalid" {
   return tools.length > 0 ? tools : "invalid";
 }
 
+function parsePermission(value: unknown): PermissionTier | "invalid" | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (value === "readonly" || value === "edit" || value === "danger") {
+    return value;
+  }
+  return "invalid";
+}
+
+function parseMaxBudgetUsd(value: unknown): number | "invalid" | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value === "number" && value > 0) {
+    return value;
+  }
+  return "invalid";
+}
+
 export function parseSubagentProfileContent(
   content: string,
   name: string,
@@ -80,8 +100,16 @@ export function parseSubagentProfileContent(
   const tools = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "tools")
     ? parseToolList(parsed.frontmatter.tools)
     : undefined;
+  const permission = parsePermission(parsed.frontmatter.permission);
+  const maxBudgetUsd = parseMaxBudgetUsd(parsed.frontmatter.max_budget_usd);
 
-  if (!description || tools === "invalid" || (options.requireBody && !body)) {
+  if (
+    !description ||
+    tools === "invalid" ||
+    permission === "invalid" ||
+    maxBudgetUsd === "invalid" ||
+    (options.requireBody && !body)
+  ) {
     return undefined;
   }
 
@@ -93,6 +121,8 @@ export function parseSubagentProfileContent(
     thinking,
     tools,
     systemPrompt: body || undefined,
+    permission,
+    maxBudgetUsd,
   };
 }
 

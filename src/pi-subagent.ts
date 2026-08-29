@@ -24,6 +24,8 @@ import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { resolvePermission, permissionLabel } from "./core/permissions.ts";
+import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
@@ -33,6 +35,7 @@ import { registerProfileCreator, startProfileInterview } from "./profile-creator
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveExternalSettings } from "./settings.ts";
 import type {
+  PermissionTier,
   SubagentBackend,
   SubagentExtensionOptions,
   SubagentProfile,
@@ -67,11 +70,30 @@ const agentToolParameters = Type.Object({
     minLength: 1,
     description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude, backend: codex, or backend: agy.",
   }),
+  permission: Type.Optional(
+    Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
+      description:
+        "How much authority the external agent gets. Pick the narrowest tier that fits the task: readonly for exploration/review, edit for implementation, danger (default) for unrestricted runs. Enforced natively per backend where supported; advisory and labeled otherwise.",
+    }),
+  ),
+  max_budget_usd: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      description:
+        "Optional USD spending cap for this run. Enforced mid-run on Claude Code (native flag); recorded and reported after the run elsewhere.",
+    }),
+  ),
+  resume: Type.Optional(
+    Type.String({
+      description:
+        "Prior run id (from a completed result's evidence id) whose backend conversation should be continued. Must use the same profile backend.",
+    }),
+  ),
 });
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
-type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description">;
+type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description" | "permission">;
 
 interface AgentRenderState {
   profileType?: string;
@@ -82,6 +104,9 @@ interface DelegationState {
   limiter: ConcurrencyLimiter;
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
+  defaultPermission: PermissionTier;
+  defaultMaxBudgetUsd: number | undefined;
+  maxRunRecords: number;
   progressEnabled: boolean;
   activeRuns: Map<string, ActiveAgentRun>;
   frame: number;
@@ -103,6 +128,7 @@ interface CreateAgentToolOptions {
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  getDefaultPermission: () => PermissionTier;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
 }
 
@@ -398,6 +424,9 @@ function createAgentTool(
           signal,
           timeoutMs: options.getSubagentTimeoutMs(),
           progressEnabled: effectiveState.progressEnabled,
+          permission: params.permission ?? profile.permission ?? effectiveState.defaultPermission,
+          maxBudgetUsd: params.max_budget_usd ?? profile.maxBudgetUsd ?? effectiveState.defaultMaxBudgetUsd,
+          resumeRunId: params.resume,
           onProgress: effectiveState.progressEnabled && run
             ? (partial) => {
                 const details = partial.details as SubagentToolDetails;
@@ -434,13 +463,19 @@ function createAgentTool(
       if (state.profileType !== subagentType) {
         const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
         state.profileType = subagentType;
-        state.profile = profile ? { backend: profile.backend, description: profile.description } : undefined;
+        state.profile = profile
+          ? { backend: profile.backend, description: profile.description, permission: profile.permission }
+          : undefined;
       }
       const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
+      const tier = (typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined)
+        ?? profile?.permission
+        ?? options.getDefaultPermission();
+      const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
       const lines = [
-        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", "unsandboxed external CLI")}`,
+        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`, 
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
         profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
         context.cwd ? `${theme.fg("muted", "Workspace")} ${context.cwd}` : "",
@@ -493,6 +528,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       limiter: new ConcurrencyLimiter(defaultMaxConcurrentSubagents),
       maxConcurrentSubagents: defaultMaxConcurrentSubagents,
       subagentTimeoutMs: defaultSubagentTimeoutMs,
+      defaultPermission: loadedSettings.settings.defaultPermission,
+      defaultMaxBudgetUsd: loadedSettings.settings.defaultMaxBudgetUsd ?? undefined,
+      maxRunRecords: loadedSettings.settings.maxRunRecords,
       progressEnabled: false,
       activeRuns: new Map(),
       frame: 0,
@@ -519,6 +557,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getLimiter: () => syncMaxConcurrentSubagents().limiter,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
+      getDefaultPermission: () => rootState.defaultPermission,
       updateStatus: (ctx, toolCallId, usage) => {
         if (!ctx.hasUI) {
           return;
@@ -538,6 +577,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           subagentTimeoutMs: state.subagentTimeoutMs,
         };
       },
+      getMaxRunRecords: () => rootState.maxRunRecords,
       startProfileInterview,
     });
     if (workflowEnabled) {
@@ -546,6 +586,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           getLimiter: () => syncMaxConcurrentSubagents().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
+          getDefaultPermission: () => rootState.defaultPermission,
+          getDefaultMaxBudgetUsd: () => rootState.defaultMaxBudgetUsd,
           updateStatus: (ctx, toolCallId, usage) => {
             if (!ctx.hasUI) {
               return;
@@ -560,6 +602,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       syncMaxConcurrentSubagents();
       usageStatusState.calls.clear();
       usageStatusState.latestCacheHitRate = undefined;
+      // Best-effort retention sweep; never blocks or fails the session.
+      void pruneRunRecords(runRecordsDirectory(), rootState.maxRunRecords).catch(() => undefined);
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }

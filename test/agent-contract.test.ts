@@ -59,7 +59,6 @@ describe("pi-subagent agent contract", () => {
     expect(properties).toHaveProperty("prompt");
     expect(properties).toHaveProperty("subagent_type");
     expect(properties).not.toHaveProperty("run_in_background");
-    expect(properties).not.toHaveProperty("resume");
     expect(properties).not.toHaveProperty("model");
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");

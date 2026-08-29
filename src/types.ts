@@ -4,6 +4,14 @@ export type SubagentType = string;
 export type SubagentBackend = "pi" | "codex" | "claude" | "agy";
 export type ThinkingLevel = string;
 
+/**
+ * Permission tier chosen by the orchestrator. `danger` is the default and
+ * matches the historical unsandboxed behavior. Tiers map onto native
+ * harness mechanisms where they exist; unsupported combinations are labeled
+ * advisory rather than blocked (trust + disclose).
+ */
+export type PermissionTier = "readonly" | "edit" | "danger";
+
 export interface SubagentProfile {
   name: string;
   description: string;
@@ -12,6 +20,10 @@ export interface SubagentProfile {
   thinking?: ThinkingLevel;
   tools?: string[];
   systemPrompt?: string;
+  /** Default tier for calls using this profile; the call parameter wins. */
+  permission?: PermissionTier;
+  /** Default USD budget cap for calls using this profile; the call parameter wins. */
+  maxBudgetUsd?: number;
 }
 
 export interface SubagentExtensionOptions {
@@ -63,6 +75,18 @@ export interface WorkflowAgentSnapshot {
   nestedTimeoutExtended?: boolean;
   effectiveTimeoutMs?: number;
   recordingError?: string;
+  /** Resolved permission tier for this run. */
+  permission?: PermissionTier;
+  /** False when the tier is advisory on this backend (instruction, not enforcement). */
+  permissionEnforced?: boolean;
+  /** Permission denials reported by the backend (claude plan/acceptEdits runs). */
+  permissionDenials?: number;
+  /** Resolved USD budget cap, when any. */
+  maxBudgetUsd?: number;
+  /** Backend conversation/session id for later resume. */
+  sessionId?: string;
+  /** Prior run id this run continued, when resuming. */
+  resumedFrom?: string;
 }
 
 export interface WorkflowToolDetails {
@@ -128,6 +152,18 @@ export interface SubagentProgressNode {
   effectiveTimeoutMs?: number;
   /** Set when the agent result is valid but its local observation record is incomplete. */
   recordingError?: string;
+  /** Resolved permission tier for this run. */
+  permission?: PermissionTier;
+  /** False when the tier is advisory on this backend (instruction, not enforcement). */
+  permissionEnforced?: boolean;
+  /** Permission denials reported by the backend (claude plan/acceptEdits runs). */
+  permissionDenials?: number;
+  /** Resolved USD budget cap, when any. */
+  maxBudgetUsd?: number;
+  /** Backend conversation/session id for later resume. */
+  sessionId?: string;
+  /** Prior run id this run continued, when resuming. */
+  resumedFrom?: string;
 }
 
 export interface SubagentToolDetails {
@@ -156,4 +192,16 @@ export interface SubagentToolDetails {
   /** Number of currently running subagents, used to choose rich vs compact live rendering. */
   activeCount?: number;
   frame?: number;
+  /** Resolved permission tier for this run. */
+  permission?: PermissionTier;
+  /** False when the tier is advisory on this backend (instruction, not enforcement). */
+  permissionEnforced?: boolean;
+  /** Permission denials reported by the backend (claude plan/acceptEdits runs). */
+  permissionDenials?: number;
+  /** Resolved USD budget cap, when any. */
+  maxBudgetUsd?: number;
+  /** Backend conversation/session id for later resume. */
+  sessionId?: string;
+  /** Prior run id this run continued, when resuming. */
+  resumedFrom?: string;
 }

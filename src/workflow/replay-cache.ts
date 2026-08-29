@@ -8,6 +8,9 @@ export function fingerprintWorkflowAgentCall(call: WorkflowAgentCall): string {
     phase: call.phase,
     subagentType: call.subagentType,
     schema: call.schema,
+    permission: call.permission,
+    maxBudgetUsd: call.maxBudgetUsd,
+    resumeRunId: call.resumeRunId,
   });
 }
 
