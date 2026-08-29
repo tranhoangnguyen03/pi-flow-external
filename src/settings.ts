@@ -1,17 +1,23 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SubagentExtensionOptions } from "./types.ts";
+import type { PermissionTier, SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
-  version: 1,
+  version: 2,
   maxConcurrentSubagents: 12,
   subagentTimeoutMs: 2 * 60 * 60 * 1000,
+  defaultPermission: "danger" as PermissionTier,
+  defaultMaxBudgetUsd: null as number | null,
+  maxRunRecords: 200,
 } as const;
 
 export type ExternalSettings = {
-  version: 1;
+  version: 2;
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
+  defaultPermission: PermissionTier;
+  defaultMaxBudgetUsd: number | null;
+  maxRunRecords: number;
 };
 
 export type LoadedExternalSettings = {
@@ -19,6 +25,17 @@ export type LoadedExternalSettings = {
   settings: ExternalSettings;
   diagnostics: string[];
 };
+
+const KNOWN_SETTING_KEYS = [
+  "version",
+  "maxConcurrentSubagents",
+  "subagentTimeoutMs",
+  "defaultPermission",
+  "defaultMaxBudgetUsd",
+  "maxRunRecords",
+];
+
+const PERMISSION_TIERS: PermissionTier[] = ["readonly", "edit", "danger"];
 
 export function externalSettingsPath(agentDir: string): string {
   return join(agentDir, "pi-flow-external", "settings.json");
@@ -28,30 +45,60 @@ function defaults(): ExternalSettings {
   return { ...DEFAULT_EXTERNAL_SETTINGS };
 }
 
+function isPermissionTier(value: unknown): value is PermissionTier {
+  return typeof value === "string" && PERMISSION_TIERS.includes(value as PermissionTier);
+}
+
+/**
+ * Migrate-on-read: never reject the whole file. Defaults are filled first and
+ * each recognized key (from v1 or v2) overrides when valid; invalid values
+ * fall back per-key with a diagnostic. Unknown keys are reported, not fatal.
+ */
 function parseSettings(value: unknown): { settings: ExternalSettings; diagnostics: string[] } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { settings: defaults(), diagnostics: ["Settings must be a JSON object."] };
   }
   const record = value as Record<string, unknown>;
-  const diagnostics = Object.keys(record)
-    .filter((key) => !["version", "maxConcurrentSubagents", "subagentTimeoutMs"].includes(key))
-    .map((key) => `Unknown setting "${key}".`);
-  if (record.version !== 1) diagnostics.push("version must be 1.");
-  if (!Number.isInteger(record.maxConcurrentSubagents) || Number(record.maxConcurrentSubagents) < 1) {
+  const diagnostics: string[] = [];
+  if (record.version !== 1 && record.version !== 2) {
+    diagnostics.push("version must be 1 or 2.");
+  }
+  for (const key of Object.keys(record)) {
+    if (!KNOWN_SETTING_KEYS.includes(key)) {
+      diagnostics.push(`Unknown setting "${key}".`);
+    }
+  }
+
+  const settings = defaults();
+  if (Number.isInteger(record.maxConcurrentSubagents) && Number(record.maxConcurrentSubagents) >= 1) {
+    settings.maxConcurrentSubagents = record.maxConcurrentSubagents as number;
+  } else if (record.maxConcurrentSubagents !== undefined) {
     diagnostics.push("maxConcurrentSubagents must be a positive integer.");
   }
-  if (!Number.isInteger(record.subagentTimeoutMs) || Number(record.subagentTimeoutMs) < 0) {
+  if (Number.isInteger(record.subagentTimeoutMs) && Number(record.subagentTimeoutMs) >= 0) {
+    settings.subagentTimeoutMs = record.subagentTimeoutMs as number;
+  } else if (record.subagentTimeoutMs !== undefined) {
     diagnostics.push("subagentTimeoutMs must be a non-negative integer.");
   }
-  const invalid = diagnostics.some((message) => !message.startsWith("Unknown setting"));
-  return {
-    settings: invalid ? defaults() : {
-      version: 1,
-      maxConcurrentSubagents: record.maxConcurrentSubagents as number,
-      subagentTimeoutMs: record.subagentTimeoutMs as number,
-    },
-    diagnostics,
-  };
+  if (isPermissionTier(record.defaultPermission)) {
+    settings.defaultPermission = record.defaultPermission;
+  } else if (record.defaultPermission !== undefined) {
+    diagnostics.push("defaultPermission must be readonly, edit, or danger.");
+  }
+  if (record.defaultMaxBudgetUsd === null || record.defaultMaxBudgetUsd === undefined) {
+    // default: unlimited
+  } else if (typeof record.defaultMaxBudgetUsd === "number" && record.defaultMaxBudgetUsd > 0) {
+    settings.defaultMaxBudgetUsd = record.defaultMaxBudgetUsd;
+  } else {
+    diagnostics.push("defaultMaxBudgetUsd must be null or a positive number.");
+  }
+  if (Number.isInteger(record.maxRunRecords) && Number(record.maxRunRecords) >= 0) {
+    settings.maxRunRecords = record.maxRunRecords as number;
+  } else if (record.maxRunRecords !== undefined) {
+    diagnostics.push("maxRunRecords must be a non-negative integer (0 keeps records forever).");
+  }
+
+  return { settings, diagnostics };
 }
 
 export function loadExternalSettings(agentDir: string): LoadedExternalSettings {

@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
 import type { LoadedExternalSettings } from "./settings.ts";
+import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 
 const COMMANDS = [
@@ -25,6 +26,7 @@ type RuntimeSettings = { maxConcurrentSubagents: number; subagentTimeoutMs: numb
 export type ExternalCommandOptions = {
   settings: LoadedExternalSettings;
   getRuntimeSettings: () => RuntimeSettings;
+  getMaxRunRecords: () => number;
   startProfileInterview: (ctx: ExtensionCommandContext) => Promise<void>;
 };
 
@@ -50,9 +52,13 @@ function helpText(): string {
 
 function settingsText(options: ExternalCommandOptions): string {
   const effective = options.getRuntimeSettings();
+  const settings = options.settings.settings;
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
+    `defaultPermission: ${settings.defaultPermission}`,
+    `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
+    `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
     `Settings: ${options.settings.path}`,
     ...(options.settings.diagnostics.length ? ["Warnings:", ...options.settings.diagnostics.map((item) => `- ${item}`)] : []),
     "Edit the file, then run /reload. CLI flags override file values.",
@@ -134,12 +140,17 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "workflows") {
         const saved = workflows(ctx);
         ctx.ui.notify(saved.length ? saved.map((workflow) => `${workflow.name}: ${workflow.description}`).join("\n") : "No saved workflows.", "info");
-      } else if (action === "runs") {
-        ctx.ui.notify(await runsText(pi), "info");
+      } else if (action === "runs" || action === "runs --prune") {
+        let pruneLine = "";
+        if (action === "runs --prune") {
+          const { pruned, kept } = await pruneRunRecords(runRecordsDirectory(), options.getMaxRunRecords());
+          pruneLine = `\nPruned: ${pruned.length} record(s) · kept: ${kept} completed`;
+        }
+        ctx.ui.notify(`${await runsText(pi)}${pruneLine}`, "info");
       } else if (action === "help") {
         ctx.ui.notify(helpText(), "info");
       } else {
-        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|workflows|runs|help]", "warning");
+        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|workflows|runs|runs --prune|help]", "warning");
       }
     },
   });

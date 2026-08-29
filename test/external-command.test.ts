@@ -26,13 +26,21 @@ describe("/external command", () => {
       };
       const settings: LoadedExternalSettings = {
         path: join(root, "pi-flow-external", "settings.json"),
-        settings: { version: 1, maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000 },
+        settings: {
+          version: 2,
+          maxConcurrentSubagents: 12,
+          subagentTimeoutMs: 7200000,
+          defaultPermission: "danger",
+          defaultMaxBudgetUsd: null,
+          maxRunRecords: 200,
+        },
         diagnostics: ['Unknown setting "futureOption".'],
       };
       const startProfileInterview = vi.fn(async () => {});
       registerExternalCommand(pi as never, {
         settings,
         getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
+        getMaxRunRecords: () => 200,
         startProfileInterview,
       });
 

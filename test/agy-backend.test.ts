@@ -168,7 +168,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
       nestedActivitySeen: true,
       nestedAgentControl: "allowed-observed",
       nestedTimeoutExtended: true,
-      permissionControl: "dangerous-bypass-prototype",
+      permission: { tier: "danger", enforced: true },
     });
     expect(summary.summary.effectiveTimeoutMs).toBeGreaterThan(summary.summary.configuredTimeoutMs);
     expect(events.match(/"type":"backend_event"/g)).toHaveLength(4);

@@ -187,6 +187,16 @@ Use the workflow tool to ask "claude-explorer" for an architecture map and "code
 
 Direct `Agent` calls and workflow children share the same concurrency and timeout controls.
 
+## Permission tiers, budgets, and resume
+
+Every `Agent` call and workflow `agent()` child accepts three optional parameters:
+
+- `permission`: `readonly` | `edit` | `danger` (default `danger`, today's behavior). Tiers map onto native harness mechanisms — Claude permission modes, Codex's single-axis `--sandbox`, and Antigravity's default headless policy (`edit` omits the bypass flag). Where a harness cannot enforce a tier — agy `readonly`, whose headless mode always auto-allows workspace writes — the run proceeds and the receipt labels it `advisory, not enforced`. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
+- `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag; codex and agy do not report cost, so the cap is recorded and marked `budget unenforceable` instead of pretended.
+- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend.
+
+Resolution order for tiers and budgets: call > profile frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
+
 ## Settings and runtime limits
 
 The extension creates:
@@ -199,11 +209,16 @@ Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "maxConcurrentSubagents": 12,
-  "subagentTimeoutMs": 7200000
+  "subagentTimeoutMs": 7200000,
+  "defaultPermission": "danger",
+  "defaultMaxBudgetUsd": null,
+  "maxRunRecords": 200
 }
 ```
+
+Version 1 files migrate on read: recognized keys carry over, unknown keys warn, invalid values fall back per-key. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
 
 Edit the file and run `/reload`. Startup flags override extension factory options, which override this file, which overrides built-in defaults.
 

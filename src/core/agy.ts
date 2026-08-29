@@ -6,7 +6,8 @@ import {
   MAX_STDERR_CHARS,
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
-import type { SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import { buildPermissionArgs } from "./permissions.ts";
 
 const AGY_COMMAND = "agy";
 const FORCE_KILL_DELAY_MS = 3000;
@@ -171,13 +172,17 @@ export function buildAgyArgs({
   profile,
   thinkingLevel,
   outputSchema,
+  permission = "danger",
+  resumeConversationId,
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
   outputSchema?: unknown;
+  permission?: PermissionTier;
+  resumeConversationId?: string;
 }): string[] {
   const args = [
-    "--dangerously-skip-permissions",
+    ...buildPermissionArgs(permission, "agy"),
     "--output-format",
     "stream-json",
     "--input-format",
@@ -188,6 +193,9 @@ export function buildAgyArgs({
     "--print-timeout",
     "15m",
   ];
+  if (resumeConversationId) {
+    args.push("--conversation", resumeConversationId);
+  }
   if (profile.model) {
     args.push("--model", profile.model);
   }
@@ -243,6 +251,8 @@ export async function spawnAgySubagent(params: {
   onBackendEvent?: (event: unknown) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
+  permission?: PermissionTier;
+  resumeConversationId?: string;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const promptParts = [params.profile.systemPrompt, params.prompt, params.appendInstructions].filter(Boolean);
@@ -317,6 +327,8 @@ export async function spawnAgySubagent(params: {
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
       outputSchema: params.outputSchema,
+      permission: params.permission,
+      resumeConversationId: params.resumeConversationId,
     }), {
       cwd: params.ctx.cwd,
       env: process.env,
@@ -431,7 +443,7 @@ export async function spawnAgySubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
-      ...(conversationId ? { conversationId } : {}),
+      ...(conversationId ? { conversationId, sessionId: conversationId } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
@@ -452,7 +464,7 @@ export async function spawnAgySubagent(params: {
       status,
       error: message,
       usage: latestUsage,
-      ...(conversationId ? { conversationId } : {}),
+      ...(conversationId ? { conversationId, sessionId: conversationId } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {

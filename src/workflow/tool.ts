@@ -14,7 +14,7 @@ import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } fr
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "../profiles.ts";
 import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import type { SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
+import type { PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
 import type { WorkflowAgentRunner } from "./types.ts";
@@ -30,6 +30,8 @@ export interface CreateWorkflowToolOptions {
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
+  getDefaultPermission: () => PermissionTier;
+  getDefaultMaxBudgetUsd: () => number | undefined;
 }
 
 function workflowResult(text: string, details: WorkflowToolDetails) {
@@ -178,6 +180,9 @@ export function createWorkflowTool(
           signal: agentSignal,
           timeoutMs: options.getSubagentTimeoutMs(),
           progressEnabled: true,
+          permission: call.permission ?? profile.permission ?? options.getDefaultPermission(),
+          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? options.getDefaultMaxBudgetUsd(),
+          resumeRunId: call.resumeRunId,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
             const agent = snapshot.agents.find((item) => item.index === childIndex);

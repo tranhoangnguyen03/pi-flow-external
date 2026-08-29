@@ -3,6 +3,9 @@ export interface NormalizedAgentOptions {
   phase?: string;
   subagentType?: string;
   schema?: unknown;
+  permission?: import("../types.ts").PermissionTier;
+  maxBudgetUsd?: number;
+  resumeRunId?: string;
 }
 
 export function truncateLogLine(text: string, maxLength: number): string {
@@ -26,11 +29,22 @@ export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object") throw new TypeError("agent options must be an object");
   const options = value as Record<string, unknown>;
+  const permission = options.permission;
+  if (permission !== undefined && !["readonly", "edit", "danger"].includes(permission as string)) {
+    throw new TypeError("agent permission must be readonly, edit, or danger");
+  }
+  const maxBudgetUsd = options.max_budget_usd;
+  if (maxBudgetUsd !== undefined && (typeof maxBudgetUsd !== "number" || maxBudgetUsd < 0)) {
+    throw new TypeError("agent max_budget_usd must be a non-negative number");
+  }
   return {
     label: optionalString(options.label, "agent label"),
     phase: optionalString(options.phase, "agent phase"),
     subagentType: optionalString(options.subagent_type, "agent subagent_type"),
     schema: options.schema,
+    permission: permission as NormalizedAgentOptions["permission"],
+    maxBudgetUsd: maxBudgetUsd as number | undefined,
+    resumeRunId: optionalString(options.resume, "agent resume"),
   };
 }
 

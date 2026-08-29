@@ -162,7 +162,17 @@ export async function runWorkflow<T = unknown>(
 
     const index = ++state.agentCount;
     const label = opts.label || defaultAgentLabel(assignedPhase, index);
-    const call = { index, prompt: taskPrompt, label, phase: assignedPhase, subagentType, schema: opts.schema };
+    const call = {
+      index,
+      prompt: taskPrompt,
+      label,
+      phase: assignedPhase,
+      subagentType,
+      schema: opts.schema,
+      permission: opts.permission,
+      maxBudgetUsd: opts.maxBudgetUsd,
+      resumeRunId: opts.resumeRunId,
+    };
     const fingerprint = fingerprintWorkflowAgentCall(call);
     const cachedResult = state.resumePrefixActive ? resumeAgentResults[index - 1] : undefined;
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {

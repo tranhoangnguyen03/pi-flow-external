@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { getBackendAgentLabel } from "./display.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
-import type { SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
+import type { PermissionTier, SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
 
 const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
@@ -30,6 +30,12 @@ export interface RenderableSubagentNode {
   effectiveTimeoutMs?: number;
   recordingError?: string;
   externalRunId?: string;
+  permission?: PermissionTier;
+  permissionEnforced?: boolean;
+  permissionDenials?: number;
+  maxBudgetUsd?: number;
+  sessionId?: string;
+  resumedFrom?: string;
 }
 
 export function isActiveSubagentStatus(status: SubagentRunStatus): boolean {
@@ -124,6 +130,15 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
   const parts: string[] = [];
   if (showAccess && isActiveSubagentStatus(node.status)) {
     parts.push("external host access");
+  }
+  if (node.permission && node.permission !== "danger") {
+    parts.push(node.permissionEnforced === false ? `${node.permission} (advisory)` : node.permission);
+  }
+  if (node.permissionDenials && node.permissionDenials > 0) {
+    parts.push(`${node.permissionDenials} permission denials`);
+  }
+  if (node.maxBudgetUsd !== undefined && node.usage?.costKnown === false) {
+    parts.push("budget unenforceable");
   }
   const startedAt = node.startedAt;
   if (typeof startedAt === "number") {

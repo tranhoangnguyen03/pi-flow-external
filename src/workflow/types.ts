@@ -21,6 +21,12 @@ export interface WorkflowAgentCall {
   subagentType: string;
   /** JSON Schema for structured output from the child subagent. */
   schema?: unknown;
+  /** Permission tier for this child (call > profile > settings default). */
+  permission?: import("../types.ts").PermissionTier;
+  /** USD budget cap for this child, when any. */
+  maxBudgetUsd?: number;
+  /** Prior run id whose backend conversation this child continues. */
+  resumeRunId?: string;
 }
 
 export interface WorkflowCachedAgentResult {

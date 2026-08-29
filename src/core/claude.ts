@@ -10,7 +10,8 @@ import {
   MAX_STDERR_CHARS,
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
-import type { SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import { buildPermissionArgs } from "./permissions.ts";
 
 const CLAUDE_COMMAND = "claude";
 const FORCE_KILL_DELAY_MS = 3000;
@@ -35,11 +36,17 @@ export function buildClaudeArgs({
   profile,
   thinkingLevel,
   outputSchema,
+  permission = "danger",
+  maxBudgetUsd,
+  resumeSessionId,
   effectiveUid = process.geteuid?.(),
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
   outputSchema?: unknown;
+  permission?: PermissionTier;
+  maxBudgetUsd?: number;
+  resumeSessionId?: string;
   effectiveUid?: number;
 }): string[] {
   const args = [
@@ -47,11 +54,16 @@ export function buildClaudeArgs({
     "--output-format",
     "stream-json",
     "--verbose",
-    "--no-session-persistence",
   ];
-  args.push(...effectiveUid === 0
-    ? ["--permission-mode", "auto"]
-    : ["--dangerously-skip-permissions"]);
+  if (resumeSessionId) {
+    args.push("--resume", resumeSessionId);
+  } else {
+    args.push("--no-session-persistence");
+  }
+  args.push(...buildPermissionArgs(permission, "claude", { effectiveUid }));
+  if (maxBudgetUsd !== undefined && maxBudgetUsd > 0) {
+    args.push("--max-budget-usd", String(maxBudgetUsd));
+  }
   if (profile.systemPrompt) {
     args.push("--append-system-prompt", profile.systemPrompt);
   }
@@ -171,6 +183,20 @@ export function extractClaudeCostUsd(event: Record<string, unknown>): number | u
     return undefined;
   }
   return asFiniteNumber(event.total_cost_usd) ?? sumModelUsageCost(event.modelUsage);
+}
+
+export function extractClaudeSessionId(event: Record<string, unknown>): string | undefined {
+  if (event.type !== "result") {
+    return undefined;
+  }
+  return typeof event.session_id === "string" && event.session_id ? event.session_id : undefined;
+}
+
+export function extractClaudePermissionDenials(event: Record<string, unknown>): number | undefined {
+  if (event.type !== "result" || !Array.isArray(event.permission_denials)) {
+    return undefined;
+  }
+  return event.permission_denials.length > 0 ? event.permission_denials.length : 0;
 }
 
 export function claudeUsageToSubagentUsage(usage: ClaudeTokenUsage, costUsd: number | undefined): SubagentUsage {
@@ -339,6 +365,9 @@ export async function spawnClaudeSubagent(params: {
   onBackendEvent?: (event: unknown) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
+  permission?: PermissionTier;
+  maxBudgetUsd?: number;
+  resumeSessionId?: string;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
@@ -355,6 +384,8 @@ export async function spawnClaudeSubagent(params: {
   let latestCostUsd: number | undefined;
   let latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
   let resultText = "";
+  let sessionId: string | undefined;
+  let permissionDenials: number | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
@@ -402,6 +433,14 @@ export async function spawnClaudeSubagent(params: {
       publishUsage(usage, cost);
     }
     const text = extractClaudeFinalText(event);
+    const eventSessionId = extractClaudeSessionId(event);
+    if (eventSessionId) {
+      sessionId = eventSessionId;
+    }
+    const denials = extractClaudePermissionDenials(event);
+    if (denials !== undefined) {
+      permissionDenials = (permissionDenials ?? 0) + denials;
+    }
     if (text !== undefined) {
       resultText = text;
       if (text.trim()) {
@@ -426,6 +465,9 @@ export async function spawnClaudeSubagent(params: {
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
       outputSchema: params.outputSchema,
+      permission: params.permission,
+      maxBudgetUsd: params.maxBudgetUsd,
+      resumeSessionId: params.resumeSessionId,
     });
 
     const proc = spawn(CLAUDE_COMMAND, args, {
@@ -538,6 +580,8 @@ export async function spawnClaudeSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      ...(sessionId ? { sessionId } : {}),
+      ...(permissionDenials ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
