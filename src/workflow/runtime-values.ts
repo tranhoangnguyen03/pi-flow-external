@@ -34,8 +34,8 @@ export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
     throw new TypeError("agent permission must be readonly, edit, or danger");
   }
   const maxBudgetUsd = options.max_budget_usd;
-  if (maxBudgetUsd !== undefined && (typeof maxBudgetUsd !== "number" || maxBudgetUsd < 0)) {
-    throw new TypeError("agent max_budget_usd must be a non-negative number");
+  if (maxBudgetUsd !== undefined && (typeof maxBudgetUsd !== "number" || !Number.isFinite(maxBudgetUsd) || maxBudgetUsd < 0)) {
+    throw new TypeError("agent max_budget_usd must be a finite non-negative number");
   }
   return {
     label: optionalString(options.label, "agent label"),

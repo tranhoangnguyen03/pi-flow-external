@@ -221,6 +221,12 @@ export function createWorkflowTool(
           agent.nestedTimeoutExtended = resultDetails.nestedTimeoutExtended;
           agent.effectiveTimeoutMs = resultDetails.effectiveTimeoutMs;
           agent.recordingError = resultDetails.recordingError;
+          agent.permission = resultDetails.permission;
+          agent.permissionEnforced = resultDetails.permissionEnforced;
+          agent.permissionDenials = resultDetails.permissionDenials;
+          agent.maxBudgetUsd = resultDetails.maxBudgetUsd;
+          agent.sessionId = resultDetails.sessionId;
+          agent.resumedFrom = resultDetails.resumedFrom;
           if (progress) {
             agent.startedAt = progress.startedAt;
             agent.endedAt = progress.endedAt;

@@ -112,11 +112,8 @@ export function buildCodexArgs({
   resumeSessionId?: string;
 }): string[] {
   const args = resumeSessionId
-    ? ["exec", "resume", resumeSessionId, "--json", "--skip-git-repo-check"]
-    : ["exec", "--json", "--skip-git-repo-check"];
-  // Single-axis sandbox levels only: sandbox and bypass flags are never
-  // combined, so one flag form expresses every tier.
-  args.push(...buildPermissionArgs(permission, "codex"));
+    ? ["exec", ...buildPermissionArgs(permission, "codex"), "resume", resumeSessionId, "--json", "--skip-git-repo-check"]
+    : ["exec", "--json", "--skip-git-repo-check", ...buildPermissionArgs(permission, "codex")];
   if (profile.systemPrompt) {
     args.push("-c", buildConfigOverrideArg("developer_instructions", profile.systemPrompt));
   }
@@ -576,6 +573,7 @@ export async function spawnCodexSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {

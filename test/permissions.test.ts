@@ -73,8 +73,17 @@ describe("permission tier argv mapping", () => {
       permission: "danger",
       resumeSessionId: "thread-9",
     });
-    expect(resumed.slice(0, 4)).toEqual(["exec", "resume", "thread-9", "--json"]);
-    expect(resumed).toContain("danger-full-access");
+    // Sandbox flags must precede the resume subcommand (codex-cli rejects them after it).
+    expect(resumed.slice(0, 5)).toEqual(["exec", "--sandbox", "danger-full-access", "resume", "thread-9"]);
+    expect(resumed).toContain("--json");
+    const resumedReadonly = buildCodexArgs({
+      prompt: "p",
+      profile: profile("codex"),
+      thinkingLevel: undefined,
+      permission: "readonly",
+      resumeSessionId: "thread-9",
+    });
+    expect(resumedReadonly.slice(0, 3)).toEqual(["exec", "--sandbox", "read-only"]);
   });
 
   it("threads tiers and conversation resume through buildAgyArgs", () => {
@@ -97,7 +106,10 @@ describe("tier enforcement resolution", () => {
   it("marks unsupported agy readonly as advisory, never a launch failure", () => {
     const readonly = resolvePermission("readonly", "agy");
     expect(readonly.enforced).toBe(false);
-    expect(permissionLabel(readonly)).toContain("advisory, not enforced");
+    const label = permissionLabel(readonly);
+    expect(label).toContain("advisory, not enforced");
+    // The advisory phrase appears exactly once, not duplicated via the caveat.
+    expect(label.split("advisory, not enforced")).toHaveLength(2);
 
     const edit = resolvePermission("edit", "agy");
     expect(edit.enforced).toBe(true);
@@ -108,5 +120,16 @@ describe("tier enforcement resolution", () => {
     expect(resolvePermission("readonly", "claude").enforced).toBe(true);
     expect(resolvePermission("edit", "codex").enforced).toBe(true);
     expect(permissionLabel(resolvePermission("readonly", "claude"))).toContain("readonly");
+  });
+
+  it("drops non-finite budgets instead of emitting them as CLI flags", () => {
+    const args = buildClaudeArgs({
+      profile: profile("claude"),
+      thinkingLevel: undefined,
+      permission: "danger",
+      maxBudgetUsd: Number.POSITIVE_INFINITY,
+      effectiveUid: 501,
+    });
+    expect(args).not.toContain("--max-budget-usd");
   });
 });

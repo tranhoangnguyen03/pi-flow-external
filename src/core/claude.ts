@@ -61,7 +61,7 @@ export function buildClaudeArgs({
     args.push("--no-session-persistence");
   }
   args.push(...buildPermissionArgs(permission, "claude", { effectiveUid }));
-  if (maxBudgetUsd !== undefined && maxBudgetUsd > 0) {
+  if (maxBudgetUsd !== undefined && Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0) {
     args.push("--max-budget-usd", String(maxBudgetUsd));
   }
   if (profile.systemPrompt) {
@@ -196,7 +196,7 @@ export function extractClaudePermissionDenials(event: Record<string, unknown>): 
   if (event.type !== "result" || !Array.isArray(event.permission_denials)) {
     return undefined;
   }
-  return event.permission_denials.length > 0 ? event.permission_denials.length : 0;
+  return event.permission_denials.length;
 }
 
 export function claudeUsageToSubagentUsage(usage: ClaudeTokenUsage, costUsd: number | undefined): SubagentUsage {
@@ -439,7 +439,9 @@ export async function spawnClaudeSubagent(params: {
     }
     const denials = extractClaudePermissionDenials(event);
     if (denials !== undefined) {
-      permissionDenials = (permissionDenials ?? 0) + denials;
+      // Latest result wins, consistent with text/usage/session fields: a
+      // background-agent follow-up turn re-reports rather than appends.
+      permissionDenials = denials;
     }
     if (text !== undefined) {
       resultText = text;
@@ -580,8 +582,8 @@ export async function spawnClaudeSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(sessionId ? { sessionId } : {}),
-      ...(permissionDenials ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
@@ -605,6 +607,8 @@ export async function spawnClaudeSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      ...(sessionId ? { sessionId } : {}),
+      ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {

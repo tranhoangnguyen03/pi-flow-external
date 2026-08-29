@@ -102,3 +102,8 @@ E2E (opt-in, change-triggered): one real run per backend covering tier enforceme
 - **A1 (resolved by docs, pending live spot-check):** agy `--sandbox` exists headless but only contains *shell commands*; it is not a readonly lock. Readonly stays advisory. `edit` is enforced by omitting the bypass flag. One live run should confirm the official soft-deny behavior on the installed CLI.
 - **A2:** Live-verify claude `--resume` works when the first run passed `--no-session-persistence`; if it needs a persisted transcript, first runs must persist sessions (and README documents the widened persistence surface). Unverified upstream (`pi-harness-delegate` has the same conditional pattern with the same open question).
 - **A3:** Verify `--sandbox danger-full-access` behaves like today's bypass on the installed codex version. (The swap is implemented; e2e confirms equivalence.)
+
+## Known limitations
+
+- Workflow replay fingerprints hash the script's explicit `permission`/`max_budget_usd`/`resume` values, not the resolved profile/settings defaults. Changing a profile's frontmatter tier (without changing the script) may reuse a cached result. Same class of limitation as profile `model` changes; revisit if it bites.
+- Claude `permission_denials` semantics across multi-result background-agent runs are unverified (per-turn vs cumulative); the implementation treats the latest result as authoritative, consistent with text/usage/session handling.

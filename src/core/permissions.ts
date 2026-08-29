@@ -74,7 +74,12 @@ export function permissionLabel(resolution: PermissionResolution): string {
   if (tier === "danger") {
     return "unsandboxed external CLI";
   }
-  return [`external CLI · ${tier}`, enforced ? undefined : "advisory, not enforced", caveat]
-    .filter(Boolean)
-    .join(" · ");
+  const parts = [`external CLI · ${tier}`];
+  if (!enforced) {
+    parts.push("advisory, not enforced");
+  }
+  if (caveat && caveat !== "advisory, not enforced") {
+    parts.push(caveat);
+  }
+  return parts.join(" · ");
 }

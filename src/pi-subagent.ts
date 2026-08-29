@@ -93,7 +93,7 @@ const agentToolParameters = Type.Object({
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
-type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description">;
+type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description" | "permission">;
 
 interface AgentRenderState {
   profileType?: string;
@@ -462,14 +462,18 @@ function createAgentTool(
       if (state.profileType !== subagentType) {
         const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
         state.profileType = subagentType;
-        state.profile = profile ? { backend: profile.backend, description: profile.description } : undefined;
+        state.profile = profile
+          ? { backend: profile.backend, description: profile.description, permission: profile.permission }
+          : undefined;
       }
       const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
-      const tier = typeof args.permission === "string" ? args.permission : undefined;
+      const tier = typeof args.permission === "string"
+        ? (args.permission as PermissionTier)
+        : profile?.permission;
       const tierLabel = tier
-        ? permissionLabel(resolvePermission(tier as PermissionTier, backend ?? "claude"))
+        ? permissionLabel(resolvePermission(tier, backend ?? "claude"))
         : "unsandboxed external CLI";
       const lines = [
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`, 

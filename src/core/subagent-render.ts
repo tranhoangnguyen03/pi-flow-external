@@ -137,7 +137,7 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
   if (node.permissionDenials && node.permissionDenials > 0) {
     parts.push(`${node.permissionDenials} permission denials`);
   }
-  if (node.maxBudgetUsd !== undefined && node.usage?.costKnown === false) {
+  if (node.maxBudgetUsd !== undefined && node.backend && node.backend !== "claude") {
     parts.push("budget unenforceable");
   }
   const startedAt = node.startedAt;

@@ -274,7 +274,10 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         permission: { tier: permission.tier, enforced: permission.enforced, caveat: permission.caveat },
         ...(details.permissionDenials !== undefined ? { permissionDenials: details.permissionDenials } : {}),
         ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
-        ...(details.usage?.costKnown === false && params.maxBudgetUsd !== undefined
+        // Budgets are enforced mid-run only where the backend supports a
+        // native cap (claude). Everywhere else record honestly that the
+        // budget could not be enforced, regardless of local cost estimates.
+        ...(params.maxBudgetUsd !== undefined && params.profile.backend !== "claude"
           ? { budgetEnforceable: false }
           : {}),
         ...(details.sessionId ? { sessionId: details.sessionId } : {}),
