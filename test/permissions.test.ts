@@ -46,7 +46,8 @@ describe("permission tier argv mapping", () => {
     const base = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, permission: "edit" });
     expect(base).toContain("--permission-mode");
     expect(base).toContain("acceptEdits");
-    expect(base).toContain("--no-session-persistence");
+    // Sessions persist by default so recorded session ids stay resumable.
+    expect(base).not.toContain("--no-session-persistence");
     expect(base).not.toContain("--max-budget-usd");
 
     const withBudget = buildClaudeArgs({
@@ -69,6 +70,8 @@ describe("permission tier argv mapping", () => {
     expect(resumed).toContain("--resume");
     expect(resumed).toContain("sess-123");
     expect(resumed).not.toContain("--no-session-persistence");
+    // Non-resume runs also persist now: --no-session-persistence is gone entirely.
+    expect(base).not.toContain("--no-session-persistence");
   });
 
   it("threads tiers and resume through buildCodexArgs", () => {

@@ -8,7 +8,7 @@ All notable changes to pi-flow external are documented here.
 
 - Orchestrator-decided permission tiers: `permission` (`readonly`/`edit`/`danger`, default `danger`) on `Agent` calls and workflow `agent()` children, enforced via native harness mechanisms (Claude permission modes, Codex single-axis `--sandbox`, agy bypass-flag omission). Unsupported tiers are labeled `advisory, not enforced` instead of blocking the launch; Claude permission denials are surfaced in receipts.
 - Per-call and per-profile USD budgets (`max_budget_usd`, settings `defaultMaxBudgetUsd`): passed natively to Claude (`--max-budget-usd`) and recorded elsewhere with an honest `budget unenforceable` label when the backend reports no cost.
-- Session resume: `resume` on `Agent`/`agent()` continues a prior run's backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`); session ids are recorded in `summary.json`. Claude sessions persist only when resuming.
+- Session resume: `resume` on `Agent`/`agent()` continues a prior run's backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`); session ids are recorded in `summary.json`. Claude sessions now persist in Claude Code's own local storage (live-verified: `--resume` fails after `--no-session-persistence`, so that flag is gone).
 - Run-record retention: settings `maxRunRecords` (default 200, `0` keeps everything) prunes oldest completed records at session start and via `/external runs --prune`; incomplete or active records are never pruned.
 - Settings v2 with migrate-on-read from v1 files.
 

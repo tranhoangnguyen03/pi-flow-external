@@ -57,9 +57,10 @@ export function buildClaudeArgs({
   ];
   if (resumeSessionId) {
     args.push("--resume", resumeSessionId);
-  } else {
-    args.push("--no-session-persistence");
   }
+  // Otherwise sessions persist in Claude Code's own local storage so a later
+  // call can --resume them; live-verified (plan doc A2). --no-session-persistence
+  // made every recorded session_id unresumable.
   args.push(...buildPermissionArgs(permission, "claude", { effectiveUid }));
   if (maxBudgetUsd !== undefined && Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0) {
     args.push("--max-budget-usd", String(maxBudgetUsd));

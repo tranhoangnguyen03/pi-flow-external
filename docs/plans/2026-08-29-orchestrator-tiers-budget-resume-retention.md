@@ -99,9 +99,9 @@ E2E (opt-in, change-triggered): one real run per backend covering tier enforceme
 
 ## Open items
 
-- **A1 (resolved by docs, pending live spot-check):** agy `--sandbox` exists headless but only contains *shell commands*; it is not a readonly lock. Readonly stays advisory. `edit` is enforced by omitting the bypass flag. One live run should confirm the official soft-deny behavior on the installed CLI.
-- **A2:** Live-verify claude `--resume` works when the first run passed `--no-session-persistence`; if it needs a persisted transcript, first runs must persist sessions (and README documents the widened persistence surface). Unverified upstream (`pi-harness-delegate` has the same conditional pattern with the same open question).
-- **A3:** Verify `--sandbox danger-full-access` behaves like today's bypass on the installed codex version. (The swap is implemented; e2e confirms equivalence.)
+- **A1 (resolved, live-verified 2026-08-29):** agy without the bypass flag completes headless runs with `SUCCESS` (shell behavior follows agy's own headless policy; no hang). `edit` is that native policy; `readonly` stays advisory-labeled. `--conversation` resume verified working.
+- **A2 (resolved, live-verified 2026-08-29):** Claude `--resume` **fails** after `--no-session-persistence` ("No conversation found with session ID"), so claude runs now always persist sessions in Claude Code's own storage and the flag is removed. Full run → capture id → resume → assert cycle verified; `--max-budget-usd` accepted.
+- **A3 (resolved, live-verified 2026-08-29):** Codex `--sandbox danger-full-access` permits out-of-workspace writes (equivalent to the old bypass for our purposes); resume with `--sandbox` before the `resume` subcommand works; `--sandbox read-only` runs complete without hanging.
 
 ## Known limitations
 

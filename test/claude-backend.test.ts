@@ -70,7 +70,6 @@ describe("pi-subagent claude backend", () => {
       "--output-format",
       "stream-json",
       "--verbose",
-      "--no-session-persistence",
       "--dangerously-skip-permissions",
       "--append-system-prompt",
       "You are a Claude reviewer.",
@@ -232,7 +231,8 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeArgs).toContain("-p");
     expect(claudeArgs).toContain("--output-format");
     expect(claudeArgs).toContain("stream-json");
-    expect(claudeArgs).toContain("--no-session-persistence");
+    // Sessions persist (no --no-session-persistence) so recorded ids are resumable.
+    expect(claudeArgs).not.toContain("--no-session-persistence");
     if (process.geteuid?.() === 0) {
       expect(claudeArgs).toContain("--permission-mode");
       expect(claudeArgs).toContain("auto");

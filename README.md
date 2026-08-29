@@ -193,7 +193,7 @@ Every `Agent` call and workflow `agent()` child accepts three optional parameter
 
 - `permission`: `readonly` | `edit` | `danger` (default `danger`, today's behavior). Tiers map onto native harness mechanisms — Claude permission modes, Codex's single-axis `--sandbox`, and Antigravity's default headless policy (`edit` omits the bypass flag). Where a harness cannot enforce a tier — agy `readonly`, whose headless mode always auto-allows workspace writes — the run proceeds and the receipt labels it `advisory, not enforced`. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
 - `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag; codex and agy do not report cost, so the cap is recorded and marked `budget unenforceable` instead of pretended.
-- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend.
+- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you.
 
 Resolution order for tiers and budgets: call > profile frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
 
