@@ -45,6 +45,28 @@ describe("external settings", () => {
     expect(invalid.diagnostics.join(" ")).toMatch(/maxConcurrentSubagents|subagentTimeoutMs|Unknown setting/);
   });
 
+  it("migrates a valid v1 file on read and fills v2 defaults", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, `${JSON.stringify({
+      version: 1,
+      maxConcurrentSubagents: 7,
+      subagentTimeoutMs: 600_000,
+    })}\n`);
+
+    const migrated = loadExternalSettings(root);
+    expect(migrated.settings).toEqual({
+      version: 2,
+      maxConcurrentSubagents: 7,
+      subagentTimeoutMs: 600_000,
+      defaultPermission: "danger",
+      defaultMaxBudgetUsd: null,
+      maxRunRecords: 200,
+    });
+    // A v1 file is valid input, not a warning.
+    expect(migrated.diagnostics).toEqual([]);
+  });
+
   it("reports malformed JSON without preventing startup", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
