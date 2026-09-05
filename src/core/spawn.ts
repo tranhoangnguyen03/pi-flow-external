@@ -281,6 +281,8 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           ? { budgetEnforceable: false }
           : {}),
         ...(details.sessionId ? { sessionId: details.sessionId } : {}),
+        ...(details.retries !== undefined ? { retries: details.retries } : {}),
+        ...(details.retryOf ? { retryOf: details.retryOf } : {}),
         ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
       });
       attachRunRecord(
@@ -367,6 +369,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
         details.status === "error" && !params.signal?.aborted && isTransientAgyFailure(details.error);
       if (transientFailure && attempt === 1) {
         retryOf = details.error ?? "agy transient failure";
+        // Resume the failed conversation so a mid-turn network failure does not
+        // replay already-executed tool calls in a fresh conversation.
+        agyParams.resumeConversationId =
+          (details as { conversationId?: string }).conversationId ?? agyParams.resumeConversationId;
         continue;
       }
       if (retryOf) {
