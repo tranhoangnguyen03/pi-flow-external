@@ -2,6 +2,18 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [1.3.0-external.0] - 2026-09-06
+
+Adds a bounded retry for the Antigravity backend and documents the standardized external profile role matrix.
+
+### Added
+
+- Single automatic retry for agy infrastructure failures (authentication, eligibility, network timeouts), disclosed in receipt details as `retries` and `retryOf`. Agent-level failures, aborts, and timeouts are never retried.
+
+### Changed
+
+- AGENTS.md records the agy retry exception to the no-auto-retry policy; CONTEXT.md documents the profile role-matrix design stance (guardrails define lanes, not methods) and the known one-file-per-backend format inelegance.
+
 ## [1.2.0-external.0] - 2026-08-29
 
 Implements the orchestrator-decided tiers design ([#11](https://github.com/tranhoangnguyen03/pi-flow-external/issues/11)), live-verified against Claude Code 2.1.239, codex-cli 0.150.1, and agy 1.1.22.
