@@ -237,6 +237,20 @@ function abortChild(child: ChildProcess): void {
   }, FORCE_KILL_DELAY_MS).unref();
 }
 
+/** Infra-classified agy failures worth one bounded retry (auth/eligibility/network).
+ * Agent-level failures (task errors, protocol errors, aborts, timeouts) must not match. */
+const TRANSIENT_AGY_FAILURE_PATTERNS: RegExp[] = [
+  /authentication failed/i,
+  /eligibility check failed/i,
+  /operation timed out/i,
+  /\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b/,
+];
+
+export function isTransientAgyFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_AGY_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 export async function spawnAgySubagent(params: {
   toolCallId: string;
   description: string;

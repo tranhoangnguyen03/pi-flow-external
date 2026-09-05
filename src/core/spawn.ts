@@ -19,7 +19,7 @@ import {
 } from "./progress.ts";
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
-import { spawnAgySubagent } from "./agy.ts";
+import { spawnAgySubagent, isTransientAgyFailure } from "./agy.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -341,7 +341,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     });
   }
   if (params.profile.backend === "agy") {
-    return spawnAgySubagent({
+    // ponytail: one immediate retry, agy-only, infra-classified failures only; per-attempt backoff if flakes persist
+    const agyParams = {
       toolCallId: params.toolCallId,
       description: params.description,
       prompt: params.prompt,
@@ -357,7 +358,22 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       outputSchema: params.outputSchema,
       permission: params.permission,
       resumeConversationId: params.resumeSessionId,
-    });
+    };
+    let retryOf: string | undefined;
+    for (let attempt = 1; ; attempt++) {
+      const result = await spawnAgySubagent(agyParams);
+      const details = result.details as SubagentToolDetails;
+      const transientFailure =
+        details.status === "error" && !params.signal?.aborted && isTransientAgyFailure(details.error);
+      if (transientFailure && attempt === 1) {
+        retryOf = details.error ?? "agy transient failure";
+        continue;
+      }
+      if (retryOf) {
+        return { ...result, details: { ...details, retries: attempt - 1, retryOf } };
+      }
+      return result;
+    }
   }
   if (params.profile.backend === "claude") {
     return spawnClaudeSubagent({

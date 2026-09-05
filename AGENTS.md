@@ -29,7 +29,7 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - A backend failure with a complete local record is different from an incomplete or damaged record; preserve that distinction in reports.
 - Normal runs write private best-effort evidence under `~/.pi/agent/pi-flow-external/runs/` or `PI_FLOW_EXTERNAL_RUNS_DIR`. Records may still contain sensitive prompts, excerpts, and tool output despite redaction.
 - Structured nested-agent activity may extend the wall-clock deadline once, by one fresh base timeout, capped at twice the original deadline.
-- Do not automatically retry failed or aborted external runs. Preserve the receipt and retry only when the user asks.
+- Do not automatically retry failed or aborted external runs. Preserve the receipt and retry only when the user asks. Exception: the agy backend retries once on infrastructure-classified failures (auth, eligibility, network); the retry is disclosed in the receipt details (`retries`, `retryOf`) and never applies to agent-level failures, aborts, or timeouts.
 
 ## Workflow contract
 
