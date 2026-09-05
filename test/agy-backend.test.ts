@@ -263,6 +263,7 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-agy-retry");
     const counterPath = join(tempDir, "agy-retry-count.txt");
+    const argsPath = join(tempDir, "agy-retry-args");
     mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
@@ -273,6 +274,7 @@ let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync(${JSON.stringify(counterPath)}, 'utf8')) + 1 : 1;
 writeFileSync(${JSON.stringify(counterPath)}, String(count));
+writeFileSync(${JSON.stringify(argsPath)} + '.' + count, JSON.stringify({ args: process.argv.slice(2) }));
 if (count === 1) {
   process.exitCode = 1;
   console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry', status: 'ERROR', response: '', error: 'Eligibility check failed: Get "https://www.googleapis.com/oauth2/v2/userinfo": read: operation timed out', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
@@ -300,9 +302,92 @@ if (count === 1) {
     await session.prompt("Delegate to Antigravity.");
 
     expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
+    const secondAttemptArgs = JSON.parse(readFileSync(`${argsPath}.2`, "utf8")).args as string[];
+    expect(secondAttemptArgs).toContain("--conversation");
+    expect(secondAttemptArgs[secondAttemptArgs.indexOf("--conversation") + 1]).toBe("agy-retry");
     const serialized = JSON.stringify(rootContinuationContext?.messages);
     expect(serialized).toContain("agy child done after retry");
     expect(serialized).toContain("\"retries\":1");
+  });
+
+  it("does not retry a non-transient agy failure", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-agy-no-retry");
+    const counterPath = join(tempDir, "agy-no-retry-count.txt");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync(${JSON.stringify(counterPath)}, 'utf8')) + 1 : 1;
+writeFileSync(${JSON.stringify(counterPath)}, String(count));
+process.exitCode = 1;
+console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-no-retry', status: 'ERROR', response: '', error: 'provider unavailable', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Agy review",
+        subagent_type: "agy-reviewer",
+        prompt: "Review the latest diff.",
+      })], { stopReason: "toolUse" }),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("reported");
+      },
+    ]);
+
+    await session.prompt("Delegate to Antigravity.");
+
+    expect(Number(readFileSync(counterPath, "utf8"))).toBe(1);
+    expect(JSON.stringify(rootContinuationContext?.messages)).toContain("status ERROR: provider unavailable");
+  });
+
+  it("retries a transient agy failure only once", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-agy-retry-bounded");
+    const counterPath = join(tempDir, "agy-retry-bounded-count.txt");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync(${JSON.stringify(counterPath)}, 'utf8')) + 1 : 1;
+writeFileSync(${JSON.stringify(counterPath)}, String(count));
+process.exitCode = 1;
+console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry-bounded', status: 'ERROR', response: '', error: 'authentication failed or timed out', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Agy review",
+        subagent_type: "agy-reviewer",
+        prompt: "Review the latest diff.",
+      })], { stopReason: "toolUse" }),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("reported");
+      },
+    ]);
+
+    await session.prompt("Delegate to Antigravity.");
+
+    expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
+    expect(JSON.stringify(rootContinuationContext?.messages)).toContain("status ERROR: authentication failed or timed out");
   });
 
   it("prefers the agy terminal failure over the exit code", async () => {
