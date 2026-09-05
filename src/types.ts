@@ -191,6 +191,10 @@ export interface SubagentToolDetails {
   recordingError?: string;
   /** Number of currently running subagents, used to choose rich vs compact live rendering. */
   activeCount?: number;
+  /** Attempts retried for this run (agy infra failures retry once). */
+  retries?: number;
+  /** Error message of the retried-away first attempt, for transparency. */
+  retryOf?: string;
   frame?: number;
   /** Resolved permission tier for this run. */
   permission?: PermissionTier;

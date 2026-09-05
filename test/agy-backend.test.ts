@@ -259,6 +259,52 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
     expect(result.details.error).toContain("without a terminal result event");
   });
 
+  it("retries an agy infrastructure failure once and reports the retry", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-agy-retry");
+    const counterPath = join(tempDir, "agy-retry-count.txt");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync(${JSON.stringify(counterPath)}, 'utf8')) + 1 : 1;
+writeFileSync(${JSON.stringify(counterPath)}, String(count));
+if (count === 1) {
+  process.exitCode = 1;
+  console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry', status: 'ERROR', response: '', error: 'Eligibility check failed: Get "https://www.googleapis.com/oauth2/v2/userinfo": read: operation timed out', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
+} else {
+  console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry', status: 'SUCCESS', response: 'agy child done after retry', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1050 } } }));
+}
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Agy review",
+        subagent_type: "agy-reviewer",
+        prompt: "Review the latest diff.",
+      })], { stopReason: "toolUse" }),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("reported");
+      },
+    ]);
+
+    await session.prompt("Delegate to Antigravity.");
+
+    expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
+    const serialized = JSON.stringify(rootContinuationContext?.messages);
+    expect(serialized).toContain("agy child done after retry");
+    expect(serialized).toContain("\"retries\":1");
+  });
+
   it("prefers the agy terminal failure over the exit code", async () => {
     const binDir = join(tempDir, "bin-agy-error-result");
     mkdirSync(binDir, { recursive: true });
