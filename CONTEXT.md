@@ -28,6 +28,15 @@ The split is global and intentional to avoid tool ambiguity across projects. The
 
 User operations are namespaced under `/external`: status, Doctor, settings, profiles, profile creation, workflows, runs, and help. Extension-owned concurrency and timeout defaults live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`; profiles remain authoritative for downstream backend/model/thinking metadata.
 
+## Design stance
+
+Guardrails exist to keep lanes from bleeding into each other (a reviewer that edits, a debugger that fixes), not to constrain how a model works. Role bodies stay short: define the job, state the boundary, then get out of the way and trust the model's judgment on approach, depth, and method. The generic `worker` role covers non-coding tasks with no method constraints at all.
+
+## Known inelegance
+
+<!-- ponytail: one-backend-per-file profile format forces role x backend file duplication; extend src/profiles.ts with multi-backend profiles (e.g. backends: [claude, codex, agy] plus per-backend model map) if maintaining N copies of identical role bodies ever hurts -->
+A standardized role roster needs one file per role per backend (e.g. `claude-qa`, `codex-qa`, `agy-qa` with identical bodies) because the profile format binds `backend:` and `model:` to a single file. The duplication is accepted for now; a future format extension could let one role file cover all backends. The same applies to `permission:` tiers: one tier per profile, but backends interpret tiers differently (Claude denies Bash at anything below `danger`), so command-running roles must declare `danger` even where a finer tier exists.
+
 ## Evidence boundary
 
-Normal external runs write best-effort local records under `~/.pi/agent/pi-flow-external/runs/` unless `PI_FLOW_EXTERNAL_RUNS_DIR` overrides it. The TUI shows short evidence IDs by default and exposes record/journal paths only through expanded output. Redaction is best-effort, records are not rotated automatically, and failed/aborted runs are not retried automatically.
+Normal external runs write best-effort local records under `~/.pi/agent/pi-flow-external/runs/` unless `PI_FLOW_EXTERNAL_RUNS_DIR` overrides it. The TUI shows short evidence IDs by default and exposes record/journal paths only through expanded output. Redaction is best-effort, records are not rotated automatically, and failed/aborted runs are not retried automatically, except one agy retry for infrastructure-classified failures (disclosed via receipt `retries`/`retryOf`).
