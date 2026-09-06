@@ -154,6 +154,8 @@ export interface SubagentProgressNode {
   recordingError?: string;
   /** Resolved permission tier for this run. */
   permission?: PermissionTier;
+  /** Tier explicitly requested by the caller when it differs from the resolved tier. */
+  permissionRequested?: PermissionTier;
   /** False when the tier is advisory on this backend (instruction, not enforcement). */
   permissionEnforced?: boolean;
   /** Permission denials reported by the backend (claude plan/acceptEdits runs). */
@@ -198,6 +200,8 @@ export interface SubagentToolDetails {
   frame?: number;
   /** Resolved permission tier for this run. */
   permission?: PermissionTier;
+  /** Tier explicitly requested by the caller when it differs from the resolved tier. */
+  permissionRequested?: PermissionTier;
   /** False when the tier is advisory on this backend (instruction, not enforcement). */
   permissionEnforced?: boolean;
   /** Permission denials reported by the backend (claude plan/acceptEdits runs). */

@@ -325,6 +325,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Debug failing tests",
@@ -332,7 +333,10 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
         permission: "edit",
         prompt: "Investigate why tests fail and run validation.",
       })], { stopReason: "toolUse" }),
-      () => fauxAssistantMessage("reported"),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("reported");
+      },
     ]);
 
     await session.prompt("Delegate to debugger.");
@@ -347,6 +351,9 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     } else {
       expect(claudeArgs).toContain("--dangerously-skip-permissions");
     }
+    // The elevation must be disclosed to the caller in the parent-facing text.
+    const rootMessages = JSON.stringify(rootContinuationContext?.messages);
+    expect(rootMessages).toMatch(/permission elevated edit→danger/);
 
     disposeSession(session);
   });

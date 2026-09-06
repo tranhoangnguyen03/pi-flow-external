@@ -14,7 +14,10 @@ export interface PermissionResolution {
  */
 export const EXECUTION_ROLES: readonly string[] = ["implementer", "debugger", "qa", "worker"];
 
-export function isExecutionProfile(profile?: SubagentProfile): boolean {
+/** Minimal profile shape needed to reason about permission tiers. */
+export type PermissionProfileRef = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
+
+export function isExecutionProfile(profile?: PermissionProfileRef): boolean {
   if (!profile) return false;
   if (profile.permission === "danger") return true;
   const name = profile.name.toLowerCase();
@@ -34,7 +37,7 @@ export function isExecutionProfile(profile?: SubagentProfile): boolean {
  */
 export function resolveEffectivePermissionTier(
   requestedTier: PermissionTier | undefined,
-  profile: SubagentProfile | undefined,
+  profile: PermissionProfileRef | undefined,
   defaultTier: PermissionTier = "danger",
 ): PermissionTier {
   const baseTier = requestedTier ?? profile?.permission ?? defaultTier;

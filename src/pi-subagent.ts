@@ -73,7 +73,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). External execution lanes (implementer, debugger, qa, worker) maintain a danger floor because headless command execution is required to inspect and validate work; readonly blocks file modifications.",
+        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). readonly blocks file modifications; claude denies all shell commands headlessly at edit, so execution lanes (implementer, debugger, qa, worker) elevate an edit override to their danger floor. When in doubt, omit.",
     }),
   ),
   max_budget_usd: Type.Optional(
@@ -424,11 +424,8 @@ function createAgentTool(
           signal,
           timeoutMs: options.getSubagentTimeoutMs(),
           progressEnabled: effectiveState.progressEnabled,
-          permission: resolveEffectivePermissionTier(
-            params.permission,
-            profile,
-            effectiveState.defaultPermission,
-          ),
+          permission: params.permission,
+          defaultPermission: effectiveState.defaultPermission,
           maxBudgetUsd: params.max_budget_usd ?? profile.maxBudgetUsd ?? effectiveState.defaultMaxBudgetUsd,
           resumeRunId: params.resume,
           onProgress: effectiveState.progressEnabled && run
@@ -474,14 +471,18 @@ function createAgentTool(
       const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
+      const requestedTier = typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined;
       const tier = resolveEffectivePermissionTier(
-        typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined,
-        profile as SubagentProfile | undefined,
+        requestedTier,
+        profile,
         options.getDefaultPermission(),
       );
+      const elevatedNote = requestedTier && requestedTier !== tier
+        ? theme.fg("muted", ` (${requestedTier}→${tier} floor)`)
+        : "";
       const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
       const lines = [
-        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`, 
+        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}${elevatedNote}`,
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
         profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
         context.cwd ? `${theme.fg("muted", "Workspace")} ${context.cwd}` : "",
