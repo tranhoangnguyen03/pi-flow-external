@@ -73,8 +73,10 @@ export interface SpawnSubagentParams {
   outputSchema?: unknown;
   /** Skip the local field record for internal probes such as profile smoke tests. */
   recordRun?: boolean;
-  /** Resolved permission tier (call > profile > settings default). */
+  /** Requested permission tier override; resolved here (call > profile > defaultPermission). */
   permission?: PermissionTier;
+  /** Settings-level default tier used when neither the call nor the profile names one. */
+  defaultPermission?: PermissionTier;
   /** Resolved USD budget cap, when any. Enforced natively on claude only. */
   maxBudgetUsd?: number;
   /** Prior local run id whose backend conversation should be continued. */
@@ -134,6 +136,7 @@ function attachRunRecord(
   recordingError: string | undefined,
   extras: {
     permission: PermissionResolution | undefined;
+    requestedTier: PermissionTier | undefined;
     maxBudgetUsd: number | undefined;
     resumedFrom: string | undefined;
     sessionId: string | undefined;
@@ -151,6 +154,9 @@ function attachRunRecord(
     if (extras.permission) {
       details.permission = extras.permission.tier;
       details.permissionEnforced = extras.permission.enforced;
+    }
+    if (extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier) {
+      details.permissionRequested = extras.requestedTier;
     }
     if (extras.permissionDenials !== undefined) {
       details.permissionDenials = extras.permissionDenials;
@@ -173,9 +179,12 @@ function attachRunRecord(
   const denials = details.permissionDenials ?? 0;
   const blocked =
     denials > 0 ? ` · ${denials} permission denials — commands may have been blocked` : "";
+  const elevatedNote = extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier
+    ? ` · permission elevated ${extras.requestedTier}→${extras.permission.tier}`
+    : "";
   const first = result.content[0];
   if (first?.type === "text") {
-    first.text = `${first.text}\n\n[run ${record.runId}${blocked}]`;
+    first.text = `${first.text}\n\n[run ${record.runId}${blocked}${elevatedNote}]`;
   }
   if (details.progress) {
     apply(details.progress);
@@ -201,7 +210,9 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   const startedAt = Date.now();
   let backendEventCount = 0;
   let nestedActivitySeen = false;
-  const effectiveTier = resolveEffectivePermissionTier(params.permission, params.profile);
+  const requestedTier = params.permission;
+  const effectiveTier = resolveEffectivePermissionTier(requestedTier, params.profile, params.defaultPermission ?? "danger");
+  const elevated = requestedTier !== undefined && requestedTier !== effectiveTier;
   const permission = resolvePermission(effectiveTier, params.profile.backend);
   let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
   if (params.resumeRunId) {
@@ -229,6 +240,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           timeoutMs: params.timeoutMs,
           profile: params.profile,
           permission: permission.tier,
+          ...(elevated ? { permissionRequested: requestedTier } : {}),
           ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
           ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
         },
@@ -307,6 +319,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         record.writeError?.message,
         {
           permission,
+          requestedTier,
           maxBudgetUsd: params.maxBudgetUsd,
           resumedFrom: resumeSession?.runId,
           sessionId: details.sessionId,
