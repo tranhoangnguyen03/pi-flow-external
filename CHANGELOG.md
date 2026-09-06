@@ -2,6 +2,19 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [1.4.0-external.0] - 2026-09-06
+
+Routes the receipt's truth into the agent-facing surfaces a delegating parent actually reads, closing the disclosure gaps from [#16](https://github.com/tranhoangnguyen03/pi-flow-external/issues/16).
+
+### Added
+
+- Delegation and workflow rosters now show each profile's backend and default permission tier (e.g. `claude-implementer (claude · danger)`).
+- Agent tool result text ends with the run id, plus the permission-denial count when any occurred (`[run run_xxx · N permission denials — commands may have been blocked]`), so a blocked lane is visible without parsing child prose or reading `summary.json`.
+
+### Changed
+
+- The `permission` parameter advice no longer steers callers toward `edit` for implementation tasks; it now states that omitting uses the profile's calibrated default (recommended) and that explicit tiers mean different things per backend (claude headless denies all shell at `edit`).
+
 ## [1.3.0-external.0] - 2026-09-06
 
 Adds a bounded retry for the Antigravity backend and documents the standardized external profile role matrix.
