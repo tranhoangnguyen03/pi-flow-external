@@ -13,6 +13,7 @@ import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "../profiles.ts";
+import { resolveEffectivePermissionTier } from "../core/permissions.ts";
 import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
@@ -180,7 +181,11 @@ export function createWorkflowTool(
           signal: agentSignal,
           timeoutMs: options.getSubagentTimeoutMs(),
           progressEnabled: true,
-          permission: call.permission ?? profile.permission ?? options.getDefaultPermission(),
+          permission: resolveEffectivePermissionTier(
+            call.permission,
+            profile,
+            options.getDefaultPermission(),
+          ),
           maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? options.getDefaultMaxBudgetUsd(),
           resumeRunId: call.resumeRunId,
           onProgress: (partial) => {

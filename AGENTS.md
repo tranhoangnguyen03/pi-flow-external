@@ -11,7 +11,7 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - Valid profiles come from `~/.pi/agent/subagents/*.md` and set `backend: claude`, `backend: codex`, or `backend: agy`. Use matching names such as `claude-*`, `codex-*`, or `agy-*`; the assisted creator enforces that convention.
 - Profiles with `backend: pi` or a missing backend are filtered out and rejected.
 - Use Pi's native subagent system for Pi-backed scout/reviewer/planner/worker/oracle work.
-- External backends use their own tools and dangerous/no-approval modes. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Run them only in trusted repositories and state whether the task is read-only or may edit files.
+- External backends use their own tools and dangerous/no-approval modes. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Run them only in trusted repositories and state whether the task is read-only or may edit files.
 - Prompts must be self-contained because children do not inherit parent conversation, tool results, or reasoning.
 - Backend-native nested agents may use a different workspace. Include explicit absolute paths and required context when asking an external backend to delegate further.
 

@@ -298,6 +298,59 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     disposeSession(session);
   });
 
+  it("elevates claude execution profiles to danger floor when called with permission: edit", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-claude-elevate");
+    const argsPath = join(tempDir, "claude-elevate-args.json");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "claude-debugger.md"), `---
+description: Failure debugging through Claude Code.
+backend: claude
+model: sonnet
+permission: danger
+---
+
+Claude debugger prompt.`);
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }));
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-elevate-session' }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude debugger done', usage: { input_tokens: 10, output_tokens: 5 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Debug failing tests",
+        subagent_type: "claude-debugger",
+        permission: "edit",
+        prompt: "Investigate why tests fail and run validation.",
+      })], { stopReason: "toolUse" }),
+      () => fauxAssistantMessage("reported"),
+    ]);
+
+    await session.prompt("Delegate to debugger.");
+
+    const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));
+    const claudeArgs = claudeRun.args;
+    // Must NOT be launched with acceptEdits (which would auto-deny Bash headlessly)
+    expect(claudeArgs).not.toContain("acceptEdits");
+    if (process.geteuid?.() === 0) {
+      expect(claudeArgs).toContain("--permission-mode");
+      expect(claudeArgs).toContain("auto");
+    } else {
+      expect(claudeArgs).toContain("--dangerously-skip-permissions");
+    }
+
+    disposeSession(session);
+  });
+
   it("forwards every parsed claude stream event", async () => {
     const binDir = join(tempDir, "bin-claude-events");
     mkdirSync(binDir, { recursive: true });
