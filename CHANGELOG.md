@@ -2,6 +2,20 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [1.5.0-external.0] - 2026-09-06
+
+Keeps Claude execution lanes from starting as guaranteed no-ops under an `edit` override, closing [#19](https://github.com/tranhoangnguyen03/pi-flow-external/issues/19).
+
+### Added
+
+- Claude execution profiles (`implementer`, `debugger`, `qa`, `worker`, or any profile declaring `permission: danger`) maintain a `danger` floor: an explicit `permission: "edit"` override is elevated to `danger` because headless Claude auto-denies all Bash commands at `acceptEdits`.
+- Elevated runs are disclosed to the caller, not just the operator: the parent-facing result banner reads `[run run_xxx · permission elevated edit→danger]`, tool details and `summary.json` carry `permissionRequested`, and the pre-launch delegation line shows `(edit→danger floor)`.
+
+### Changed
+
+- Permission tiers now resolve once in the shared spawn primitive (`Agent` and `workflow` pass the requested tier plus the settings default), removing per-caller resolution drift.
+- Agent guidelines and the `permission` parameter description now warn about the real remaining hazard: `edit` on non-execution Claude lanes still auto-denies shell commands headlessly.
+
 ## [1.4.0-external.0] - 2026-09-06
 
 Routes the receipt's truth into the agent-facing surfaces a delegating parent actually reads, closing the disclosure gaps from [#16](https://github.com/tranhoangnguyen03/pi-flow-external/issues/16).
