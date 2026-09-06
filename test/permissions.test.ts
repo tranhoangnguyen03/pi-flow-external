@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildPermissionArgs, permissionLabel, resolvePermission } from "../src/core/permissions.ts";
+import {
+  buildPermissionArgs,
+  isExecutionProfile,
+  permissionLabel,
+  resolveEffectivePermissionTier,
+  resolvePermission,
+} from "../src/core/permissions.ts";
 import { buildClaudeArgs } from "../src/core/claude.ts";
 import { buildCodexArgs } from "../src/core/codex.ts";
 import { buildAgyArgs } from "../src/core/agy.ts";
@@ -209,5 +215,67 @@ describe("tier enforcement resolution", () => {
       effectiveUid: 501,
     });
     expect(args).not.toContain("--max-budget-usd");
+  });
+});
+
+describe("effective permission tier resolution", () => {
+  it("identifies execution-oriented profiles by name convention and danger permission", () => {
+    expect(isExecutionProfile({ name: "claude-implementer", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "claude-debugger", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "claude-qa", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "claude-worker", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "worker", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "custom-implementer", description: "", backend: "claude" })).toBe(true);
+    expect(isExecutionProfile({ name: "custom-runner", description: "", backend: "claude", permission: "danger" })).toBe(true);
+    expect(isExecutionProfile({ name: "claude-explorer", description: "", backend: "claude", permission: "readonly" })).toBe(false);
+    expect(isExecutionProfile({ name: "claude-planner", description: "", backend: "claude", permission: "readonly" })).toBe(false);
+    expect(isExecutionProfile({ name: "claude-reviewer", description: "", backend: "claude", permission: "readonly" })).toBe(false);
+    expect(isExecutionProfile(undefined)).toBe(false);
+  });
+
+  it("elevates claude execution profiles to danger floor when edit tier is requested", () => {
+    const implementer: SubagentProfile = {
+      name: "claude-implementer",
+      description: "implement",
+      backend: "claude",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", implementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("danger", implementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("readonly");
+    expect(resolveEffectivePermissionTier(undefined, implementer)).toBe("danger");
+
+    const debuggerProfile: SubagentProfile = {
+      name: "claude-debugger",
+      description: "debug",
+      backend: "claude",
+    };
+    expect(resolveEffectivePermissionTier("edit", debuggerProfile)).toBe("danger");
+  });
+
+  it("preserves edit tier for non-claude backends and non-execution profiles", () => {
+    const codexImplementer: SubagentProfile = {
+      name: "codex-implementer",
+      description: "implement",
+      backend: "codex",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", codexImplementer)).toBe("edit");
+
+    const agyImplementer: SubagentProfile = {
+      name: "agy-implementer",
+      description: "implement",
+      backend: "agy",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", agyImplementer)).toBe("edit");
+
+    const claudeExplorer: SubagentProfile = {
+      name: "claude-explorer",
+      description: "explore",
+      backend: "claude",
+      permission: "readonly",
+    };
+    expect(resolveEffectivePermissionTier("edit", claudeExplorer)).toBe("edit");
   });
 });

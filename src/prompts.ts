@@ -13,6 +13,7 @@ export const AGENT_PROMPT_GUIDELINES = [
   "External agents start fresh; include all required context and absolute paths, and state whether edits are allowed.",
   "Relay the Agent result to the user; the external agent's final message is returned only to the driver.",
   "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
+  "Do not override permission to 'edit' on command-running lanes (implementer, debugger, qa, worker); external execution profiles maintain a danger floor because inspecting and validating work requires shell command access.",
   "Backend-native nested agents may use another workspace; include the absolute workspace path when requesting nested delegation.",
 ];
 

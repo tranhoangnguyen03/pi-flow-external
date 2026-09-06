@@ -28,7 +28,7 @@ import type {
   SubagentToolDetails,
   SubagentUsage,
 } from "../types.ts";
-import { resolvePermission } from "./permissions.ts";
+import { resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { runRecordsDirectory } from "./retention.ts";
@@ -201,7 +201,8 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   const startedAt = Date.now();
   let backendEventCount = 0;
   let nestedActivitySeen = false;
-  const permission = resolvePermission(params.permission ?? "danger", params.profile.backend);
+  const effectiveTier = resolveEffectivePermissionTier(params.permission, params.profile);
+  const permission = resolvePermission(effectiveTier, params.profile.backend);
   let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
   if (params.resumeRunId) {
     const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
@@ -251,6 +252,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   try {
     let result = await spawnSubagentRuntime({
       ...params,
+      permission: effectiveTier,
       signal: timeout.signal,
       onBackendEvent,
       resumeSessionId: resumeSession?.sessionId,

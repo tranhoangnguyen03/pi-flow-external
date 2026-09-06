@@ -24,7 +24,7 @@ import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
-import { resolvePermission, permissionLabel } from "./core/permissions.ts";
+import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
@@ -73,7 +73,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). An explicit tier replaces it and means different things per backend: readonly blocks all writes; edit allows workspace edits but claude in headless runs denies ALL shell commands and outside-workspace reads at edit; danger is unrestricted. When in doubt, omit.",
+        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). External execution lanes (implementer, debugger, qa, worker) maintain a danger floor because headless command execution is required to inspect and validate work; readonly blocks file modifications.",
     }),
   ),
   max_budget_usd: Type.Optional(
@@ -93,7 +93,7 @@ const agentToolParameters = Type.Object({
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
-type AgentRenderProfile = Pick<SubagentProfile, "backend" | "description" | "permission">;
+type AgentRenderProfile = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
 
 interface AgentRenderState {
   profileType?: string;
@@ -424,7 +424,11 @@ function createAgentTool(
           signal,
           timeoutMs: options.getSubagentTimeoutMs(),
           progressEnabled: effectiveState.progressEnabled,
-          permission: params.permission ?? profile.permission ?? effectiveState.defaultPermission,
+          permission: resolveEffectivePermissionTier(
+            params.permission,
+            profile,
+            effectiveState.defaultPermission,
+          ),
           maxBudgetUsd: params.max_budget_usd ?? profile.maxBudgetUsd ?? effectiveState.defaultMaxBudgetUsd,
           resumeRunId: params.resume,
           onProgress: effectiveState.progressEnabled && run
@@ -464,15 +468,17 @@ function createAgentTool(
         const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
         state.profileType = subagentType;
         state.profile = profile
-          ? { backend: profile.backend, description: profile.description, permission: profile.permission }
+          ? { name: profile.name, backend: profile.backend, description: profile.description, permission: profile.permission }
           : undefined;
       }
       const profile = state.profile;
       const backend = profile?.backend;
       const description = typeof args.description === "string" ? args.description.trim() : "";
-      const tier = (typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined)
-        ?? profile?.permission
-        ?? options.getDefaultPermission();
+      const tier = resolveEffectivePermissionTier(
+        typeof args.permission === "string" ? (args.permission as PermissionTier) : undefined,
+        profile as SubagentProfile | undefined,
+        options.getDefaultPermission(),
+      );
       const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
       const lines = [
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`, 

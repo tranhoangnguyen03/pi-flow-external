@@ -55,7 +55,7 @@ External agents normally run without approval prompts:
 - Codex: `--dangerously-bypass-approvals-and-sandbox`
 - Antigravity: `--dangerously-skip-permissions`
 
-Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
+Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `debugger`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code, headless `edit` mode (`acceptEdits`) auto-denies all shell commands; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
 The TUI labels this boundary as `unsandboxed external CLI` before a direct run and `external host access` while work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
 
