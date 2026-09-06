@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
+import { buildCoordinatorPrompt } from "../src/prompts.ts";
 import type { SubagentToolDetails, WorkflowToolDetails } from "../src/types.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
@@ -152,5 +153,27 @@ describe("delegation transparency rendering", () => {
     const receiptText = renderToText(receipt!);
     expect(receiptText).toContain("Workflow evidence wf_12345678");
     expect(receiptText).toContain("Journal /tmp/pi-flow-workflows/run-wf_12345678.jsonl");
+  });
+});
+
+describe("delegation roster lane disclosure", () => {
+  it("shows backend and default permission tier per profile", () => {
+    const profiles = new Map([
+      ["claude-implementer", {
+        name: "claude-implementer",
+        description: "Code implementation through Claude Code.",
+        backend: "claude" as const,
+        permission: "danger" as const,
+      }],
+      ["agy-reviewer", {
+        name: "agy-reviewer",
+        description: "Code review through Antigravity.",
+        backend: "agy" as const,
+        permission: "readonly" as const,
+      }],
+    ]);
+    const roster = buildCoordinatorPrompt(profiles);
+    expect(roster).toContain("- claude-implementer (claude · danger):");
+    expect(roster).toContain("- agy-reviewer (agy · readonly):");
   });
 });

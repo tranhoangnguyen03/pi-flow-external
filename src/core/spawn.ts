@@ -167,6 +167,16 @@ function attachRunRecord(
   };
   apply(result.details as SubagentToolDetails);
   const details = result.details as SubagentToolDetails;
+  // Route the receipt's truth into the parent-facing text: the parent model
+  // reads this banner, not summary.json. Denials signal a possibly blocked
+  // run; the run id is the evidence pointer. Never gates anything.
+  const denials = details.permissionDenials ?? 0;
+  const blocked =
+    denials > 0 ? ` · ${denials} permission denials — commands may have been blocked` : "";
+  const first = result.content[0];
+  if (first?.type === "text") {
+    first.text = `${first.text}\n\n[run ${record.runId}${blocked}]`;
+  }
   if (details.progress) {
     apply(details.progress);
   }
