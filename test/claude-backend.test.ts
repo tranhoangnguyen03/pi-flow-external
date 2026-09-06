@@ -250,6 +250,50 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeRun.stdin).toBe("Review the latest diff.");
     const rootMessages = JSON.stringify(rootContinuationContext?.messages);
     expect(rootMessages).toContain("claude child done");
+    expect(rootMessages).toMatch(/\[run run_[0-9a-f]+\]/);
+
+    disposeSession(session);
+  });
+
+  it("surfaces permission denials and the run id in the Agent tool text", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-claude-denials");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "claude-implementer.md"), `---
+description: Implements through Claude Code.\nbackend: claude\nmodel: sonnet\n---\n\nClaude implementer prompt.`);
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-denial-session' }));
+console.log(JSON.stringify({ type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 't1', content: 'denied' }));
+console.log(JSON.stringify({ type: 'system', subtype: 'permission_denied', tool_name: 'Read', tool_use_id: 't2', content: 'denied' }));
+console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'blocked report' }], usage: { input_tokens: 10, output_tokens: 5 } } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'blocked report', permission_denials: [{ tool_name: 'Bash', tool_use_id: 't1' }, { tool_name: 'Read', tool_use_id: 't2' }], usage: { input_tokens: 15, output_tokens: 6 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Claude implement",
+        subagent_type: "claude-implementer",
+        prompt: "Do the upgrade.",
+      })], { stopReason: "toolUse" }),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("reported");
+      },
+    ]);
+
+    await session.prompt("Delegate to Claude.");
+
+    const rootMessages = JSON.stringify(rootContinuationContext?.messages);
+    expect(rootMessages).toContain("2 permission denials — commands may have been blocked");
+    expect(rootMessages).toMatch(/\[run run_[0-9a-f]+ · 2 permission denials/);
 
     disposeSession(session);
   });

@@ -32,7 +32,10 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   return [...profiles.values()]
-    .map((profile) => `- ${profile.name}: ${profile.description}`)
+    .map((profile) => {
+      const lane = [profile.backend, profile.permission].filter(Boolean).join(" · ");
+      return `- ${profile.name}${lane ? ` (${lane})` : ""}: ${profile.description}`;
+    })
     .join("\n");
 }
 

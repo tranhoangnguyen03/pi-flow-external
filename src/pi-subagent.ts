@@ -73,7 +73,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "How much authority the external agent gets. Pick the narrowest tier that fits the task: readonly for exploration/review, edit for implementation, danger (default) for unrestricted runs. Enforced natively per backend where supported; advisory and labeled otherwise.",
+        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). An explicit tier replaces it and means different things per backend: readonly blocks all writes; edit allows workspace edits but claude in headless runs denies ALL shell commands and outside-workspace reads at edit; danger is unrestricted. When in doubt, omit.",
     }),
   ),
   max_budget_usd: Type.Optional(
