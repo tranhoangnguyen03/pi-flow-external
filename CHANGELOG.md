@@ -2,13 +2,19 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [1.7.0-external.1] - 2026-09-07
+
+### Fixed
+
+- `/external profile clean-up` inverted ownership: it archived native Pi profiles (`backend: pi` or no backend), which belong to Pi's native subagent system, not this extension. It now archives only retired pi-flow default profiles (the former `debugger` role) after confirmation, and never lists or moves native Pi profiles.
+- Profile ownership tag: profiles created through `/external profile create` are stamped `owner: user` in frontmatter, and clean-up refuses to archive any `owner: user` profile even when named directly (enforced at the archive mutation point). Hand-written profiles opt in with the same tag.
+
 ## [1.7.0-external.0] - 2026-09-07
 
 ### Added
 
 - Shipped default profile roster: on first session start the extension seeds five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker for each backend (18 profiles). Seeding is one-time (marker file), never overwrites existing profiles, and leaves `model`/`thinking` unpinned so defaults track the CLI's model and the current Pi thinking level. The `debugger` role is no longer shipped; create it with `/external profile create` if needed.
-- `/external profile clean-up`: archives only profiles this extension itself shipped and later retired (currently the former `debugger` role) to `~/.pi/agent/subagents/archive/` after confirmation. Files are moved, never deleted; existing archive files are never overwritten. Native Pi profiles (`backend: pi` or no backend) and `owner: user` profiles are never touched. Non-interactive sessions get a read-only listing.
-- Profile ownership tag: profiles created through `/external profile create` are stamped `owner: user` in frontmatter, and clean-up refuses to archive any `owner: user` profile even when named directly. Hand-written profiles can opt in with the same tag.
+- `/external profile clean-up`: lists profiles with `backend: pi` or no backend and, after confirmation, moves them to `~/.pi/agent/subagents/archive/`. Files are moved, never deleted; existing archive files are never overwritten. Non-interactive sessions get a read-only listing. *(Superseded in 1.7.0-external.1: this inverted ownership and was replaced with retired-defaults-only archiving plus the `owner: user` protection tag.)*
 
 ## [1.6.0-external.0] - 2026-09-07
 
