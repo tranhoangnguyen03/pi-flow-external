@@ -1,5 +1,6 @@
 import type { SavedWorkflow } from "./workflow/registry.ts";
 import type { SubagentProfile } from "./types.ts";
+import { resolveEffectivePermissionTier } from "./core/permissions.ts";
 
 export const AGENT_PROMPT_SNIPPET =
   "Delegate to an external Claude Code, Codex CLI, or Antigravity agent when a backend-qualified profile matches the task.";
@@ -14,6 +15,7 @@ export const AGENT_PROMPT_GUIDELINES = [
   "Relay the Agent result to the user; the external agent's final message is returned only to the driver.",
   "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
   "On Claude, an 'edit' override auto-denies all shell commands headlessly; execution lanes (implementer, debugger, qa, worker) elevate such overrides to their danger floor, so avoid 'edit' overrides on other Claude profiles when the task needs commands.",
+  "On agy, readonly/edit are advisory instructions only — every agy run is unsandboxed (--dangerously-skip-permissions). Trust the profile body for read-only intent, not the tier.",
   "Backend-native nested agents may use another workspace; include the absolute workspace path when requesting nested delegation.",
 ];
 
@@ -34,7 +36,11 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   return [...profiles.values()]
     .map((profile) => {
-      const lane = [profile.backend, profile.permission].filter(Boolean).join(" · ");
+      // Show the effective tier, not the declared one: agy always resolves to
+      // danger, so the roster never promises a readonly/edit boundary that the
+      // agy harness cannot keep.
+      const tier = resolveEffectivePermissionTier(undefined, profile);
+      const lane = [profile.backend, tier].filter(Boolean).join(" · ");
       return `- ${profile.name}${lane ? ` (${lane})` : ""}: ${profile.description}`;
     })
     .join("\n");

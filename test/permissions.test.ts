@@ -42,9 +42,9 @@ describe("permission tier argv mapping", () => {
     expect(buildPermissionArgs("danger", "codex")).toEqual(["--sandbox", "danger-full-access"]);
   });
 
-  it("omits the agy bypass flag for safer tiers and keeps it for danger", () => {
-    expect(buildPermissionArgs("readonly", "agy")).toEqual([]);
-    expect(buildPermissionArgs("edit", "agy")).toEqual([]);
+  it("always passes the agy bypass flag so the sandbox never blocks reads", () => {
+    expect(buildPermissionArgs("readonly", "agy")).toEqual(["--dangerously-skip-permissions"]);
+    expect(buildPermissionArgs("edit", "agy")).toEqual(["--dangerously-skip-permissions"]);
     expect(buildPermissionArgs("danger", "agy")).toEqual(["--dangerously-skip-permissions"]);
   });
 
@@ -107,7 +107,7 @@ describe("permission tier argv mapping", () => {
 
   it("threads tiers and conversation resume through buildAgyArgs", () => {
     const edit = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, permission: "edit" });
-    expect(edit).not.toContain("--dangerously-skip-permissions");
+    expect(edit).toContain("--dangerously-skip-permissions");
 
     const resumed = buildAgyArgs({
       profile: profile("agy"),
@@ -160,6 +160,8 @@ describe("permission tier argv mapping", () => {
 
   it("renders tier, denial, and budget disclosure tags on receipts", () => {
     const toText = (component: { render: (width: number) => string[] }) => (component.render(100) ?? []).join("\n");
+    // Synthetic advisory-tier node: exercises the renderer's generic capability.
+    // Real agy runs always resolve to danger, so this shape is not a live agy state.
     const node = {
       backend: "agy" as const,
       status: "done" as const,
@@ -187,16 +189,14 @@ describe("permission tier argv mapping", () => {
 });
 
 describe("tier enforcement resolution", () => {
-  it("marks unsupported agy readonly as advisory, never a launch failure", () => {
+  it("marks agy readonly/edit as advisory — agy runs unsandboxed in every mode", () => {
     const readonly = resolvePermission("readonly", "agy");
     expect(readonly.enforced).toBe(false);
-    const label = permissionLabel(readonly);
-    expect(label).toContain("advisory, not enforced");
-    // The advisory phrase appears exactly once, not duplicated via the caveat.
-    expect(label.split("advisory, not enforced")).toHaveLength(2);
+    expect(readonly.caveat).toContain("unsandboxed");
 
     const edit = resolvePermission("edit", "agy");
-    expect(edit.enforced).toBe(true);
+    expect(edit.enforced).toBe(false);
+    expect(edit.caveat).toContain("unsandboxed");
   });
 
   it("keeps danger labels unchanged and claude/codex tiers enforced", () => {
@@ -253,6 +253,19 @@ describe("effective permission tier resolution", () => {
     expect(resolveEffectivePermissionTier("edit", debuggerProfile)).toBe("danger");
   });
 
+  it("elevates every agy tier to danger — agy runs unsandboxed", () => {
+    const explorer: SubagentProfile = {
+      name: "agy-explorer",
+      description: "explore",
+      backend: "agy",
+      permission: "readonly",
+    };
+    expect(resolveEffectivePermissionTier(undefined, explorer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", explorer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("edit", explorer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("danger", explorer)).toBe("danger");
+  });
+
   it("preserves edit tier for non-claude backends and non-execution profiles", () => {
     const codexImplementer: SubagentProfile = {
       name: "codex-implementer",
@@ -261,14 +274,6 @@ describe("effective permission tier resolution", () => {
       permission: "danger",
     };
     expect(resolveEffectivePermissionTier("edit", codexImplementer)).toBe("edit");
-
-    const agyImplementer: SubagentProfile = {
-      name: "agy-implementer",
-      description: "implement",
-      backend: "agy",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", agyImplementer)).toBe("edit");
 
     const claudeExplorer: SubagentProfile = {
       name: "claude-explorer",

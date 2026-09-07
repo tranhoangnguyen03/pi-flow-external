@@ -41,6 +41,14 @@ export function resolveEffectivePermissionTier(
   defaultTier: PermissionTier = "danger",
 ): PermissionTier {
   const baseTier = requestedTier ?? profile?.permission ?? defaultTier;
+  if (profile?.backend === "agy") {
+    // Get out of the way: agy's only unsandboxed headless mode is
+    // --dangerously-skip-permissions, and its default sandbox denies even
+    // read-only tools (read_url_content). Every agy run is therefore
+    // unsandboxed; any readonly/edit tier is an advisory instruction carried
+    // by the profile body, not a harness boundary.
+    return "danger";
+  }
   if (profile?.backend === "claude" && isExecutionProfile(profile) && baseTier === "edit") {
     return "danger";
   }
@@ -68,15 +76,15 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         caveat: tier === "danger" ? undefined : "shell commands only",
       };
     case "agy":
-      if (tier === "danger") {
-        return { tier, enforced: true, caveat: undefined };
-      }
-      // agy headless without bypass: workspace writes auto-allowed, shell
-      // commands soft-denied. That is a native `edit` tier but not readonly.
+      // agy has no granular headless permission mode: its default sandbox
+      // denies even read-only tools, and --dangerously-skip-permissions is the
+      // only unsandboxed mode. resolveEffectivePermissionTier elevates every
+      // agy run to danger, so a non-danger tier reaching this branch is
+      // advisory metadata only, never a harness boundary.
       return {
         tier,
-        enforced: tier === "edit",
-        caveat: tier === "edit" ? "workspace writes allowed, shell soft-denied" : "advisory, not enforced",
+        enforced: tier === "danger",
+        caveat: tier === "danger" ? undefined : "runs unsandboxed; tier advisory only",
       };
     default:
       return { tier, enforced: false, caveat: "advisory, not enforced" };
@@ -99,9 +107,10 @@ export function buildPermissionArgs(
       if (tier === "edit") return ["--sandbox", "workspace-write"];
       return ["--sandbox", "danger-full-access"];
     case "agy":
-      // edit/readonly: omit the bypass flag; agy's default headless policy
-      // allows workspace writes and soft-denies shell commands.
-      return tier === "danger" ? ["--dangerously-skip-permissions"] : [];
+      // Get out of the way: agy's default headless sandbox (proceed-in-sandbox)
+      // hard-denies read-only tools like read_url_content, so we always pass the
+      // bypass flag and treat readonly/edit as advisory profile-body instructions.
+      return ["--dangerously-skip-permissions"];
     default:
       return [];
   }

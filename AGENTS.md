@@ -11,14 +11,14 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - Valid profiles come from `~/.pi/agent/subagents/*.md` and set `backend: claude`, `backend: codex`, or `backend: agy`. Use matching names such as `claude-*`, `codex-*`, or `agy-*`; the assisted creator enforces that convention.
 - Profiles with `backend: pi` or a missing backend are filtered out and rejected.
 - Use Pi's native subagent system for Pi-backed scout/reviewer/planner/worker/oracle work.
-- External backends use their own tools and dangerous/no-approval modes. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Run them only in trusted repositories and state whether the task is read-only or may edit files.
+- External backends use their own tools and dangerous/no-approval modes. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Antigravity (`agy`) has no granular headless permission mode — its default sandbox denies even read-only tools — so every agy run is unsandboxed (`--dangerously-skip-permissions`) and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Run them only in trusted repositories and state whether the task is read-only or may edit files.
 - Prompts must be self-contained because children do not inherit parent conversation, tool results, or reasoning.
 - Backend-native nested agents may use a different workspace. Include explicit absolute paths and required context when asking an external backend to delegate further.
 
 ## Delegation transparency invariants
 
 - Treat each `description` as a concise user-facing task label. Profile descriptions are also user-visible as the declared reason for profile selection.
-- `unsandboxed external CLI` and `external host access` disclose the real execution boundary. Never present a read-only prompt as permission enforcement.
+- `unsandboxed external CLI` and `external host access` disclose the real execution boundary. Never present a read-only prompt as permission enforcement: on agy every run is unsandboxed regardless of tier, so the profile body — not the tier — is what asks the agent to stay read-only.
 - Keep direct intent visible during execution. Workflow access belongs once at the workflow level, not on every child row.
 - Keep default progress bounded and human-readable. Expanded output may reveal existing record paths, backend-event counts, workflow IDs, and journal paths.
 - Progress snapshots drive live presentation; persisted summaries and event logs remain the durable evidence source. Do not create a second UI-only record format.

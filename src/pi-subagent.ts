@@ -73,7 +73,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). readonly blocks file modifications; claude denies all shell commands headlessly at edit, so execution lanes (implementer, debugger, qa, worker) elevate an edit override to their danger floor. When in doubt, omit.",
+        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). Enforcement varies by backend: codex uses its --sandbox axis, claude denies shell commands below danger, and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
     }),
   ),
   max_budget_usd: Type.Optional(

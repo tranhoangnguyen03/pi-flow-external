@@ -2,6 +2,13 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Antigravity (`agy`) runs unsandboxed in every mode: its default headless sandbox (`proceed-in-sandbox`) hard-denies read-only tools like `read_url_content`, so `buildPermissionArgs` now always passes `--dangerously-skip-permissions` and `resolveEffectivePermissionTier` elevates every agy tier to `danger`. `readonly`/`edit` on agy are advisory profile-body instructions, not a harness boundary.
+- Agent-facing surfaces stop promising a boundary agy cannot keep: the delegation roster and the `permission` parameter description now state the backend-honest rules, and the coordinator guidelines note that agy tiers are advisory only.
+
 ## [1.5.0-external.0] - 2026-09-06
 
 Keeps Claude execution lanes from starting as guaranteed no-ops under an `edit` override, closing [#19](https://github.com/tranhoangnguyen03/pi-flow-external/issues/19).

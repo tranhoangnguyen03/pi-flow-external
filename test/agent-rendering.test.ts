@@ -174,6 +174,6 @@ describe("delegation roster lane disclosure", () => {
     ]);
     const roster = buildCoordinatorPrompt(profiles);
     expect(roster).toContain("- claude-implementer (claude · danger):");
-    expect(roster).toContain("- agy-reviewer (agy · readonly):");
+    expect(roster).toContain("- agy-reviewer (agy · danger):");
   });
 });
