@@ -2,7 +2,7 @@
 
 All notable changes to pi-flow external are documented here.
 
-## [Unreleased]
+## [1.6.0-external.0] - 2026-09-07
 
 ### Changed
 
