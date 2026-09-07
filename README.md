@@ -93,6 +93,7 @@ All user commands use the `/external` namespace:
 | `/external settings` | Show effective concurrency and timeout settings |
 | `/external profiles` | List available external profiles |
 | `/external profile create` | Create and smoke-test a profile |
+| `/external profile clean-up` | Archive legacy non-external profiles |
 | `/external workflows` | List saved workflows |
 | `/external runs` | Summarize recorded external runs |
 | `/external help` | Show the command reference |
@@ -134,7 +135,11 @@ backend: agy
 model: gemini-3.7-flash-high
 ```
 
-Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension.
+Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension; `/external profile clean-up` moves such legacy files to `~/.pi/agent/subagents/archive/` (moved, never deleted) after confirmation.
+
+### Default profiles
+
+On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — for each backend (18 profiles). Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster, such as debugger, can be added with `/external profile create`.
 
 Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 

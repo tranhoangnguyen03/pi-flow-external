@@ -32,6 +32,7 @@ import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 import { registerProfileCreator, startProfileInterview } from "./profile-creator.ts";
+import { seedDefaultProfiles } from "./defaults.ts";
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveExternalSettings } from "./settings.ts";
 import type {
@@ -609,8 +610,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       syncMaxConcurrentSubagents();
       usageStatusState.calls.clear();
       usageStatusState.latestCacheHitRate = undefined;
-      // Best-effort retention sweep; never blocks or fails the session.
+      // Best-effort retention sweep and one-time default-profile seeding;
+      // never blocks or fails the session.
       void pruneRunRecords(runRecordsDirectory(), rootState.maxRunRecords).catch(() => undefined);
+      try {
+        seedDefaultProfiles(getAgentDir());
+      } catch {
+        // Seeding is opportunistic; a read-only agent dir must not break startup.
+      }
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }

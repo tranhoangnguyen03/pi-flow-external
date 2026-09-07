@@ -2,6 +2,13 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Shipped default profile roster: on first session start the extension seeds five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker for each backend (18 profiles). Seeding is one-time (marker file), never overwrites existing profiles, and leaves `model`/`thinking` unpinned so defaults track the CLI's model and the current Pi thinking level. The `debugger` role is no longer shipped; create it with `/external profile create` if needed.
+- `/external profile clean-up`: lists profiles with `backend: pi` or no backend and, after confirmation, moves them to `~/.pi/agent/subagents/archive/`. Files are moved, never deleted; existing archive files are never overwritten. Non-interactive sessions get a read-only listing.
+
 ## [1.6.0-external.0] - 2026-09-07
 
 ### Changed

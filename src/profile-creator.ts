@@ -92,6 +92,7 @@ export function compileProfile(profile: SubagentProfile): string {
     `backend: ${profile.backend}`,
     ...(profile.model ? [`model: ${JSON.stringify(profile.model)}`] : []),
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
+    ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`;
 }
