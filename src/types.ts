@@ -24,6 +24,8 @@ export interface SubagentProfile {
   permission?: PermissionTier;
   /** Default USD budget cap for calls using this profile; the call parameter wins. */
   maxBudgetUsd?: number;
+  /** Ownership tag. "user" marks profiles authored by the user; profile clean-up never touches them. */
+  owner?: string;
 }
 
 export interface SubagentExtensionOptions {

@@ -6,7 +6,7 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
-import { archiveProfiles, findLegacyProfiles } from "./defaults.ts";
+import { archiveProfiles, findRetiredDefaultProfiles } from "./defaults.ts";
 import type { LoadedExternalSettings } from "./settings.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
@@ -16,7 +16,7 @@ const COMMANDS = [
   { value: "settings", description: "Show effective extension settings" },
   { value: "profiles", description: "List external agent profiles" },
   { value: "profile create", description: "Create an external profile" },
-  { value: "profile clean-up", description: "Archive legacy non-external profiles" },
+  { value: "profile clean-up", description: "Archive retired pi-flow default profiles" },
   { value: "workflows", description: "List saved workflows" },
   { value: "runs", description: "Summarize recent external receipts" },
   { value: "help", description: "Show this reference" },
@@ -140,26 +140,26 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "profile create") {
         await options.startProfileInterview(ctx);
       } else if (action === "profile clean-up") {
-        const legacy = findLegacyProfiles(getAgentDir());
-        if (!legacy.length) {
-          ctx.ui.notify("No legacy profiles found. Profiles with backend: pi or no backend would be archived here.", "info");
+        const retired = findRetiredDefaultProfiles(getAgentDir());
+        if (!retired.length) {
+          ctx.ui.notify("No retired pi-flow default profiles found. Clean-up only archives defaults this extension shipped and later retired (e.g. the debugger role); native Pi profiles and your own profiles are never touched.", "info");
           return;
         }
-        const listing = legacy.map((profile) => `${profile.name} (backend: ${profile.backend})`).join("\n");
+        const listing = retired.map((profile) => `${profile.name} (${profile.backend})`).join("\n");
         if (!ctx.hasUI) {
-          ctx.ui.notify(`Legacy profiles found (nothing changed; rerun interactively to archive):\n${listing}`, "info");
+          ctx.ui.notify(`Retired pi-flow default profiles found (nothing changed; rerun interactively to archive):\n${listing}`, "info");
           return;
         }
         const confirmed = await ctx.ui.confirm(
-          "Archive legacy profiles?",
-          `${listing}\n\nMoved to subagents/archive/ — never deleted, and existing archive files are never overwritten.`,
+          "Archive retired pi-flow default profiles?",
+          `${listing}\n\nThese were shipped by pi-flow and later retired. Moved to subagents/archive/ — never deleted, and existing archive files are never overwritten. Native Pi profiles and profiles you created yourself are never touched.`,
           {},
         );
         if (!confirmed) {
           ctx.ui.notify("Clean-up cancelled. No profiles were changed.", "info");
           return;
         }
-        const { archived, skipped } = archiveProfiles(getAgentDir(), legacy.map((profile) => profile.name));
+        const { archived, skipped } = archiveProfiles(getAgentDir(), retired.map((profile) => profile.name));
         const skippedLine = skipped.length ? ` · skipped: ${skipped.join(", ")}` : "";
         ctx.ui.notify(`${archived.length ? `Archived: ${archived.join(", ")}` : "Nothing archived"}${skippedLine}`, "info");
       } else if (action === "workflows") {

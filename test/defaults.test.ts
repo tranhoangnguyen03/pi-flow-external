@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { archiveProfiles, buildDefaultProfile, defaultProfileNames, findLegacyProfiles, seedDefaultProfiles } from "../src/defaults.ts";
+import { archiveProfiles, buildDefaultProfile, defaultProfileNames, findRetiredDefaultProfiles, retiredDefaultProfileNames, seedDefaultProfiles } from "../src/defaults.ts";
 import { compileProfile } from "../src/profile-creator.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, parseSubagentProfileContent } from "../src/profiles.ts";
 
@@ -68,30 +68,49 @@ describe("default profile seeding", () => {
   });
 });
 
-describe("legacy profile clean-up", () => {
-  it("finds only non-external profiles and archives them without deleting", () => {
+describe("retired default profile clean-up", () => {
+  it("finds only retired pi-flow defaults; native Pi and user-created profiles are never candidates", () => {
     const agentDir = tempAgentDir();
     const dir = join(agentDir, "subagents");
     mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "claude-debugger.md"), "---\ndescription: Debug.\nbackend: claude\n---\nDebug failures.\n");
+    writeFileSync(join(dir, "agy-debugger.md"), "---\ndescription: My own debugger.\nbackend: agy\nowner: user\n---\nUser-owned debugger.\n");
     writeFileSync(join(dir, "scout.md"), "---\ndescription: Pi scout.\nbackend: pi\n---\nNative scout.\n");
     writeFileSync(join(dir, "oracle.md"), "---\ndescription: No backend declared.\n---\nNative oracle.\n");
-    writeFileSync(join(dir, "claude-reviewer.md"), "---\ndescription: Review.\nbackend: claude\n---\nReview read-only.\n");
+    writeFileSync(join(dir, "claude-security-reviewer.md"), "---\ndescription: Custom.\nbackend: claude\nowner: user\n---\nUser-created.\n");
+    writeFileSync(join(dir, "claude-explorer.md"), "---\ndescription: Current default.\nbackend: claude\n---\nExplore.\n");
 
-    const legacy = findLegacyProfiles(agentDir);
-    expect(legacy.map((profile) => profile.name).sort()).toEqual(["oracle", "scout"]);
+    const retired = findRetiredDefaultProfiles(agentDir);
+    expect(retired.map((profile) => profile.name)).toEqual(["claude-debugger"]);
 
-    const result = archiveProfiles(agentDir, legacy.map((profile) => profile.name).sort());
-    expect(result).toEqual({ archived: ["oracle", "scout"], skipped: [] });
-    expect(existsSync(join(dir, "archive", "scout.md"))).toBe(true);
-    expect(existsSync(join(dir, "archive", "oracle.md"))).toBe(true);
-    expect(existsSync(join(dir, "scout.md"))).toBe(false);
-    expect(existsSync(join(dir, "claude-reviewer.md"))).toBe(true);
-    expect(findLegacyProfiles(agentDir)).toHaveLength(0);
+    const result = archiveProfiles(agentDir, retired.map((profile) => profile.name));
+    expect(result).toEqual({ archived: ["claude-debugger"], skipped: [] });
+    expect(existsSync(join(dir, "archive", "claude-debugger.md"))).toBe(true);
+    for (const untouched of ["scout.md", "oracle.md", "claude-security-reviewer.md", "claude-explorer.md", "agy-debugger.md"]) {
+      expect(existsSync(join(dir, untouched)), untouched).toBe(true);
+    }
 
     // Re-running with the source gone and an archive collision is safe.
-    const again = archiveProfiles(agentDir, ["scout"]);
-    expect(again).toEqual({ archived: [], skipped: ["scout"] });
-    expect(existsSync(join(dir, "archive", "scout.md"))).toBe(true);
+    const again = archiveProfiles(agentDir, ["claude-debugger"]);
+    expect(again).toEqual({ archived: [], skipped: ["claude-debugger"] });
+    expect(existsSync(join(dir, "archive", "claude-debugger.md"))).toBe(true);
+  });
+
+  it("refuses to archive owner:user profiles even when named directly", () => {
+    const agentDir = tempAgentDir();
+    const dir = join(agentDir, "subagents");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "codex-debugger.md"), "---\ndescription: My debugger.\nbackend: codex\nowner: user\n---\nMine.\n");
+
+    const result = archiveProfiles(agentDir, ["codex-debugger"]);
+    expect(result).toEqual({ archived: [], skipped: ["codex-debugger"] });
+    expect(existsSync(join(dir, "codex-debugger.md"))).toBe(true);
+    expect(existsSync(join(dir, "archive"))).toBe(true);
+  });
+
+  it("retired names never overlap the shipped default roster", () => {
+    const overlap = retiredDefaultProfileNames().filter((name) => defaultProfileNames().includes(name));
+    expect(overlap).toEqual([]);
   });
 
   it("skips invalid names instead of touching paths outside the subagents directory", () => {

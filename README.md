@@ -93,7 +93,7 @@ All user commands use the `/external` namespace:
 | `/external settings` | Show effective concurrency and timeout settings |
 | `/external profiles` | List available external profiles |
 | `/external profile create` | Create and smoke-test a profile |
-| `/external profile clean-up` | Archive legacy non-external profiles |
+| `/external profile clean-up` | Archive retired pi-flow default profiles |
 | `/external workflows` | List saved workflows |
 | `/external runs` | Summarize recorded external runs |
 | `/external help` | Show the command reference |
@@ -135,7 +135,9 @@ backend: agy
 model: gemini-3.7-flash-high
 ```
 
-Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension; `/external profile clean-up` moves such legacy files to `~/.pi/agent/subagents/archive/` (moved, never deleted) after confirmation.
+Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them. Profiles with `backend: pi` or no backend are not available to this extension; they belong to Pi's native subagent system and are never modified by it. `/external profile clean-up` archives only profiles this extension itself shipped and later retired (currently the former `debugger` role) to `~/.pi/agent/subagents/archive/` after confirmation — moved, never deleted.
+
+Profiles created through `/external profile create` are stamped `owner: user`, and clean-up never archives `owner: user` profiles. When writing a profile by hand, add `owner: user` to its frontmatter to protect it from clean-up.
 
 ### Default profiles
 

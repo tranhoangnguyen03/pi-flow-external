@@ -102,6 +102,7 @@ export function parseSubagentProfileContent(
     : undefined;
   const permission = parsePermission(parsed.frontmatter.permission);
   const maxBudgetUsd = parseMaxBudgetUsd(parsed.frontmatter.max_budget_usd);
+  const owner = optionalString(parsed.frontmatter.owner);
 
   if (
     !description ||
@@ -123,6 +124,7 @@ export function parseSubagentProfileContent(
     systemPrompt: body || undefined,
     permission,
     maxBudgetUsd,
+    owner,
   };
 }
 

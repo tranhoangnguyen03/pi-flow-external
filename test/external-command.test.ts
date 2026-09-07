@@ -12,6 +12,7 @@ describe("/external command", () => {
     process.env.PI_CODING_AGENT_DIR = root;
     mkdirSync(join(root, "subagents"), { recursive: true });
     writeFileSync(join(root, "subagents", "claude-reviewer.md"), "---\ndescription: Review code.\nbackend: claude\n---\nReview read-only.\n");
+    writeFileSync(join(root, "subagents", "claude-debugger.md"), "---\ndescription: Debug.\nbackend: claude\n---\nDebug failures.\n");
     writeFileSync(join(root, "subagents", "scout.md"), "---\ndescription: Native Pi scout.\nbackend: pi\n---\nNative work.\n");
     try {
       let command: { getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null; handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
@@ -67,8 +68,10 @@ describe("/external command", () => {
       expect(startProfileInterview).toHaveBeenCalledOnce();
 
       await command?.handler("profile clean-up", ctx);
-      expect(notices.at(-1)).toContain("scout");
+      expect(notices.at(-1)).toContain("claude-debugger");
       expect(notices.at(-1)).toContain("nothing changed");
+      expect(notices.at(-1)).not.toContain("scout");
+      expect(existsSync(join(root, "subagents", "claude-debugger.md"))).toBe(true);
       expect(existsSync(join(root, "subagents", "scout.md"))).toBe(true);
     } finally {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

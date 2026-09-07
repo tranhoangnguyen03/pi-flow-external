@@ -102,9 +102,30 @@ export function seedDefaultProfiles(agentDir: string): SeedResult {
   return { seeded: true, added };
 }
 
-/** Parsed profiles this extension cannot delegate to (backend: pi or none). */
-export function findLegacyProfiles(agentDir: string): SubagentProfile[] {
-  return [...getSubagentProfiles(agentDir).values()].filter((profile) => !isExternalAgentProfile(profile));
+/**
+ * Roles this extension shipped in past releases but no longer ships. Append a
+ * role here when it is removed from DEFAULT_ROLES so existing installations
+ * can archive the leftover files through /external profile clean-up.
+ */
+const RETIRED_ROLES: readonly string[] = ["debugger"];
+
+/**
+ * Retired default profile names, per backend.
+ */
+export function retiredDefaultProfileNames(): string[] {
+  return DEFAULT_BACKENDS.flatMap((backend) => RETIRED_ROLES.map((role) => `${backend}-${role}`));
+}
+
+/**
+ * External profiles this extension previously shipped and has retired.
+ * Never includes user-owned profiles (owner: user) or native Pi profiles
+ * (backend: pi or none): those do not belong to this extension.
+ */
+export function findRetiredDefaultProfiles(agentDir: string): SubagentProfile[] {
+  const retired = new Set(retiredDefaultProfileNames());
+  return [...getSubagentProfiles(agentDir).values()].filter(
+    (profile) => isExternalAgentProfile(profile) && profile.owner !== "user" && retired.has(profile.name),
+  );
 }
 
 export interface ArchiveResult {
@@ -118,10 +139,17 @@ export function archiveProfiles(agentDir: string, names: string[]): ArchiveResul
   const dir = join(agentDir, "subagents");
   const archive = join(dir, "archive");
   mkdirSync(archive, { recursive: true });
+  // Trust boundary enforced at the mutation point: an owner:user profile is
+  // the user's property and must never be moved, regardless of the caller.
+  const userOwned = new Set(
+    [...getSubagentProfiles(agentDir).values()]
+      .filter((profile) => profile.owner === "user")
+      .map((profile) => profile.name),
+  );
   const archived: string[] = [];
   const skipped: string[] = [];
   for (const name of names) {
-    if (!isValidSubagentName(name)) {
+    if (!isValidSubagentName(name) || userOwned.has(name)) {
       skipped.push(name);
       continue;
     }

@@ -66,6 +66,9 @@ function normalizeProfile(input: ProfileParameters): SubagentProfile {
     model: optional(input.model),
     thinking: optional(input.thinking),
     systemPrompt: input.systemPrompt.trim(),
+    // Profiles authored through this flow belong to the user; the tag keeps
+    // /external profile clean-up from ever archiving them.
+    owner: "user",
   };
 }
 
@@ -93,6 +96,7 @@ export function compileProfile(profile: SubagentProfile): string {
     ...(profile.model ? [`model: ${JSON.stringify(profile.model)}`] : []),
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
     ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
+    ...(profile.owner ? [`owner: ${JSON.stringify(profile.owner)}`] : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`;
 }
