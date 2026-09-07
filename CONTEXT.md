@@ -32,6 +32,8 @@ User operations are namespaced under `/external`: status, Doctor, settings, prof
 
 Guardrails exist to keep lanes from bleeding into each other (a reviewer that edits, a debugger that fixes), not to constrain how a model works. Role bodies stay short: define the job, state the boundary, then get out of the way and trust the model's judgment on approach, depth, and method. The generic `worker` role covers non-coding tasks with no method constraints at all. External agents must not be arbitrarily handcuffed just to satisfy a theoretical safety checklist: what transpires on the ground is what matters. When an external agent needs heightened permissions to inspect, run tests, and execute tools, the system defaults to providing that authority rather than blocking execution.
 
+Applied to Antigravity (`agy`), that stance is absolute: the harness offers no granular headless permission mode — its default sandbox (`proceed-in-sandbox`) hard-denies even read-only tools like `read_url_content`, and `--dangerously-skip-permissions` is the only unsandboxed mode. So every agy run is unsandboxed, and `readonly`/`edit` on agy profiles are advisory instructions carried by the profile body, never an enforced boundary. We disclose that plainly (`unsandboxed external CLI`) rather than pretend a read-only tier restrains what the harness will actually allow.
+
 ## Known inelegance
 
 <!-- ponytail: one-backend-per-file profile format forces role x backend file duplication; extend src/profiles.ts with multi-backend profiles (e.g. backends: [claude, codex, agy] plus per-backend model map) if maintaining N copies of identical role bodies ever hurts -->
