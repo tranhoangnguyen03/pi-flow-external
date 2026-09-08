@@ -12,6 +12,7 @@ import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode }
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
+import { captureParentContext } from "../core/parent-context.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
@@ -94,6 +95,7 @@ export function createWorkflowTool(
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const parentMessages = captureParentContext(ctx.sessionManager);
       const prepared = await prepareWorkflowToolSource(params, ctx);
       if (!prepared.ok) {
         return workflowError(prepared.text, prepared.details);
@@ -172,6 +174,7 @@ export function createWorkflowTool(
           toolCallId: childId,
           description: call.label,
           prompt: call.prompt,
+          context: call.context,
           profile,
           model,
           thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
@@ -196,6 +199,7 @@ export function createWorkflowTool(
               agent.timedOut = details.progress.timedOut;
               agent.usage = details.progress.usage;
               agent.status = details.progress.status;
+              agent.context = details.context;
               emit();
             }
           },
@@ -227,6 +231,7 @@ export function createWorkflowTool(
           agent.maxBudgetUsd = resultDetails.maxBudgetUsd;
           agent.sessionId = resultDetails.sessionId;
           agent.resumedFrom = resultDetails.resumedFrom;
+          agent.context = resultDetails.context;
           if (progress) {
             agent.startedAt = progress.startedAt;
             agent.endedAt = progress.endedAt;
@@ -271,6 +276,8 @@ export function createWorkflowTool(
       try {
         const runResult = await runWorkflow(script, {
           args: params.args,
+          parentMessages,
+          parentToolCallId: toolCallId,
           cwd: ctx.cwd,
           signal,
           limiter: options.getLimiter(),
@@ -301,6 +308,7 @@ export function createWorkflowTool(
               subagentType: event.subagentType,
               backend: profiles.get(event.subagentType)?.backend,
               status: "queued",
+              context: event.context,
               startedAt: Date.now(),
               activity: [],
               activityCount: 0,
@@ -344,6 +352,11 @@ export function createWorkflowTool(
             emit();
           },
           onAgentResult: async (event) => {
+            const agent = snapshot.agents.find((item) => item.index === event.index);
+            if (agent && event.context) {
+              agent.context = event.context;
+              emit();
+            }
             await journalWriter?.appendAgentResult(event);
           },
         });

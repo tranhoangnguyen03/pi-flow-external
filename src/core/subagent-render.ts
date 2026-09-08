@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { getBackendAgentLabel } from "./display.ts";
+import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
 import type { PermissionTier, SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
@@ -9,6 +10,7 @@ const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
 export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
 
 export interface RenderableSubagentNode {
+  context?: ParentContextReceipt;
   description?: string;
   label?: string;
   subagentType?: string;
@@ -131,6 +133,7 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
   if (showAccess && isActiveSubagentStatus(node.status)) {
     parts.push("external host access");
   }
+  if (node.context) parts.push(`context ${node.context.mode} (${node.context.sharedTurns} turns)`);
   if (node.permission && node.permission !== "danger") {
     parts.push(node.permissionEnforced === false ? `${node.permission} (advisory)` : node.permission);
   }
@@ -261,6 +264,7 @@ export function renderSubagentNode(
 
   const container = new Container();
   container.addChild(rendered);
+  if (node.context) container.addChild(new Text(`${indent}  ${theme.fg("dim", formatParentContext(node.context))}`, 0, 0));
   if (node.recordPath) {
     const events = node.backendEventCount === undefined ? "" : ` · ${node.backendEventCount} backend events`;
     container.addChild(new Text(`${indent}  ${theme.fg("dim", `Evidence ${node.recordPath}${events}`)}`, 0, 0));

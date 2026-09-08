@@ -171,6 +171,7 @@ export async function createWorkflowJournalWriter(params: {
         phase: event.phase,
         subagentType: event.subagentType,
         prompt: event.prompt,
+        ...(event.context ? { context: event.context } : {}),
         schema: event.schema,
         cached: event.cached,
         failed: event.failed === true,

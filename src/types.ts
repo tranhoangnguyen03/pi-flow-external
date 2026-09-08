@@ -1,3 +1,4 @@
+import type { ParentContextReceipt } from "./core/parent-context.ts";
 import type { WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
@@ -57,6 +58,7 @@ export type FlowExtensionOptions = SubagentExtensionOptions;
 export type SubagentRunStatus = "queued" | "running" | "done" | "error" | "aborted";
 
 export interface WorkflowAgentSnapshot {
+  context?: ParentContextReceipt;
   index: number;
   label: string;
   phase?: string;
@@ -130,6 +132,7 @@ export interface SubagentUsage {
 }
 
 export interface SubagentProgressNode {
+  context?: ParentContextReceipt;
   id: string;
   description: string;
   subagentType: SubagentType | "unknown";
@@ -173,6 +176,7 @@ export interface SubagentProgressNode {
 }
 
 export interface SubagentToolDetails {
+  context?: ParentContextReceipt;
   description: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;

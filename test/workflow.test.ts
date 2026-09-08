@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Theme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
@@ -91,6 +92,26 @@ describe("runWorkflow", () => {
     expect(result.result).toBe("hello");
     expect(result.meta.name).toBe("wf");
     expect(result.agentCount).toBe(1);
+  });
+
+  it("replays context-sharing children only when the selected snapshot is unchanged", async () => {
+    const sm = SessionManager.inMemory();
+    sm.appendMessage({ role: "user", content: "original requirement", timestamp: 0 });
+    const parentMessages = captureParentContext(sm);
+    const events: any[] = [];
+    const script = `${META}return await parallel([() => agent('one', { context: { mode: 'full' } }), () => agent('two', { context: { mode: 'recent', turns: 1 } })]);`;
+    const runner = vi.fn(async (call) => {
+      sm.appendMessage({ role: "user", content: "new requirement", timestamp: 1 });
+      return call.prompt;
+    });
+    const options = { cwd: "/tmp", limiter: new ConcurrencyLimiter(1), runAgent: runner, parentMessages };
+    const first = await runWorkflow(script, { ...options, onAgentResult: (event) => { events.push(event); } });
+    expect(JSON.stringify(first.result)).not.toContain("new requirement");
+    expect(events.every((event) => event.context.sharedTurns === 1)).toBe(true);
+    await runWorkflow(script, { ...options, resumeAgentResults: events });
+    expect(runner).toHaveBeenCalledTimes(2);
+    await runWorkflow(script, { ...options, parentMessages: captureParentContext(sm), resumeAgentResults: events });
+    expect(runner).toHaveBeenCalledTimes(4);
   });
 
   it("requires at least one agent call", async () => {

@@ -4,6 +4,7 @@ import type { WorkflowAgentCall } from "./types.ts";
 export function fingerprintWorkflowAgentCall(call: WorkflowAgentCall): string {
   return hashStableValue({
     prompt: call.prompt,
+    ...(call.context ? { context: call.context } : {}),
     label: call.label,
     phase: call.phase,
     subagentType: call.subagentType,

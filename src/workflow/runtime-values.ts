@@ -1,4 +1,7 @@
+import { parseParentContext, type ParentContext } from "../core/parent-context.ts";
+
 export interface NormalizedAgentOptions {
+  context?: ParentContext;
   label?: string;
   phase?: string;
   role?: string;
@@ -40,6 +43,7 @@ export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
     throw new TypeError("agent max_budget_usd must be a finite non-negative number");
   }
   return {
+    context: parseParentContext(options.context),
     label: optionalString(options.label, "agent label"),
     phase: optionalString(options.phase, "agent phase"),
     role: optionalString(options.role, "agent role"),

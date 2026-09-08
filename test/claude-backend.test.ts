@@ -182,7 +182,7 @@ describe("pi-subagent claude backend", () => {
     })).toBe("assistant text");
   });
 
-  it("runs a claude-backed subagent through the Agent tool", async () => {
+  it.each(["Agent", "workflow"])("transfers parent context through %s to Claude stdin and receipts", async (toolName) => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-claude");
     const argsPath = join(tempDir, "claude-args.json");
@@ -213,10 +213,13 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
     registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
+      fauxAssistantMessage([fauxToolCall(toolName, toolName === "Agent" ? {
         description: "Claude review",
         subagent_type: "claude-reviewer",
         prompt: "Review the latest diff.",
+        context: { mode: "recent", turns: 1 },
+      } : {
+        script: `export const meta = { name: 'context-test', description: 'Context transfer' }; return await agent('Review the latest diff.', { subagent_type: 'claude-reviewer', context: { mode: 'recent', turns: 1 } });`,
       })], { stopReason: "toolUse" }),
       (context) => {
         rootContinuationContext = context;
@@ -247,10 +250,17 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeArgs).toContain("xhigh");
     expect(claudeArgs).toContain("--append-system-prompt");
     expect(claudeArgs).toContain("Claude reviewer prompt.");
-    expect(claudeRun.stdin).toBe("Review the latest diff.");
+    expect(claudeRun.stdin).toContain("Delegate to Claude.");
+    expect(claudeRun.stdin).toContain("Current task:\nReview the latest diff.");
+    expect(claudeRun.stdin).not.toContain("context-test");
     const rootMessages = JSON.stringify(rootContinuationContext?.messages);
     expect(rootMessages).toContain("claude child done");
-    expect(rootMessages).toMatch(/\[run run_[0-9a-f]+\]/);
+    if (toolName === "Agent") expect(rootMessages).toMatch(/\[run run_[0-9a-f]+\]/);
+    const toolResult = session.messages.find((m) => m.role === "toolResult" && m.toolName === toolName) as any;
+    const receipt = toolName === "Agent" ? toolResult.details : toolResult.details.agents[0];
+    expect(receipt.context).toMatchObject({ mode: "recent", requestedTurns: 1, sharedTurns: 1 });
+    const summary = JSON.parse(readFileSync(join(receipt.recordPath, "summary.json"), "utf8"));
+    expect(summary.summary.context).toEqual(receipt.context);
 
     disposeSession(session);
   });
