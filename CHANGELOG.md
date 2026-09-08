@@ -2,11 +2,18 @@
 
 All notable changes to pi-flow external are documented here.
 
-## [Unreleased]
+## [1.8.0-external.0] - 2026-09-08
 
 ### Added
 
 - Role-first external delegation with optional harness overrides, a compact configured-role catalog, on-demand `external_help` for roles/permissions/workflows, and settings v3 with the global `defaultHarness` (initially `agy`). Legacy `subagent_type` remains available for exact-profile selection.
+
+## [1.7.0-external.1] - 2026-09-07
+
+### Fixed
+
+- `/external profile clean-up` inverted ownership: it archived native Pi profiles (`backend: pi` or no backend), which belong to Pi's native subagent system, not this extension. It now archives only retired pi-flow default profiles (the former `debugger` role) after confirmation, and never lists or moves native Pi profiles.
+- Profile ownership tag: profiles created through `/external profile create` are stamped `owner: user` in frontmatter, and clean-up refuses to archive any `owner: user` profile even when named directly (enforced at the archive mutation point). Hand-written profiles opt in with the same tag.
 
 ## [1.7.0-external.0] - 2026-09-07
 
