@@ -2,6 +2,31 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [1.9.0-external.0] - 2026-09-08
+
+Lets the parent decide how much of its own conversation an external child starts with, closing [#30](https://github.com/tranhoangnguyen03/pi-flow-external/issues/30).
+
+### Added
+
+- Opt-in parent-context sharing for `Agent` and workflow `agent()`: `context: { mode: "recent", turns: N }` shares the last N available user turns (including the current one), `{ mode: "full" }` shares available current-branch conversation after compaction, and the default remains no shared history. A user turn starts at a user message and carries its assistant messages and tool exchanges; a linked tool call is retained when its result crosses the selected boundary.
+- Context receipts on every surface: the delegation card names the requested mode before launch, compact and expanded rows report mode plus shared/requested turns, messages, bytes, and compaction state, and `summary.json` plus the workflow journal record the same block.
+- `docs/field-testing.md` change-triggered context transfer check.
+
+### Changed
+
+- Coordinator guidance and `external_help` workflow help document the context modes, exclusions, and the `resume` exclusion.
+
+### Notes
+
+- Snapshots are frozen before queueing, exclude parent system instructions, thinking blocks, tool-result metadata, and pending tool calls, and fail explicitly on images/unsupported content or snapshots over 1 MiB instead of truncating. Sharing cannot be combined with `resume`. Workflow children select from one snapshot frozen at invocation, and replay fingerprints include the transferred context.
+- This is text transfer into a new external conversation, not a native session clone, system-prompt inheritance, or guaranteed prompt-cache reuse.
+
+## [1.8.0-external.1] - 2026-09-08
+
+### Fixed
+
+- agy `--print-timeout` is now derived from the configured `subagentTimeoutMs` instead of a hardcoded 15-minute ceiling that let agy's internal wait timeout preempt the extension's outer subagent deadline. A disabled deadline (`0`) maps to a ~1-year ceiling because agy has no no-timeout flag, and `timeout waiting for response` is pinned as non-retryable.
+
 ## [1.8.0-external.0] - 2026-09-08
 
 ### Added
