@@ -14,11 +14,11 @@ import { listSavedWorkflows } from "./workflow/registry.ts";
 const COMMANDS = [
   { value: "doctor", description: "Check configured external harnesses" },
   { value: "settings", description: "Show effective extension settings" },
-  { value: "profiles", description: "List external agent profiles" },
+  { value: "profiles", description: "List configured external agent profiles" },
   { value: "profile create", description: "Create an external profile" },
   { value: "profile clean-up", description: "Archive retired pi-flow default profiles" },
   { value: "workflows", description: "List saved workflows" },
-  { value: "runs", description: "Summarize recent external receipts" },
+  { value: "runs", description: "Summarize receipts; add --prune to prune eligible completed records" },
   { value: "help", description: "Show this reference" },
 ] as const;
 
@@ -58,6 +58,7 @@ function settingsText(options: ExternalCommandOptions): string {
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
+    `defaultHarness: ${settings.defaultHarness}`,
     `defaultPermission: ${settings.defaultPermission}`,
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,

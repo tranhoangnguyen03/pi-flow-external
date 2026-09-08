@@ -56,7 +56,8 @@ describe("delegation transparency rendering", () => {
     const callArgs = {
       description: "Map repository architecture",
       prompt: "Map the repository read-only.",
-      subagent_type: "claude-explorer",
+      role: "explorer",
+      harness: "claude",
     };
     const callContext = { cwd, executionStarted: true, state: {} };
     const call = tool.renderCall?.(callArgs, theme, callContext);
@@ -157,7 +158,7 @@ describe("delegation transparency rendering", () => {
 });
 
 describe("delegation roster lane disclosure", () => {
-  it("shows backend and default permission tier per profile", () => {
+  it("shows a compact role catalog with restricted and exact-only availability", () => {
     const profiles = new Map([
       ["claude-implementer", {
         name: "claude-implementer",
@@ -171,9 +172,22 @@ describe("delegation roster lane disclosure", () => {
         backend: "agy" as const,
         permission: "readonly" as const,
       }],
+      ["claude-reviewer", {
+        name: "claude-reviewer",
+        description: "Different reviewer instructions remain profile-specific.",
+        backend: "claude" as const,
+        permission: "danger" as const,
+      }],
+      ["specialist", {
+        name: "specialist",
+        description: "Legacy exact profile.",
+        backend: "codex" as const,
+      }],
     ]);
-    const roster = buildCoordinatorPrompt(profiles);
-    expect(roster).toContain("- claude-implementer (claude · danger):");
-    expect(roster).toContain("- agy-reviewer (agy · danger):");
+    const roster = buildCoordinatorPrompt(profiles, "agy");
+    expect(roster).toContain("Harnesses: agy (default), claude, codex.");
+    expect(roster).toContain("Roles: implementer (claude only), reviewer (agy, claude only).");
+    expect(roster).toContain("Exact-only profiles: specialist (codex).");
+    expect(roster).not.toContain("Code review through Antigravity.");
   });
 });

@@ -2,6 +2,12 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Role-first external delegation with optional harness overrides, a compact configured-role catalog, on-demand `external_help` for roles/permissions/workflows, and settings v3 with the global `defaultHarness` (initially `agy`). Legacy `subagent_type` remains available for exact-profile selection.
+
 ## [1.7.0-external.0] - 2026-09-07
 
 ### Added

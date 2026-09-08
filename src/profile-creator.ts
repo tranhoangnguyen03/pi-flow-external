@@ -31,13 +31,13 @@ export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external age
 Start by asking: "What kind of agent do you want to create, and what should it help you accomplish?"
 Then ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules.
 
-When the intent is clear, recommend a backend: claude, codex, or agy. Briefly explain the recommendation and let me override it. Suggest a lowercase backend-qualified profile name. Ask about model and thinking only when I want to pin them; otherwise omit them.
+When the intent is clear, recommend a backend: claude, codex, or agy. Briefly explain the recommendation and let me override it. Suggest a lowercase <backend>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them; otherwise omit them.
 
 When the profile is ready, summarize your understanding once. Then call ${PROFILE_TOOL_NAME}. Do not write files yourself and do not run Agent or workflow. The tool will show the exact profile for review, request confirmation, stage it, run the real backend smoke test, and either install it or roll it back.`;
 
 const profileParameters = Type.Object({
-  name: Type.String({ description: "Lowercase backend-qualified profile name, such as claude-security-reviewer." }),
-  description: Type.String({ description: "Concise profile description shown in the available-agent roster." }),
+  name: Type.String({ description: "Lowercase <backend>-<role> profile name, such as claude-security-reviewer; the suffix becomes its role." }),
+  description: Type.String({ description: "Concise profile description shown by external_help and in delegation intent." }),
   backend: StringEnum(["claude", "codex", "agy"] as const, { description: "External CLI backend." }),
   model: Type.Optional(Type.String({ description: "Optional backend model override. Omit to use the CLI default." })),
   thinking: Type.Optional(Type.String({ description: "Optional reasoning-effort override. Omit to use the current Pi level." })),

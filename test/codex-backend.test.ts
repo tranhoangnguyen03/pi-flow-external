@@ -144,7 +144,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Codex review",
-        subagent_type: "codex-reviewer",
+        role: "reviewer",
+        harness: "codex",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       (context) => {

@@ -29,7 +29,8 @@ describe("/external command", () => {
       const settings: LoadedExternalSettings = {
         path: join(root, "pi-flow-external", "settings.json"),
         settings: {
-          version: 2,
+          version: 3,
+          defaultHarness: "agy",
           maxConcurrentSubagents: 12,
           subagentTimeoutMs: 7200000,
           defaultPermission: "danger",
@@ -54,6 +55,7 @@ describe("/external command", () => {
       const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
       await command?.handler("settings", ctx);
       expect(notices.at(-1)).toContain("maxConcurrentSubagents: 4");
+      expect(notices.at(-1)).toContain("defaultHarness: agy");
       expect(notices.at(-1)).toContain(settings.path);
 
       await command?.handler("doctor", ctx);

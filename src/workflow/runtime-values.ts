@@ -1,6 +1,8 @@
 export interface NormalizedAgentOptions {
   label?: string;
   phase?: string;
+  role?: string;
+  harness?: string;
   subagentType?: string;
   schema?: unknown;
   permission?: import("../types.ts").PermissionTier;
@@ -40,6 +42,8 @@ export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
   return {
     label: optionalString(options.label, "agent label"),
     phase: optionalString(options.phase, "agent phase"),
+    role: optionalString(options.role, "agent role"),
+    harness: optionalString(options.harness, "agent harness"),
     subagentType: optionalString(options.subagent_type, "agent subagent_type"),
     schema: options.schema,
     permission: permission as NormalizedAgentOptions["permission"],

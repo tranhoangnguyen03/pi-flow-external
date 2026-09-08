@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PermissionTier, SubagentExtensionOptions } from "./types.ts";
+import { EXTERNAL_HARNESSES, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
-  version: 2,
+  version: 3,
+  defaultHarness: "agy" as ExternalHarness,
   maxConcurrentSubagents: 12,
   subagentTimeoutMs: 2 * 60 * 60 * 1000,
   defaultPermission: "danger" as PermissionTier,
@@ -12,7 +13,8 @@ export const DEFAULT_EXTERNAL_SETTINGS = {
 } as const;
 
 export type ExternalSettings = {
-  version: 2;
+  version: 3;
+  defaultHarness: ExternalHarness;
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
   defaultPermission: PermissionTier;
@@ -28,6 +30,7 @@ export type LoadedExternalSettings = {
 
 const KNOWN_SETTING_KEYS = [
   "version",
+  "defaultHarness",
   "maxConcurrentSubagents",
   "subagentTimeoutMs",
   "defaultPermission",
@@ -36,7 +39,6 @@ const KNOWN_SETTING_KEYS = [
 ];
 
 const PERMISSION_TIERS: PermissionTier[] = ["readonly", "edit", "danger"];
-
 export function externalSettingsPath(agentDir: string): string {
   return join(agentDir, "pi-flow-external", "settings.json");
 }
@@ -49,9 +51,13 @@ function isPermissionTier(value: unknown): value is PermissionTier {
   return typeof value === "string" && PERMISSION_TIERS.includes(value as PermissionTier);
 }
 
+function isExternalHarness(value: unknown): value is ExternalHarness {
+  return typeof value === "string" && EXTERNAL_HARNESSES.includes(value as ExternalHarness);
+}
+
 /**
  * Migrate-on-read: never reject the whole file. Defaults are filled first and
- * each recognized key (from v1 or v2) overrides when valid; invalid values
+ * each recognized key (from v1, v2, or v3) overrides when valid; invalid values
  * fall back per-key with a diagnostic. Unknown keys are reported, not fatal.
  */
 function parseSettings(value: unknown): { settings: ExternalSettings; diagnostics: string[] } {
@@ -60,8 +66,8 @@ function parseSettings(value: unknown): { settings: ExternalSettings; diagnostic
   }
   const record = value as Record<string, unknown>;
   const diagnostics: string[] = [];
-  if (record.version !== 1 && record.version !== 2) {
-    diagnostics.push("version must be 1 or 2.");
+  if (record.version !== 1 && record.version !== 2 && record.version !== 3) {
+    diagnostics.push("version must be 1, 2, or 3.");
   }
   for (const key of Object.keys(record)) {
     if (!KNOWN_SETTING_KEYS.includes(key)) {
@@ -70,6 +76,11 @@ function parseSettings(value: unknown): { settings: ExternalSettings; diagnostic
   }
 
   const settings = defaults();
+  if (isExternalHarness(record.defaultHarness)) {
+    settings.defaultHarness = record.defaultHarness;
+  } else if (record.defaultHarness !== undefined) {
+    diagnostics.push("defaultHarness must be agy, claude, or codex.");
+  }
   if (Number.isInteger(record.maxConcurrentSubagents) && Number(record.maxConcurrentSubagents) >= 1) {
     settings.maxConcurrentSubagents = record.maxConcurrentSubagents as number;
   } else if (record.maxConcurrentSubagents !== undefined) {

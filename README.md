@@ -6,12 +6,13 @@ External agent delegation for [pi](https://github.com/earendil-works/pi) through
 - [Codex CLI](https://github.com/openai/codex) profiles with `backend: codex`
 - Antigravity profiles with `backend: agy`
 
-The extension provides two tools:
+The ordinary driver has three tools (`workflow` can be disabled):
 
-- `Agent` runs one external profile.
-- `workflow` orchestrates multiple external profiles with trusted JavaScript.
+- `Agent` resolves and runs one external role.
+- `workflow` orchestrates multiple external roles with trusted JavaScript.
+- `external_help` returns role details, permission behavior, or workflow guidance on demand.
 
-Both tools accept only external, backend-qualified profiles. Use pi's native subagent system for Pi-backed agents.
+`Agent` and `workflow` accept external roles with an optional harness override. Use pi's native subagent system for Pi-backed agents. The `pi_flow_profile_create` finalizer is active only during `/external profile create`.
 
 ## Install
 
@@ -49,15 +50,15 @@ agy --version
 
 Pi's coordinator model and the external CLIs authenticate independently. A working Claude, Codex, or Antigravity login does not authenticate the root Pi model.
 
-External agents normally run without approval prompts:
+External agents use the effective permission tier and each harness's native mechanism:
 
-- Claude: `--dangerously-skip-permissions`
-- Codex: `--dangerously-bypass-approvals-and-sandbox`
-- Antigravity: `--dangerously-skip-permissions`
+- Claude: `--permission-mode plan`, `--permission-mode acceptEdits`, or `--dangerously-skip-permissions`
+- Codex: `--sandbox read-only`, `workspace-write`, or `danger-full-access`
+- Antigravity: always `--dangerously-skip-permissions`
 
 Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `debugger`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code, headless `edit` mode (`acceptEdits`) auto-denies all shell commands; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
-The TUI labels this boundary as `unsandboxed external CLI` before a direct run and `external host access` while work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
+The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger and all Agy runs, and shows `external host access` while workflow work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
 
 ## Quick start
 
@@ -76,10 +77,10 @@ Check the resulting setup:
 /external profiles
 ```
 
-Then delegate by naming the profile:
+Then delegate by role (the global default harness is initially `agy`):
 
 ```text
-Use the Agent tool with subagent_type "claude-explorer" to map this repository read-only.
+Use the Agent tool with role "explorer" and harness "claude" to map this repository read-only.
 ```
 
 ## Commands
@@ -90,8 +91,8 @@ All user commands use the `/external` namespace:
 |---|---|
 | `/external` | Show profile, workflow, and runtime-setting status |
 | `/external doctor` | Check settings, profiles, and configured CLI versions |
-| `/external settings` | Show effective concurrency and timeout settings |
-| `/external profiles` | List available external profiles |
+| `/external settings` | Show the default harness and effective runtime settings |
+| `/external profiles` | List configured external profiles |
 | `/external profile create` | Create and smoke-test a profile |
 | `/external profile clean-up` | Archive retired pi-flow default profiles |
 | `/external workflows` | List saved workflows |
@@ -141,21 +142,26 @@ Profiles created through `/external profile create` are stamped `owner: user`, a
 
 ### Default profiles
 
-On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — for each backend (18 profiles). Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster, such as debugger, can be added with `/external profile create`.
+On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend (18 files). The compact agent catalog advertises each role once rather than presenting 18 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster, such as debugger, can be added with `/external profile create`.
 
 Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 
 ## Agent usage
 
-A direct tool call requires `description`, `prompt`, and an explicit `subagent_type`:
+A direct tool call requires `description`, `prompt`, and either `role` or legacy exact-profile `subagent_type`. With `role`, `harness` is optional and defaults to the global `defaultHarness` setting:
 
 ```ts
 Agent({
   description: "Claude repository map",
   prompt: "Map this repository read-only and summarize important files.",
-  subagent_type: "claude-explorer",
+  role: "explorer",
+  harness: "claude",
 });
 ```
+
+Profiles named with their matching backend prefix expose the suffix as a built-in or custom role (`claude-security-reviewer` -> `security-reviewer`). Resolution always targets the exact `<harness>-<role>` profile and never falls back to another harness. If a role is unavailable, the error lists its supported harnesses. Existing calls may instead use `subagent_type` as a legacy exact-profile escape hatch; do not combine it with `role` or `harness`. Nonstandard profile names are exact-only.
+
+The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only profile names, and the default harness; it does not repeat profile descriptions or the workflow manual. Call `external_help` with topic `roles` for profile descriptions, `permissions` for harness caveats, or `workflow` for syntax, examples, and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. Catalog availability means a matching profile is configured, not that its CLI is installed or authenticated.
 
 External agents start fresh in the requested working directory. They do not inherit parent messages, tool results, or reasoning, so prompts must include all required context.
 
@@ -184,19 +190,21 @@ Workflows show access once at the workflow level, retain done/active/queued/fail
 
 ## Workflow usage
 
-The `workflow` tool runs trusted JavaScript that calls one or more external profiles and returns a JSON-serializable result. Every `agent()` child requires an explicit backend-qualified `subagent_type`.
+The `workflow` tool runs trusted JavaScript that calls one or more external roles and returns a JSON-serializable result. Every `agent()` child uses the same `role`/optional `harness` resolution as direct `Agent` calls, with legacy exact `subagent_type` also supported.
+
+Saved workflows are discovered on demand through `external_help({ topic: "workflow" })`; project `.pi/workflows` entries are included only when Pi reports the project trusted.
 
 Example request:
 
 ```text
-Use the workflow tool to ask "claude-explorer" for an architecture map and "codex-reviewer" for a risk review, then synthesize their findings.
+Use the workflow tool to ask role "explorer" on harness "claude" for an architecture map and role "reviewer" on harness "codex" for a risk review, then synthesize their findings.
 ```
 
 Direct `Agent` calls and workflow children share the same concurrency and timeout controls.
 
 ## Permission tiers, budgets, and resume
 
-Every `Agent` call and workflow `agent()` child accepts three optional parameters:
+Every `Agent` call and workflow `agent()` child also accepts three optional run parameters:
 
 - `permission`: `readonly` | `edit` | `danger` (default `danger`). Tiers map onto native harness mechanisms — Claude permission modes and Codex's single-axis `--sandbox`. Antigravity (`agy`) is different: its headless sandbox denies even read-only tools like `read_url_content`, and its only unsandboxed mode is `--dangerously-skip-permissions`, so **every agy run is unsandboxed** and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Getting out of the model's way is deliberate; every agy run discloses as `unsandboxed external CLI` rather than claiming a read-only boundary it cannot keep. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
 - `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag; codex and agy do not report cost, so the cap is recorded and marked `budget unenforceable` instead of pretended.
@@ -216,7 +224,8 @@ Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
+  "defaultHarness": "agy",
   "maxConcurrentSubagents": 12,
   "subagentTimeoutMs": 7200000,
   "defaultPermission": "danger",
@@ -225,7 +234,7 @@ Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
 }
 ```
 
-Version 1 files migrate on read: recognized keys carry over, unknown keys warn, invalid values fall back per-key. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
+Version 1 and 2 files migrate on read: recognized keys carry over, missing `defaultHarness` becomes `agy`, unknown keys warn, and invalid values fall back per-key. `defaultHarness` is global only; project overrides are deferred to issue #26. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
 
 Edit the file and run `/reload`. Startup flags override extension factory options, which override this file, which overrides built-in defaults.
 
@@ -252,7 +261,7 @@ Set `PI_FLOW_EXTERNAL_RUNS_DIR` to override the location. Each run contains:
 - `events.ndjson`: parsed structured backend events
 - `summary.json`: status, duration, usage, result, and record-integrity metadata
 
-Records are private to the local user but may still contain sensitive prompts, source excerpts, and tool output. Redaction is best-effort, and records are not rotated automatically.
+Records are private to the local user but may still contain sensitive prompts, source excerpts, and tool output. Redaction is best-effort. The retention sweep automatically prunes eligible completed records beyond `maxRunRecords`; active, interrupted, incomplete, or damaged records are retained.
 
 Summarize records from this checkout with:
 
@@ -266,6 +275,7 @@ A failed backend can still have complete diagnostic evidence. Treat `incompleteR
 ## Troubleshooting
 
 - **No external profiles:** run `/external profile create`, or verify that the profile is in `~/.pi/agent/subagents/` with a matching backend-qualified name.
+- **Role unavailable on the selected harness:** choose one of the supported harnesses listed in the error, or create the exact `<harness>-<role>` profile. The extension never substitutes another harness.
 - **CLI available but authentication fails:** authenticate that CLI directly; Pi and every external backend keep separate credentials.
 - **Claude rejects `--dangerously-skip-permissions` under root:** reload the current extension version; root runs use Claude's `auto` permission mode.
 - **Nested agent cannot find the repository:** include the repository's absolute path and required context in the prompt.

@@ -4,16 +4,16 @@
 
 This fork changes the original pi-flow contract: `Agent` is not a generic Pi subagent launcher. It delegates only to external Claude Code, Codex CLI, and Antigravity harnesses.
 
-- Ordinary driver tools: `Agent` and optional `workflow`. `pi_flow_profile_create` is active only inside `/external profile create`.
+- Ordinary driver tools: `Agent`, read-only `external_help`, and optional `workflow`. `pi_flow_profile_create` is active only inside `/external profile create`.
 - User operations use `/external`; `/pi-flow-profile create` is a temporary deprecated alias.
-- Extension-owned concurrency and timeout defaults live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`. Profile backend/model/thinking metadata remains in `subagents/*.md`.
-- Every `Agent` call requires `description`, `prompt`, and an explicit backend-qualified `subagent_type`.
+- Extension-owned concurrency, timeout, and global default-harness settings live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`. Profile backend/model/thinking metadata remains in `subagents/*.md`; project-specific harness defaults are deferred to issue #26.
+- Every `Agent` call requires `description`, `prompt`, and either `role` with optional `harness` (`agy`, `claude`, or `codex`) or the legacy exact-profile `subagent_type`. The selectors cannot be combined. Without `harness`, use the global `defaultHarness` setting (initially `agy`).
 - Valid profiles come from `~/.pi/agent/subagents/*.md` and set `backend: claude`, `backend: codex`, or `backend: agy`. Use matching names such as `claude-*`, `codex-*`, or `agy-*`; the assisted creator enforces that convention.
-- A default roster ships with the extension and seeds once on session start: five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker, one profile per backend. Seeding never overwrites existing files and respects later deletions. Roles outside the default roster (such as debugger) are user-created via `/external profile create`.
+- A default roster ships with the extension and seeds once on session start: five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker, one storage profile per backend (18 files, but six advertised roles). Seeding never overwrites existing files and respects later deletions. Roles outside the default roster (such as debugger) are user-created via `/external profile create`.
 - Profiles with `backend: pi` or a missing backend are filtered out and rejected; they belong to Pi's native subagent system and this extension never modifies them.
 - `/external profile clean-up` archives only this extension's own retired default profiles (currently the former `debugger` role) to `subagents/archive/` after user confirmation. Profiles tagged `owner: user` (stamped automatically by `/external profile create`) are the user's property and are never archived, nor are native Pi profiles.
 - Use Pi's native subagent system for Pi-backed scout/reviewer/planner/worker/oracle work.
-- External backends use their own tools and dangerous/no-approval modes. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Antigravity (`agy`) has no granular headless permission mode — its default sandbox denies even read-only tools — so every agy run is unsandboxed (`--dangerously-skip-permissions`) and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Run them only in trusted repositories and state whether the task is read-only or may edit files.
+- External backends use their own tools and permission mechanisms. Codex tiers map to its `--sandbox` axis. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Antigravity (`agy`) has no granular headless permission mode — its default sandbox denies even read-only tools — so every agy run is unsandboxed (`--dangerously-skip-permissions`) and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Run them only in trusted repositories and state whether the task is read-only or may edit files.
 - Prompts must be self-contained because children do not inherit parent conversation, tool results, or reasoning.
 - Backend-native nested agents may use a different workspace. Include explicit absolute paths and required context when asking an external backend to delegate further.
 
@@ -30,12 +30,13 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - Success requires a recognized backend terminal-success event, a zero process exit, and a non-empty result.
 - A backend failure with a complete local record is different from an incomplete or damaged record; preserve that distinction in reports.
 - Normal runs write private best-effort evidence under `~/.pi/agent/pi-flow-external/runs/` or `PI_FLOW_EXTERNAL_RUNS_DIR`. Records may still contain sensitive prompts, excerpts, and tool output despite redaction.
+- Settings retention automatically prunes eligible completed records beyond `maxRunRecords`; active, interrupted, incomplete, and damaged records are not eligible.
 - Structured nested-agent activity may extend the wall-clock deadline once, by one fresh base timeout, capped at twice the original deadline.
 - Do not automatically retry failed or aborted external runs. Preserve the receipt and retry only when the user asks. Exception: the agy backend retries once on infrastructure-classified failures (auth, eligibility, network); the retry is disclosed in the receipt details (`retries`, `retryOf`) and never applies to agent-level failures, aborts, or timeouts.
 
 ## Workflow contract
 
-`workflow` remains trusted JavaScript orchestration over the same external-only profile roster. Every workflow `agent()` child needs an explicit backend-qualified `subagent_type`.
+`workflow` remains trusted JavaScript orchestration over the same external-only role roster. Every workflow `agent()` child uses the same `role`/optional `harness` resolution as `Agent`, with legacy exact-profile `subagent_type` available as an escape hatch.
 
 Use workflows for requested fan-out or multi-agent orchestration across Claude/Codex/Antigravity lanes. Do not route native Pi subagents through `workflow`.
 
