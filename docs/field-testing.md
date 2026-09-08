@@ -67,6 +67,17 @@ jq -e '.summary.status == "done" and
   "$PI_FLOW_EXTERNAL_RUNS_DIR"/run_*/summary.json
 ```
 
+## Change-triggered context transfer check
+
+Run only when parent-context selection or serialization changes. In one fresh Pi session against a read-only fixture, delegate once with `context: { mode: "recent", turns: 1 }` and verify the child still returns the expected marker, the run has one complete `done` receipt, and that `summary.json` reports the matching `context` block:
+
+```bash
+jq -e '.summary.context.mode == "recent" and .summary.context.requestedTurns == 1 and .summary.context.sharedTurns >= 1' \
+  "$PI_FLOW_EXTERNAL_RUNS_DIR"/run_*/summary.json
+```
+
+Local fixture tests own selection, boundary, and failure behavior; this check only proves a real backend tolerates the transferred block.
+
 Do not run damaged-record and expected-failure provider scenarios manually. Their behavior is deterministic and belongs in the local fixture tests.
 
 ## Release minimum

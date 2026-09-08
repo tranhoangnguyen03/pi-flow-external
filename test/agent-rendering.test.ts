@@ -68,6 +68,9 @@ describe("delegation transparency rendering", () => {
     expect(callText).toContain("Task Map repository architecture");
     expect(callText).toContain("Why Repository exploration through Claude Code.");
     expect(callText).toContain(`Workspace ${cwd}`);
+    expect(callText).not.toContain("Context");
+    const sharedCall = tool.renderCall?.({ ...callArgs, context: { mode: "recent", turns: 5 } }, theme, { ...callContext, state: {} });
+    expect(renderToText(sharedCall!)).toContain("Context recent · up to 5 user turns");
 
     unlinkSync(profilePath);
     const cachedCall = tool.renderCall?.(callArgs, theme, callContext);
@@ -86,6 +89,13 @@ describe("delegation transparency rendering", () => {
       { cwd },
     );
     expect(renderToText(live!)).toContain("external host access");
+    const sharedLive = tool.renderResult?.(
+      { content: [{ type: "text", text: "running" }], details: { ...running, context: { mode: "recent", requestedTurns: 5, sharedTurns: 2, messages: 6, bytes: 512, compacted: false } } },
+      { expanded: false, isPartial: true },
+      theme,
+      { cwd },
+    );
+    expect(renderToText(sharedLive!)).toContain("context recent 2/5 turns");
 
     const details: SubagentToolDetails = {
       ...running,

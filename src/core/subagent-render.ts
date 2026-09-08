@@ -133,7 +133,12 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
   if (showAccess && isActiveSubagentStatus(node.status)) {
     parts.push("external host access");
   }
-  if (node.context) parts.push(`context ${node.context.mode} (${node.context.sharedTurns} turns)`);
+  if (node.context) {
+    const shared = node.context;
+    parts.push(shared.mode === "recent"
+      ? `context recent ${shared.sharedTurns}/${shared.requestedTurns} turns`
+      : `context full ${shared.sharedTurns} turns`);
+  }
   if (node.permission && node.permission !== "danger") {
     parts.push(node.permissionEnforced === false ? `${node.permission} (advisory)` : node.permission);
   }

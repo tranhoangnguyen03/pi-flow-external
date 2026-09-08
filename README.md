@@ -198,9 +198,12 @@ Direct calls keep their intent card visible during execution:
 Delegating Claude Code → claude-explorer · unsandboxed external CLI
 Task Map repository architecture
 Why Repository exploration through Claude Code.
+Context recent · up to 5 user turns
 Workspace /path/to/project
 ⠋ Claude Code(claude-explorer, Map repository architecture) external host access · 12s
 ```
+
+The `Context` line appears only when the parent shares conversation content, so extra data leaving for the external harness is visible before the run. Completed rows summarize what was actually shared (`context recent 4/5 turns`).
 
 Completed rows show a short evidence identifier and result preview. Press **Ctrl+O** (the default tool-expansion binding) to reveal the local record path plus structured backend-event count:
 
@@ -227,11 +230,11 @@ Direct `Agent` calls and workflow children share the same concurrency and timeou
 
 ## Permission tiers, budgets, and resume
 
-Every `Agent` call and workflow `agent()` child also accepts three optional run parameters:
+Every `Agent` call and workflow `agent()` child also accepts these optional run parameters (`context` is covered under agent usage above):
 
 - `permission`: `readonly` | `edit` | `danger` (default `danger`). Tiers map onto native harness mechanisms — Claude permission modes and Codex's single-axis `--sandbox`. Antigravity (`agy`) is different: its headless sandbox denies even read-only tools like `read_url_content`, and its only unsandboxed mode is `--dangerously-skip-permissions`, so **every agy run is unsandboxed** and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Getting out of the model's way is deliberate; every agy run discloses as `unsandboxed external CLI` rather than claiming a read-only boundary it cannot keep. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
 - `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag; codex and agy do not report cost, so the cap is recorded and marked `budget unenforceable` instead of pretended.
-- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you.
+- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you. `resume` cannot be combined with `context` sharing — continue an existing child, or start a new one with a snapshot.
 
 Resolution order for tiers and budgets: call > profile frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
 
@@ -302,6 +305,7 @@ A failed backend can still have complete diagnostic evidence. Treat `incompleteR
 - **CLI available but authentication fails:** authenticate that CLI directly; Pi and every external backend keep separate credentials.
 - **Claude rejects `--dangerously-skip-permissions` under root:** reload the current extension version; root runs use Claude's `auto` permission mode.
 - **Nested agent cannot find the repository:** include the repository's absolute path and required context in the prompt.
+- **Child is missing earlier decisions:** share the smallest sufficient parent context (`context: { mode: "recent", turns: N }` or `{ mode: "full" }`), or restate the missing decisions in the prompt.
 - **Run failed with complete records:** inspect the run's `summary.json` and `events.ndjson`; do not retry automatically unless requested.
 - **Sensitive content appears in evidence:** remove the affected run directory. Local redaction is not a secrecy boundary.
 

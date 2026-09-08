@@ -190,6 +190,17 @@ function formatSelectionForDisplay(args: Record<string, unknown>, defaultHarness
   return "profile";
 }
 
+// Disclose parent-context sharing on the intent card: it sends conversation
+// content to the external harness, so it belongs with access and workspace.
+function formatSharedContext(value: unknown): string {
+  if (!isRecord(value)) return "";
+  if (value.mode === "full") return "full available conversation";
+  if (value.mode === "recent") {
+    return `recent · up to ${typeof value.turns === "number" ? value.turns : "?"} user turns`;
+  }
+  return "";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
@@ -514,6 +525,7 @@ function createAgentTool(
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}${elevatedNote}`,
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
         profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
+        formatSharedContext(args.context) ? `${theme.fg("muted", "Context")} ${formatSharedContext(args.context)}` : "",
         context.cwd ? `${theme.fg("muted", "Workspace")} ${context.cwd}` : "",
       ].filter(Boolean);
       return new Text(lines.join("\n"), 0, 0);

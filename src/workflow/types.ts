@@ -15,6 +15,7 @@ export interface WorkflowMeta {
 
 /** A single agent() invocation requested by a workflow script. */
 export interface WorkflowAgentCall {
+  /** Receipt for the frozen parent snapshot this child received, when sharing was requested. */
   context?: ParentContextReceipt;
   index?: number;
   prompt: string;
