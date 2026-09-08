@@ -35,7 +35,7 @@ npm audit --omit=dev --audit-level=high
 
 Inspect the dry-run manifest. Confirm the expected version and required files, including `index.ts`, `README.md`, runtime sources, `scripts/field-report.mjs`, and operational docs. Development E2E scripts and tests must not be shipped. Runtime vulnerabilities block release; do not use `npm audit fix --force` as an automatic release step.
 
-Run the essential real-provider gate from [`field-testing.md`](field-testing.md): all three direct backends and one workflow. Run the nested timeout scenario only when nested detection or timeout behavior changed.
+Run the essential real-provider gate from [`field-testing.md`](field-testing.md): all three direct backends and one workflow. Also run its natural-language routing smoke when discovery or coordinator guidance changed, and its nested timeout scenario when nested detection or timeout behavior changed.
 
 ## 4. Review and merge the version bump
 

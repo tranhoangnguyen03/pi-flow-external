@@ -10,15 +10,15 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
-  AGENT_PROMPT_GUIDELINES,
   AGENT_PROMPT_SNIPPET,
   buildCoordinatorPrompt,
-  buildWorkflowPrompt,
 } from "./prompts.ts";
+import { createExternalHelpTool } from "./external-help.ts";
 import {
   filterExternalAgentProfiles,
   formatExternalAgentPolicyError,
   getSubagentProfiles,
+  resolveExternalProfile,
 } from "./profiles.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
@@ -30,19 +30,18 @@ import { createProgressNode, textResult, type AgentToolResult } from "./core/pro
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
-import { listSavedWorkflows } from "./workflow/registry.ts";
 import { registerProfileCreator, startProfileInterview } from "./profile-creator.ts";
 import { seedDefaultProfiles } from "./defaults.ts";
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveExternalSettings } from "./settings.ts";
 import type {
   PermissionTier,
+  ExternalHarness,
   SubagentBackend,
   SubagentExtensionOptions,
   SubagentProfile,
   SubagentProgressNode,
   SubagentToolDetails,
-  SubagentType,
   SubagentUsage,
 } from "./types.ts";
 
@@ -52,25 +51,24 @@ const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const STATUS_KEY = "pi-flow";
 
-function isProjectTrusted(ctx: ExtensionContext): boolean {
-  try {
-    return ctx.isProjectTrusted();
-  } catch {
-    return false;
-  }
-}
-
 const agentToolParameters = Type.Object({
   description: Type.String({
     description: "A short 3-5 word description of the task, used for UI display and routing context.",
   }),
   prompt: Type.String({
-    description: "The self-contained task briefing to send to the subagent.",
+    description: "The task briefing to send to the subagent.",
   }),
-  subagent_type: Type.String({
+  role: Type.Optional(Type.String({
     minLength: 1,
-    description: "The external subagent profile to use. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md and must use backend: claude, backend: codex, or backend: agy.",
-  }),
+    description: "The built-in or custom external role to use, such as reviewer. Required unless using legacy subagent_type.",
+  })),
+  harness: Type.Optional(Type.Union([Type.Literal("agy"), Type.Literal("claude"), Type.Literal("codex")], {
+    description: "Optional external harness override. Omit to use the global defaultHarness setting.",
+  })),
+  subagent_type: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Legacy exact-profile escape hatch. Cannot be combined with role or harness.",
+  })),
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
@@ -90,6 +88,14 @@ const agentToolParameters = Type.Object({
         "Prior run id (from a completed result's evidence id) whose backend conversation should be continued. Must use the same profile backend.",
     }),
   ),
+}, {
+  anyOf: [
+    { required: ["role"], not: { required: ["subagent_type"] } },
+    {
+      required: ["subagent_type"],
+      not: { anyOf: [{ required: ["role"] }, { required: ["harness"] }] },
+    },
+  ],
 });
 
 type AgentToolParams = Static<typeof agentToolParameters>;
@@ -97,7 +103,7 @@ type AgentToolParams = Static<typeof agentToolParameters>;
 type AgentRenderProfile = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
 
 interface AgentRenderState {
-  profileType?: string;
+  selectionKey?: string;
   profile?: AgentRenderProfile;
 }
 
@@ -106,6 +112,7 @@ interface DelegationState {
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
   defaultPermission: PermissionTier;
+  defaultHarness: ExternalHarness;
   defaultMaxBudgetUsd: number | undefined;
   maxRunRecords: number;
   progressEnabled: boolean;
@@ -130,6 +137,7 @@ interface CreateAgentToolOptions {
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
   getDefaultPermission: () => PermissionTier;
+  getDefaultHarness: () => ExternalHarness;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
 }
 
@@ -171,16 +179,13 @@ function normalizeSubagentTimeoutMs(value: number | string | boolean | undefined
   return parsed;
 }
 
-function normalizeSubagentType(value: string): SubagentType {
-  return value.trim();
-}
-
-function formatSubagentTypeForDisplay(value: unknown): string {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : "profile";
-}
-
-function formatProfileNames(profiles: Map<string, SubagentProfile>): string {
-  return [...profiles.keys()].join(", ");
+function formatSelectionForDisplay(args: Record<string, unknown>, defaultHarness: ExternalHarness): string {
+  if (typeof args.subagent_type === "string" && args.subagent_type.trim()) return args.subagent_type.trim();
+  if (typeof args.role === "string" && args.role.trim()) {
+    const harness = typeof args.harness === "string" && args.harness.trim() ? args.harness.trim() : defaultHarness;
+    return `${harness}-${args.role.trim()}`;
+  }
+  return "profile";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -323,9 +328,8 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Delegate to an external Claude Code, Codex CLI, or Antigravity subagent profile from ~/.pi/agent/subagents/*.md. Prompts must be self-contained.",
+    description: "Delegate one task to an external Claude Code, Codex CLI, or Antigravity role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
-    promptGuidelines: AGENT_PROMPT_GUIDELINES,
     parameters: agentToolParameters,
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -336,19 +340,26 @@ function createAgentTool(
       };
       const allProfiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
       const profiles = filterExternalAgentProfiles(allProfiles);
-      const subagentType = normalizeSubagentType(params.subagent_type);
-      const profile = profiles.get(subagentType);
-      if (!profile) {
+      let profile: SubagentProfile;
+      try {
+        profile = resolveExternalProfile(profiles, {
+          role: params.role,
+          harness: params.harness,
+          subagentType: params.subagent_type,
+        }, effectiveState.defaultHarness);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         return textResult(
-          `Unknown external subagent_type "${subagentType}". Available external agents: ${formatProfileNames(profiles)}. Use the native subagent system for Pi-backed agents.`,
+          message,
           {
             description: params.description,
             subagentType: "unknown",
             status: "error",
-            error: "Unknown external subagent_type",
+            error: message,
           },
         );
       }
+      const subagentType = profile.name;
 
       if (profile.backend === "pi") {
         const error = formatExternalAgentPolicyError(profile);
@@ -460,11 +471,21 @@ function createAgentTool(
       }
     },
     renderCall(args, theme, context) {
-      const subagentType = formatSubagentTypeForDisplay(args.subagent_type);
+      const subagentType = formatSelectionForDisplay(args, options.getDefaultHarness());
       const state = context.state as AgentRenderState;
-      if (state.profileType !== subagentType) {
-        const profile = subagentType === "profile" ? undefined : getSubagentProfiles(getAgentDir()).get(subagentType);
-        state.profileType = subagentType;
+      const selectionKey = JSON.stringify([args.role, args.harness, args.subagent_type, options.getDefaultHarness()]);
+      if (state.selectionKey !== selectionKey) {
+        let profile: SubagentProfile | undefined;
+        try {
+          profile = resolveExternalProfile(filterExternalAgentProfiles(getSubagentProfiles(getAgentDir())), {
+            role: typeof args.role === "string" ? args.role : undefined,
+            harness: typeof args.harness === "string" ? args.harness : undefined,
+            subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
+          }, options.getDefaultHarness());
+        } catch {
+          profile = undefined;
+        }
+        state.selectionKey = selectionKey;
         state.profile = profile
           ? { name: profile.name, backend: profile.backend, description: profile.description, permission: profile.permission }
           : undefined;
@@ -537,6 +558,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       maxConcurrentSubagents: defaultMaxConcurrentSubagents,
       subagentTimeoutMs: defaultSubagentTimeoutMs,
       defaultPermission: loadedSettings.settings.defaultPermission,
+      defaultHarness: loadedSettings.settings.defaultHarness,
       defaultMaxBudgetUsd: loadedSettings.settings.defaultMaxBudgetUsd ?? undefined,
       maxRunRecords: loadedSettings.settings.maxRunRecords,
       progressEnabled: false,
@@ -566,6 +588,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
       getDefaultPermission: () => rootState.defaultPermission,
+      getDefaultHarness: () => rootState.defaultHarness,
       updateStatus: (ctx, toolCallId, usage) => {
         if (!ctx.hasUI) {
           return;
@@ -575,6 +598,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
 
     pi.registerTool(createAgentTool(syncMaxConcurrentSubagents, toolOptions));
+    pi.registerTool(createExternalHelpTool({
+      getDefaultHarness: () => rootState.defaultHarness,
+      workflowEnabled,
+    }));
     registerProfileCreator(pi, toolOptions);
     registerExternalCommand(pi, {
       settings: loadedSettings,
@@ -595,6 +622,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
           getDefaultPermission: () => rootState.defaultPermission,
+          getDefaultHarness: () => rootState.defaultHarness,
           getDefaultMaxBudgetUsd: () => rootState.defaultMaxBudgetUsd,
           updateStatus: (ctx, toolCallId, usage) => {
             if (!ctx.hasUI) {
@@ -633,16 +661,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       // finally. Acquisition is synchronous and release always runs, so the
       // in-flight count stays accurate across turns without a reset.
       const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
-      const sections = [event.systemPrompt, buildCoordinatorPrompt(profiles)];
-      if (workflowEnabled && tools.some((tool) => tool.name === "workflow")) {
-        const savedWorkflows = listSavedWorkflows({
-          agentDir: getAgentDir(),
-          cwd: ctx.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        });
-        sections.push(buildWorkflowPrompt(profiles, savedWorkflows));
-      }
-      return { systemPrompt: sections.join("\n\n") };
+      return { systemPrompt: `${event.systemPrompt}\n\n${buildCoordinatorPrompt(profiles, rootState.defaultHarness)}` };
     });
   };
 }

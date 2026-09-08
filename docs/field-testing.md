@@ -49,6 +49,12 @@ npm run e2e -- --backend codex --workflow
 
 This runs two children through one workflow and requires two complete receipts. One backend is enough because direct backend checks validate adapter-specific transport.
 
+## Natural-language routing smoke
+
+When role discovery, tool descriptions, or coordinator guidance changes, run three fresh Pi sessions against the current checkout and a read-only fixture. Ask for two named harnesses to review, two named harnesses to research, and a task split between Pi plus two named harnesses. For each session, verify that each requested external harness produced one complete `done` receipt through `role` plus `harness`, no help/discovery call was needed for the built-in roles, and the fixture stayed unchanged.
+
+This is a qualitative trigger smoke, not a statistical regression comparison or a model-independent guarantee. It does not cover workflow routing or the omitted-`harness` default; use the workflow receipt above and a separate direct role request without `harness` for those paths.
+
 ## Change-triggered nested timeout check
 
 Run a real nested-agent timeout scenario only when nested-event detection or timeout-extension code changes. Use an Agy profile that invokes one native subagent, set a short bounded timeout, and verify the latest `summary.json`:
@@ -70,5 +76,6 @@ Before a runtime release:
 1. Run `npm run check`.
 2. Run all three direct backend receipts.
 3. Run one workflow receipt.
-4. Run the nested timeout check only if nested detection or timeout behavior changed.
-5. Remove temporary evidence and profiles.
+4. Run the natural-language routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
+5. Run the nested timeout check only if nested detection or timeout behavior changed.
+6. Remove temporary evidence and profiles.

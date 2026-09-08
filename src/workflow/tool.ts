@@ -12,9 +12,9 @@ import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode }
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles } from "../profiles.ts";
-import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import type { PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
+import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
+import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
+import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
 import type { WorkflowAgentRunner } from "./types.ts";
@@ -31,6 +31,7 @@ export interface CreateWorkflowToolOptions {
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
   getDefaultPermission: () => PermissionTier;
+  getDefaultHarness: () => ExternalHarness;
   getDefaultMaxBudgetUsd: () => number | undefined;
 }
 
@@ -89,10 +90,8 @@ export function createWorkflowTool(
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description:
-      "Run a saved, session-persisted, or ad-hoc trusted JavaScript workflow that orchestrates multiple subagents with agent(), parallel(), and pipeline(), then synthesizes their results. Provide exactly one of `name` (saved workflow), `scriptPath` (persisted script), or `script` (raw JavaScript starting with `export const meta = { name, description }`). Use `resumeFromRunId` with `scriptPath` to reuse cached agent results for the longest unchanged prefix. Every workflow must call agent() at least once.",
+    description: "Run a saved, persisted, or ad-hoc trusted JavaScript workflow that orchestrates external roles.",
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
-    promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: workflowToolParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const prepared = await prepareWorkflowToolSource(params, ctx);
@@ -277,6 +276,11 @@ export function createWorkflowTool(
           limiter: options.getLimiter(),
           runAgent,
           defaultSubagentType: null,
+          resolveSubagentType: (selection) => resolveExternalProfile(
+            profiles,
+            selection,
+            options.getDefaultHarness(),
+          ).name,
           resumeAgentResults,
           onLog: (message) => {
             snapshot.logs.push(message);

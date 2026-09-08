@@ -31,21 +31,21 @@ describe("external settings", () => {
     expect(first.diagnostics).toEqual([]);
     expect(statSync(first.path).mode & 0o777).toBe(0o600);
 
-    writeFileSync(first.path, original.replace("12", "7"));
-    expect(loadExternalSettings(root).settings.maxConcurrentSubagents).toBe(7);
+    writeFileSync(first.path, original.replace('"agy"', '"claude"').replace("12", "7"));
+    expect(loadExternalSettings(root).settings).toMatchObject({ defaultHarness: "claude", maxConcurrentSubagents: 7 });
   });
 
   it("uses safe defaults and diagnostics for invalid files", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
-    writeFileSync(loaded.path, '{"version":1,"maxConcurrentSubagents":0,"subagentTimeoutMs":"forever","extra":true}\n');
+    writeFileSync(loaded.path, '{"version":1,"defaultHarness":"gemini","maxConcurrentSubagents":0,"subagentTimeoutMs":"forever","extra":true}\n');
 
     const invalid = loadExternalSettings(root);
     expect(invalid.settings).toEqual(DEFAULT_EXTERNAL_SETTINGS);
-    expect(invalid.diagnostics.join(" ")).toMatch(/maxConcurrentSubagents|subagentTimeoutMs|Unknown setting/);
+    expect(invalid.diagnostics.join(" ")).toMatch(/defaultHarness|Unknown setting/);
   });
 
-  it("migrates a valid v1 file on read and fills v2 defaults", () => {
+  it("migrates a valid v1 file on read and fills current defaults", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
     writeFileSync(loaded.path, `${JSON.stringify({
@@ -56,7 +56,8 @@ describe("external settings", () => {
 
     const migrated = loadExternalSettings(root);
     expect(migrated.settings).toEqual({
-      version: 2,
+      version: 3,
+      defaultHarness: "agy",
       maxConcurrentSubagents: 7,
       subagentTimeoutMs: 600_000,
       defaultPermission: "danger",

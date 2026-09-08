@@ -122,7 +122,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Agy review",
-        subagent_type: "agy-reviewer",
+        role: "reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       (context) => {

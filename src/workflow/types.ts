@@ -89,6 +89,8 @@ export interface RunWorkflowOptions {
   limiter: ConcurrencyLimiter;
   runAgent: WorkflowAgentRunner;
   defaultSubagentType?: string | null;
+  /** Resolve role/harness or legacy exact-profile selection before queueing and fingerprinting. */
+  resolveSubagentType?: (selection: { role?: string; harness?: string; subagentType?: string }) => string;
   limits?: Partial<WorkflowLimits>;
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;

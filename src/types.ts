@@ -1,7 +1,9 @@
 import type { WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
-export type SubagentBackend = "pi" | "codex" | "claude" | "agy";
+export const EXTERNAL_HARNESSES = ["agy", "claude", "codex"] as const;
+export type ExternalHarness = (typeof EXTERNAL_HARNESSES)[number];
+export type SubagentBackend = "pi" | ExternalHarness;
 export type ThinkingLevel = string;
 
 /**

@@ -152,10 +152,18 @@ export async function runWorkflow<T = unknown>(
     const taskPrompt = requireString(prompt, "agent prompt");
     const opts = normalizeAgentOptions(agentOptions);
     const assignedPhase = opts.phase ?? state.currentPhase;
-    const trimmedSubagentType = opts.subagentType?.trim();
-    const subagentType = trimmedSubagentType || defaultSubagentType;
+    let subagentType: string | null | undefined;
+    try {
+      subagentType = options.resolveSubagentType
+        ? options.resolveSubagentType({ role: opts.role, harness: opts.harness, subagentType: opts.subagentType })
+        : opts.subagentType?.trim() || defaultSubagentType;
+    } catch (error) {
+      const fatal = new WorkflowFatalError(error instanceof Error ? error.message : String(error));
+      abortRuntime(fatal);
+      throw fatal;
+    }
     if (!subagentType?.trim()) {
-      const error = new WorkflowFatalError("agent subagent_type is required");
+      const error = new WorkflowFatalError("agent role or legacy subagent_type is required");
       abortRuntime(error);
       throw error;
     }
@@ -419,4 +427,3 @@ function normalizeWorkflowLimits(limits: Partial<WorkflowLimits> | undefined): W
   }
   return normalized;
 }
-

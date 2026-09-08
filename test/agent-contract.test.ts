@@ -57,6 +57,8 @@ describe("pi-subagent agent contract", () => {
     const properties = (tool?.parameters as { properties: Record<string, unknown> } | undefined)?.properties;
     expect(properties).toHaveProperty("description");
     expect(properties).toHaveProperty("prompt");
+    expect(properties).toHaveProperty("role");
+    expect(properties).toHaveProperty("harness");
     expect(properties).toHaveProperty("subagent_type");
     expect(properties).not.toHaveProperty("run_in_background");
     expect(properties).not.toHaveProperty("model");
@@ -64,28 +66,30 @@ describe("pi-subagent agent contract", () => {
     expect(properties).not.toHaveProperty("timeout");
     expect(properties).not.toHaveProperty("subagentTimeoutMs");
     expect(tool?.description).toContain("external Claude Code, Codex CLI, or Antigravity");
-    expect(tool?.promptGuidelines).toContain(
-      "Reach for Agent only when the user asks for Claude Code/Codex/Antigravity delegation or an available external profile matches the task.",
-    );
-    expect(tool?.promptGuidelines).toContain(
-      "Every Agent call requires an explicit backend-qualified subagent_type.",
-    );
-    expect(tool?.promptGuidelines).toContain(
-      "Do not automatically retry a failed or aborted external run; preserve its evidence and retry only when the user asks.",
+    expect(tool?.promptGuidelines).toBeUndefined();
+
+    const help = session.getAllTools().find((candidate) => candidate.name === "external_help");
+    expect(help?.description).toContain("Read-only help");
+    expect((help?.parameters as { properties: Record<string, unknown> }).properties).toEqual(
+      expect.objectContaining({ topic: expect.anything(), harness: expect.anything() }),
     );
 
     disposeSession(session);
   });
 
-  it("marks description, prompt, and subagent_type required, and adds no tag/label fields", async () => {
+  it("requires description and prompt while exposing role-first and legacy selectors", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
-    const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown> } | undefined;
+    const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown>; anyOf?: unknown[] } | undefined;
     expect(schema?.required).toContain("description");
     expect(schema?.required).toContain("prompt");
-    expect(schema?.required).toContain("subagent_type");
+    expect(schema?.required).not.toContain("role");
+    expect(schema?.required).not.toContain("harness");
+    expect(schema?.required).not.toContain("subagent_type");
+    expect(schema?.properties.role).toMatchObject({ type: "string", minLength: 1 });
     expect(schema?.properties.subagent_type).toMatchObject({ type: "string", minLength: 1 });
+    expect(schema?.anyOf).toHaveLength(2);
     expect(schema?.properties).not.toHaveProperty("tag");
     expect(schema?.properties).not.toHaveProperty("label");
 
@@ -128,37 +132,70 @@ describe("pi-subagent agent contract", () => {
 
     await session.prompt("Just say noted.");
 
-    expect(rootContext?.systemPrompt).toContain("Agent is for external Claude Code, Codex CLI, and Antigravity profiles only");
-    expect(rootContext?.systemPrompt).toContain("Every Agent call requires an explicit backend-qualified subagent_type");
-    expect(rootContext?.systemPrompt).toContain("Do not automatically retry a failed or aborted external run");
+    expect(rootContext?.systemPrompt).toContain("# External delegation");
+    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex");
+    expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
+    expect(getToolNames(rootContext)).toContain("external_help");
     expect(getToolNames(rootContext)).toContain("workflow");
     expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
 
     disposeSession(session);
   });
 
-  it("advertises saved workflows in the root system prompt", async () => {
+  it("discovers saved workflows through help without trusting project workflows implicitly", async () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "audit.js"),
       `export const meta = { name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
     );
+    mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "workflows", "project.js"),
+      `export const meta = { name: 'project-review', description: 'Project-only review.' };\nreturn await agent('review');`,
+    );
 
-    const { session, registration } = await createSession();
-    let rootContext: Context | undefined;
+    const { session, model, modelRegistry } = await createSession();
+    const help = session.getToolDefinition("external_help") as any;
+    const execute = (projectTrusted: boolean) => help.execute(
+      "workflow-help",
+      { topic: "workflow" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry, projectTrusted }),
+    );
+    const untrusted = await execute(false);
+    expect(untrusted.content[0].text).toContain("audit-todos (global)");
+    expect(untrusted.content[0].text).not.toContain("project-review");
+    const trusted = await execute(true);
+    expect(trusted.content[0].text).toContain("project-review (project)");
 
-    registration.setResponses([
-      (context) => {
-        rootContext = context;
-        return fauxAssistantMessage("noted");
-      },
-    ]);
+    disposeSession(session);
+  });
 
-    await session.prompt("Can you clean up technical debt?");
+  it("returns role descriptions and exact-profile availability through help", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "subagents", "claude-security-reviewer.md"),
+      "---\ndescription: Custom security review through Claude.\nbackend: claude\n---\n\nReview security read-only.\n",
+    );
+    writeFileSync(
+      join(agentDir, "subagents", "specialist.md"),
+      "---\ndescription: Exact-only Codex specialist.\nbackend: codex\n---\n\nSpecialist task.\n",
+    );
 
-    expect(rootContext?.systemPrompt).toContain("Saved workflows");
-    expect(rootContext?.systemPrompt).toContain("audit-todos: Find TODOs and summarize debt. Use before cleanup planning.");
+    const { session, model, modelRegistry } = await createSession();
+    const help = session.getToolDefinition("external_help") as any;
+    const result = await help.execute(
+      "role-help",
+      { topic: "roles" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    );
+    expect(result.content[0].text).toContain("security-reviewer (claude)");
+    expect(result.content[0].text).toContain("claude-security-reviewer: Custom security review through Claude.");
+    expect(result.content[0].text).toContain("specialist (codex): Exact-only Codex specialist.");
 
     disposeSession(session);
   });

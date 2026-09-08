@@ -19,7 +19,8 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles } from "../src/profiles.ts";
+import { getSubagentProfiles, resolveExternalProfile } from "../src/profiles.ts";
+import type { SubagentProfile } from "../src/types.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
 import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
@@ -250,5 +251,41 @@ Arbitrary Claude model prompt.`);
       thinking: "max",
       systemPrompt: "Arbitrary Claude model prompt.",
     });
+  });
+});
+
+describe("role-first profile resolution", () => {
+  const profile = (name: string, backend: "agy" | "claude" | "codex"): SubagentProfile => ({
+    name,
+    backend,
+    description: `${name} profile`,
+  });
+  const profiles = new Map([
+    ["agy-reviewer", profile("agy-reviewer", "agy")],
+    ["codex-reviewer", profile("codex-reviewer", "codex")],
+    ["claude-security", profile("claude-security", "claude")],
+    ["specialist", profile("specialist", "codex")],
+  ]);
+
+  it("resolves built-in and custom roles through the default or explicit harness", () => {
+    expect(resolveExternalProfile(profiles, { role: "reviewer" }, "agy").name).toBe("agy-reviewer");
+    expect(resolveExternalProfile(profiles, { role: "reviewer" }, "codex").name).toBe("codex-reviewer");
+    expect(resolveExternalProfile(profiles, { role: "reviewer", harness: "codex" }, "agy").name).toBe("codex-reviewer");
+    expect(resolveExternalProfile(profiles, { role: "security", harness: "claude" }, "agy").name).toBe("claude-security");
+  });
+
+  it("never falls back to a harness where the role happens to exist", () => {
+    expect(() => resolveExternalProfile(profiles, { role: "security" }, "agy"))
+      .toThrow(/unavailable for harness "agy".*Supported harnesses for this role: claude/);
+  });
+
+  it("keeps nonstandard names exact-only and rejects ambiguous selectors", () => {
+    expect(resolveExternalProfile(profiles, { subagentType: "specialist" }, "agy").name).toBe("specialist");
+    expect(() => resolveExternalProfile(profiles, { role: "specialist" }, "agy"))
+      .toThrow(/Unknown external role.*Nonstandard profile names.*legacy subagent_type/);
+    expect(() => resolveExternalProfile(profiles, { role: "reviewer", subagentType: "agy-reviewer" }, "agy"))
+      .toThrow(/do not combine/);
+    expect(() => resolveExternalProfile(profiles, { harness: "claude" }, "agy"))
+      .toThrow(/role is required when harness is provided/);
   });
 });

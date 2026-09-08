@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Theme } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import type { WorkflowToolDetails } from "../src/types.ts";
@@ -15,6 +15,8 @@ import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workfl
 import { createWorkflowTool } from "../src/workflow/tool.ts";
 import { loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
+import { resolveExternalProfile } from "../src/profiles.ts";
+import type { SubagentProfile } from "../src/types.ts";
 
 const META = "export const meta = { name: 'wf', description: 'a workflow' };\n";
 
@@ -188,7 +190,7 @@ describe("runWorkflow", () => {
         runAgent: echo,
         defaultSubagentType: null,
       }),
-    ).rejects.toThrow(/agent subagent_type is required/);
+    ).rejects.toThrow(/agent role or legacy subagent_type is required/);
   });
 
   it("trims explicit subagent_type when the configured default is null", async () => {
@@ -205,6 +207,70 @@ describe("runWorkflow", () => {
 
     expect(seen).toEqual(["claude-reviewer"]);
     expect(result.result).toBe("claude-reviewer");
+  });
+
+  it("resolves role/harness before workflow events and fingerprints", async () => {
+    const profile = (name: string, backend: "agy" | "codex"): SubagentProfile => ({ name, backend, description: name });
+    const profiles = new Map([
+      ["agy-reviewer", profile("agy-reviewer", "agy")],
+      ["codex-reviewer", profile("codex-reviewer", "codex")],
+    ]);
+    const resolveSubagentType = (selection: { role?: string; harness?: string; subagentType?: string }) =>
+      resolveExternalProfile(profiles, selection, "agy").name;
+    const firstEvents: any[] = [];
+    const queued: string[] = [];
+    const roleScript = `${META}return await agent('review', { label: 'review', role: 'reviewer' });`;
+
+    const first = await runWorkflow(roleScript, {
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(1),
+      runAgent: async (call) => call.subagentType,
+      defaultSubagentType: null,
+      resolveSubagentType,
+      onAgentQueued: (event) => queued.push(event.subagentType),
+      onAgentResult: (event) => {
+        firstEvents.push(event);
+      },
+    });
+    expect(first.result).toBe("agy-reviewer");
+    expect(queued).toEqual(["agy-reviewer"]);
+    expect(firstEvents[0]).toMatchObject({ subagentType: "agy-reviewer" });
+
+    const runAgent = vi.fn<WorkflowAgentRunner>();
+    const replay = await runWorkflow(`${META}return await agent('review', { label: 'review', subagent_type: 'agy-reviewer' });`, {
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(1),
+      runAgent,
+      defaultSubagentType: null,
+      resolveSubagentType,
+      resumeAgentResults: firstEvents.map(({ index, fingerprint, result }) => ({ index, fingerprint, result })),
+    });
+    expect(replay.result).toBe("agy-reviewer");
+    expect(runAgent).not.toHaveBeenCalled();
+
+    const override = await runWorkflow(`${META}return await agent('review', { role: 'reviewer', harness: 'codex' });`, {
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(1),
+      runAgent: async (call) => call.subagentType,
+      defaultSubagentType: null,
+      resolveSubagentType,
+    });
+    expect(override.result).toBe("codex-reviewer");
+  });
+
+  it("fails the workflow before launch when role selection is invalid", async () => {
+    const profiles = new Map<string, SubagentProfile>([
+      ["claude-security", { name: "claude-security", backend: "claude", description: "security" }],
+    ]);
+    const runAgent = vi.fn<WorkflowAgentRunner>();
+    await expect(runWorkflow(`${META}return await agent('review', { role: 'security' });`, {
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(1),
+      runAgent,
+      defaultSubagentType: null,
+      resolveSubagentType: (selection) => resolveExternalProfile(profiles, selection, "agy").name,
+    })).rejects.toThrow(/unavailable for harness "agy".*Supported harnesses.*claude/);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it("exposes args to the script", async () => {
@@ -710,12 +776,13 @@ describe("workflow tool registration", () => {
     const names: string[] = [];
     createSubagentExtension()(fakeApi(names) as never);
     expect(names).toContain("Agent");
+    expect(names).toContain("external_help");
     expect(names).toContain("workflow");
   });
 
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent", "pi_flow_profile_create"]);
+    expect(names).toEqual(["Agent", "external_help", "pi_flow_profile_create"]);
   });
 });
