@@ -30,6 +30,7 @@ import type {
 } from "../types.ts";
 import { resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
+import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { runRecordsDirectory } from "./retention.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
@@ -50,6 +51,7 @@ export const CHILD_EXCLUDED_TOOLS: readonly string[] = ["Agent", "workflow"];
  * before invoking spawnSubagent, so the runtime timeout below excludes queue time.
  */
 export interface SpawnSubagentParams {
+  context?: ParentContextReceipt;
   toolCallId: string;
   description: string;
   prompt: string;
@@ -236,6 +238,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         metadata: {
           description: params.description,
           prompt: params.prompt,
+          ...(params.context ? { context: params.context } : {}),
           cwd: params.ctx.cwd,
           timeoutMs: params.timeoutMs,
           profile: params.profile,
@@ -268,6 +271,14 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       signal: timeout.signal,
       onBackendEvent,
       resumeSessionId: resumeSession?.sessionId,
+      onProgress: params.onProgress ? (partial) => {
+        if (params.context) {
+          const details = partial.details as SubagentToolDetails;
+          details.context = params.context;
+          if (details.progress) details.progress.context = params.context;
+        }
+        params.onProgress?.(partial);
+      } : undefined,
     });
     if (timeout.timedOut()) {
       result = rewriteTimeoutResult(result, {
@@ -276,11 +287,18 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         timeoutMs: timeout.effectiveTimeoutMs(),
       });
     }
+    if (params.context) {
+      const details = result.details as SubagentToolDetails;
+      details.context = params.context;
+      if (details.progress) details.progress.context = params.context;
+      result.content.push({ type: "text", text: formatParentContext(params.context) });
+    }
     if (record) {
       const details = result.details as SubagentToolDetails;
       await record.finish({
         backend: params.profile.backend,
         profile: params.profile.name,
+        ...(params.context ? { context: params.context } : {}),
         model: params.profile.model,
         description: params.description,
         status: details.status,

@@ -1,3 +1,4 @@
+import type { ParentContextMessages, ParentContextReceipt } from "../core/parent-context.ts";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 
 export interface WorkflowMetaPhase {
@@ -14,6 +15,7 @@ export interface WorkflowMeta {
 
 /** A single agent() invocation requested by a workflow script. */
 export interface WorkflowAgentCall {
+  context?: ParentContextReceipt;
   index?: number;
   prompt: string;
   label: string;
@@ -37,6 +39,7 @@ export interface WorkflowCachedAgentResult {
 }
 
 export interface WorkflowAgentResultEvent extends WorkflowCachedAgentResult {
+  context?: ParentContextReceipt;
   label: string;
   phase?: string;
   subagentType: string;
@@ -82,6 +85,8 @@ export interface WorkflowLimits {
 }
 
 export interface RunWorkflowOptions {
+  parentMessages?: ParentContextMessages;
+  parentToolCallId?: string;
   args?: unknown;
   cwd: string;
   signal?: AbortSignal;
@@ -95,7 +100,7 @@ export interface RunWorkflowOptions {
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
   resumeAgentResults?: WorkflowCachedAgentResult[];
-  onAgentQueued?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string }) => void;
+  onAgentQueued?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; context?: ParentContextReceipt }) => void;
   onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean }) => void;
   onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;

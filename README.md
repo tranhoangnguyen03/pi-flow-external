@@ -163,7 +163,30 @@ Profiles named with their matching backend prefix expose the suffix as a built-i
 
 The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only profile names, and the default harness; it does not repeat profile descriptions or the workflow manual. Call `external_help` with topic `roles` for profile descriptions, `permissions` for harness caveats, or `workflow` for syntax, examples, and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. Catalog availability means a matching profile is configured, not that its CLI is installed or authenticated.
 
-External agents start fresh in the requested working directory. They do not inherit parent messages, tool results, or reasoning, so prompts must include all required context.
+External agents start fresh in the requested working directory unless `resume` continues a previous child. By default, they receive only the task briefing and profile instructions. The parent can explicitly share conversation context:
+
+```ts
+Agent({
+  description: "Review agreed design",
+  role: "reviewer",
+  prompt: "Review the agreed design read-only. Repository: /absolute/repo.",
+  context: { mode: "recent", turns: 5 },
+});
+```
+
+| `context` | Shares |
+|---|---|
+| Omitted or `{ mode: "none" }` | No parent history; write a self-contained prompt |
+| `{ mode: "recent", turns: N }` | Last N available user turns, including the current turn |
+| `{ mode: "full" }` | Available current-branch conversation after compaction, including summaries |
+
+A **user turn** starts with a user message and includes subsequent assistant messages and tool exchanges until the next user message. This is not Pi's per-model-response turn count. `turns` must be a positive integer. If fewer turns remain, all available user turns are shared and the receipt shows the actual/requested count. Recent mode does not automatically include older compaction summaries. Associated tool calls are retained when a result crosses the selected turn boundary.
+
+Choose the smallest sufficient context: `recent` for focused follow-ups, `full` when older discussion matters, and `none` for independent tasks. Supply missing older decisions explicitly. Use `resume` to follow up with an existing child; it cannot be combined with context sharing.
+
+Snapshots are frozen before queueing. They contain labeled background text and completed tool exchanges, never parent system instructions, thinking blocks, tool-result metadata, or pending tool calls. Images/unsupported content and snapshots over **1 MiB** fail explicitly rather than being silently truncated. Full means available post-compaction context, not recovery of old transcripts or a byte-for-byte model request. External agents retain their own instructions and permissions.
+
+This is text transfer into a new external conversation, not a native session clone or guaranteed prompt-cache reuse. Shared content goes to the selected external harness and may persist in its conversation storage and private local run evidence; do not share sensitive history unnecessarily. Receipts report mode, actual turns, message count, byte size, and compaction status.
 
 Backend-native nested agents may start in another workspace. Include the repository's absolute path when asking an external agent to delegate further.
 
@@ -200,7 +223,7 @@ Example request:
 Use the workflow tool to ask role "explorer" on harness "claude" for an architecture map and role "reviewer" on harness "codex" for a risk review, then synthesize their findings.
 ```
 
-Direct `Agent` calls and workflow children share the same concurrency and timeout controls.
+Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every child selects from one parent snapshot frozen at workflow invocation; earlier child results must still be passed explicitly. Replay fingerprints include the transferred context, so changes invalidate cached results.
 
 ## Permission tiers, budgets, and resume
 

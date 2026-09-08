@@ -1,3 +1,4 @@
+import { prepareParentContext } from "../core/parent-context.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
@@ -149,8 +150,11 @@ export async function runWorkflow<T = unknown>(
       abortRuntime(error);
       throw error;
     }
-    const taskPrompt = requireString(prompt, "agent prompt");
     const opts = normalizeAgentOptions(agentOptions);
+    const originalPrompt = requireString(prompt, "agent prompt");
+    const briefing = prepareParentContext(originalPrompt, opts.context,
+      options.parentMessages, options.parentToolCallId, opts.resumeRunId);
+    const taskPrompt = briefing.prompt;
     const assignedPhase = opts.phase ?? state.currentPhase;
     let subagentType: string | null | undefined;
     try {
@@ -173,6 +177,7 @@ export async function runWorkflow<T = unknown>(
     const call = {
       index,
       prompt: taskPrompt,
+      ...(briefing.context ? { context: briefing.context } : {}),
       label,
       phase: assignedPhase,
       subagentType,
@@ -186,13 +191,13 @@ export async function runWorkflow<T = unknown>(
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
       options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, cached: true });
       options.onAgentEnd?.({ index, label, phase: assignedPhase, result: cachedResult.result, cached: true, failed: false });
-      await recordAgentResult({ ...call, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
+      await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
       return cachedResult.result;
     }
     state.resumePrefixActive = false;
 
     // Queue on the shared global cap. May reject if aborted while waiting.
-    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt });
+    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context });
     const release = await limiter.acquire(compositeSignal);
     let result: unknown;
     let failed = false;
@@ -213,7 +218,7 @@ export async function runWorkflow<T = unknown>(
       release();
     }
     options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
-    await recordAgentResult({ ...call, index, fingerprint, result, failed, cached: false });
+    await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result, failed, cached: false });
     return result;
   };
 

@@ -24,6 +24,7 @@ import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { captureParentContext, parentContextSchema, prepareParentContext } from "./core/parent-context.ts";
 import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
@@ -52,6 +53,7 @@ const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const STATUS_KEY = "pi-flow";
 
 const agentToolParameters = Type.Object({
+  context: Type.Optional(parentContextSchema),
   description: Type.String({
     description: "A short 3-5 word description of the task, used for UI display and routing context.",
   }),
@@ -333,6 +335,9 @@ function createAgentTool(
     parameters: agentToolParameters,
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const briefing = prepareParentContext(params.prompt, params.context,
+        params.context && params.context.mode !== "none" ? captureParentContext(ctx.sessionManager) : undefined,
+        toolCallId, params.resume);
       const state = getState();
       const effectiveState: DelegationState = {
         ...state,
@@ -387,6 +392,7 @@ function createAgentTool(
       const progress = effectiveState.progressEnabled
         ? createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend)
         : undefined;
+      if (progress) progress.context = briefing.context;
       const run = progress ? { toolCallId, progress, onUpdate } : undefined;
       if (run) {
         state.activeRuns.set(toolCallId, run);
@@ -428,7 +434,8 @@ function createAgentTool(
         const result = await spawnSubagent({
           toolCallId,
           description: params.description,
-          prompt: params.prompt,
+          prompt: briefing.prompt,
+          context: briefing.context,
           profile,
           model,
           thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
