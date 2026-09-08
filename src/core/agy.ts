@@ -168,30 +168,49 @@ function agyActivityFromEvent(event: Record<string, unknown>): string | undefine
   return undefined;
 }
 
+/** Go duration string for agy's --print-timeout.
+ * <=0 (deadline disabled) → a practical ~1-year ceiling since agy has no "no timeout" flag;
+ * undefined/non-finite → omit the flag and let agy use its own default. */
+export function agyPrintTimeout(timeoutMs: number | undefined): string | undefined {
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs <= 0) {
+    return "8760h";
+  }
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  if (timeoutMs % 3_600_000 === 0) return `${timeoutMs / 3_600_000}h`;
+  if (timeoutMs % 60_000 === 0) return `${timeoutMs / 60_000}m`;
+  if (timeoutMs % 1_000 === 0) return `${timeoutMs / 1_000}s`;
+  return `${timeoutMs}ms`;
+}
+
 export function buildAgyArgs({
   profile,
   thinkingLevel,
   outputSchema,
   permission = "danger",
   resumeConversationId,
+  timeoutMs,
 }: {
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
   outputSchema?: unknown;
   permission?: PermissionTier;
   resumeConversationId?: string;
+  timeoutMs?: number;
 }): string[] {
+  const printTimeout = agyPrintTimeout(timeoutMs);
   const args = [
     ...buildPermissionArgs(permission, "agy"),
     "--output-format",
     "stream-json",
     "--input-format",
     "stream-json",
-    // ponytail: fixed 15m print ceiling so agy's own 5m default cannot
-    // preempt the outer timeout; derive from subagentTimeoutMs if agy
-    // runs ever legitimately need more than 15 minutes.
-    "--print-timeout",
-    "15m",
+    // Track the configured subagent deadline so agy's own 5m print default
+    // cannot preempt the outer timeout. Callers pass 2x the base deadline
+    // because nested-activity extension may legitimately double it; the
+    // outer AbortSignal stays the real authority.
+    ...(printTimeout ? ["--print-timeout", printTimeout] : []),
   ];
   if (resumeConversationId) {
     args.push("--conversation", resumeConversationId);
@@ -267,6 +286,7 @@ export async function spawnAgySubagent(params: {
   outputSchema?: unknown;
   permission?: PermissionTier;
   resumeConversationId?: string;
+  timeoutMs?: number;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const promptParts = [params.profile.systemPrompt, params.prompt, params.appendInstructions].filter(Boolean);
@@ -343,6 +363,7 @@ export async function spawnAgySubagent(params: {
       outputSchema: params.outputSchema,
       permission: params.permission,
       resumeConversationId: params.resumeConversationId,
+      timeoutMs: params.timeoutMs,
     }), {
       cwd: params.ctx.cwd,
       env: process.env,

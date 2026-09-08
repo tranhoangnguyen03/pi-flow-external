@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import {
   agyUsageToSubagentUsage,
+  agyPrintTimeout,
   buildAgyArgs,
   extractAgyTerminalResult,
+  isTransientAgyFailure,
   normalizeAgyEffort,
   spawnAgySubagent,
 } from "../src/core/agy.ts";
@@ -31,6 +33,7 @@ describe("pi-subagent agy backend", () => {
       profile: { name: "agy-reviewer", description: "Agy", backend: "agy", model: "best" },
       thinkingLevel: "high",
       outputSchema,
+      timeoutMs: 7_200_000,
     });
     expect(args).toEqual([
       "--dangerously-skip-permissions",
@@ -39,7 +42,7 @@ describe("pi-subagent agy backend", () => {
       "--input-format",
       "stream-json",
       "--print-timeout",
-      "15m",
+      "2h",
       "--model",
       "best",
       "--effort",
@@ -51,6 +54,31 @@ describe("pi-subagent agy backend", () => {
     expect(normalizeAgyEffort("minimal")).toBe("low");
     expect(normalizeAgyEffort("off")).toBeUndefined();
     expect(normalizeAgyEffort("backend-specific")).toBeUndefined();
+  });
+
+  it("maps the subagent timeout to agy's Go duration print timeout", () => {
+    expect(agyPrintTimeout(7_200_000)).toBe("2h");
+    expect(agyPrintTimeout(5_400_000)).toBe("90m");
+    expect(agyPrintTimeout(65_000)).toBe("65s");
+    expect(agyPrintTimeout(2_500)).toBe("2500ms");
+    expect(agyPrintTimeout(0)).toBe("8760h");
+    expect(agyPrintTimeout(-1000)).toBe("8760h");
+    expect(agyPrintTimeout(NaN)).toBeUndefined();
+    expect(agyPrintTimeout(Infinity)).toBeUndefined();
+    expect(agyPrintTimeout(undefined)).toBeUndefined();
+  });
+
+  it("omits --print-timeout when timeoutMs is undefined (agy's own default)", () => {
+    const args = buildAgyArgs({
+      profile: { name: "agy-reviewer", description: "Agy", backend: "agy", model: "best" },
+      thinkingLevel: "high",
+    });
+    expect(args).not.toContain("--print-timeout");
+  });
+
+  it("does not retry agy's own print-wait timeout as an infra failure", () => {
+    expect(isTransientAgyFailure(new Error("agy failed with status ERROR: timeout waiting for response (exit code 1)"))).toBe(false);
+    expect(isTransientAgyFailure(new Error("Eligibility check failed: operation timed out"))).toBe(true);
   });
 
   it("extracts terminal metadata and maps token usage", () => {
@@ -140,8 +168,9 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
       "stream-json",
       "--input-format",
       "stream-json",
+      // 2x the base 2h deadline: extendOnce() headroom; outer signal stays authoritative.
       "--print-timeout",
-      "15m",
+      "4h",
       "--model",
       "default",
       "--effort",

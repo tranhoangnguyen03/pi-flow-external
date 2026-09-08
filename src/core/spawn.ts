@@ -385,6 +385,9 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       outputSchema: params.outputSchema,
       permission: params.permission,
       resumeConversationId: params.resumeSessionId,
+      // ponytail: 2x base because extendOnce() may legitimately double the
+      // outer deadline; the outer AbortSignal remains the real authority.
+      timeoutMs: params.timeoutMs * 2,
     };
     let retryOf: string | undefined;
     for (let attempt = 1; ; attempt++) {
