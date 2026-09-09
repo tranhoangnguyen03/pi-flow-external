@@ -28,7 +28,7 @@ const externalHelpParameters = Type.Object({
 type ExternalHelpParams = Static<typeof externalHelpParameters>;
 
 export interface CreateExternalHelpToolOptions {
-  getDefaultHarness: () => ExternalHarness;
+  getDefaultHarness: (ctx: ExtensionContext) => ExternalHarness;
   workflowEnabled: boolean;
 }
 
@@ -90,7 +90,7 @@ export function createExternalHelpTool(
         const profiles = filterExternalAgentProfiles(
           filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry),
         );
-        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(), params.harness);
+        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), params.harness);
       } else if (params.topic === "permissions") {
         text = permissionHelp(params.harness);
       } else {

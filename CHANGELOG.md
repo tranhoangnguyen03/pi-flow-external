@@ -2,6 +2,15 @@
 
 All notable changes to pi-flow external are documented here.
 
+## Unreleased
+
+Lets a trusted project pin its own default external harness, closing [#26](https://github.com/tranhoangnguyen03/pi-flow-external/issues/26).
+
+### Added
+
+- Project default-harness override: `<project>/.pi/pi-flow-external/settings.json` with `defaultHarness` sets the default external harness for trusted projects only. Precedence is unchanged elsewhere: an explicit call `harness` wins, then the trusted project default, then the global setting. The file is read-only to the extension, accepts `defaultHarness` only, and invalid or untrusted overrides are ignored with disclosed warnings — a role without a profile on the effective harness still fails with an actionable error instead of silently switching harnesses.
+- `/external settings` reports the effective `defaultHarness` and its source (`(project: <path>)` or `(global)`), plus the project-override location and any project-file warnings.
+
 ## [1.9.0-external.0] - 2026-09-08
 
 Lets the parent decide how much of its own conversation an external child starts with, closing [#30](https://github.com/tranhoangnguyen03/pi-flow-external/issues/30).

@@ -1,13 +1,16 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import {
   DEFAULT_EXTERNAL_SETTINGS,
   loadExternalSettings,
+  projectExternalSettingsPath,
+  renderDefaultHarness,
+  resolveCtxDefaultHarness,
+  resolveDefaultHarness,
 } from "../src/settings.ts";
 
 const roots: string[] = [];
@@ -19,6 +22,54 @@ function agentDir(): string {
 
 afterEach(() => {
   for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+
+describe("project default-harness override", () => {
+  const project = () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-flow-project-"));
+    roots.push(cwd);
+    return cwd;
+  };
+  const writeProjectSettings = (cwd: string, body: string) => {
+    mkdirSync(dirname(projectExternalSettingsPath(cwd)), { recursive: true });
+    writeFileSync(projectExternalSettingsPath(cwd), body);
+  };
+
+  it("honors a trusted project override and falls back to global without one", () => {
+    const cwd = project();
+    expect(resolveDefaultHarness("agy", cwd, true)).toMatchObject({ harness: "agy", source: "global" });
+    writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "claude" }));
+    expect(resolveDefaultHarness("agy", cwd, true)).toMatchObject({ harness: "claude", source: "project" });
+  });
+
+  it("ignores the project file when the project is not trusted", () => {
+    const cwd = project();
+    writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "claude" }));
+    const result = resolveDefaultHarness("agy", cwd, false);
+    expect(result).toMatchObject({ harness: "agy", source: "global" });
+    expect(result.diagnostics.join(" ")).toMatch(/not trusted/);
+  });
+
+  it("rejects invalid values and unknown keys with diagnostics, keeping the global default", () => {
+    const cwd = project();
+    writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "gemini", extra: 1 }));
+    const result = resolveDefaultHarness("codex", cwd, true);
+    expect(result).toMatchObject({ harness: "codex", source: "global" });
+    expect(result.diagnostics.join(" ")).toMatch(/defaultHarness must be/);
+    expect(result.diagnostics.join(" ")).toMatch(/Unknown project setting/);
+
+    writeProjectSettings(cwd, "{broken\n");
+    expect(resolveDefaultHarness("codex", cwd, true).diagnostics.join(" ")).toMatch(/valid JSON/);
+  });
+
+  it("remembers the last ctx-resolved harness for render paths", () => {
+    const cwd = project();
+    writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "claude" }));
+    // Unknown cwd (never resolved with a live ctx): falls back to global.
+    expect(renderDefaultHarness("agy", join(cwd, "elsewhere"))).toBe("agy");
+    resolveCtxDefaultHarness("agy", { cwd, isProjectTrusted: () => true });
+    expect(renderDefaultHarness("agy", cwd)).toBe("claude");
+  });
 });
 
 describe("external settings", () => {
@@ -111,7 +162,7 @@ describe("external settings", () => {
       expect(configured.flags.get("max-concurrent-subagents")?.default).toBe("5");
       configured.values.set("max-concurrent-subagents", "7");
       const notices: string[] = [];
-      await configured.settingsCommand?.("settings", { ui: { notify: (text: string) => notices.push(text) } });
+      await configured.settingsCommand?.("settings", { cwd: root, isProjectTrusted: () => false, ui: { notify: (text: string) => notices.push(text) } });
       expect(notices.at(-1)).toContain("maxConcurrentSubagents: 7");
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

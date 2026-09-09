@@ -55,8 +55,19 @@ describe("/external command", () => {
       const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
       await command?.handler("settings", ctx);
       expect(notices.at(-1)).toContain("maxConcurrentSubagents: 4");
-      expect(notices.at(-1)).toContain("defaultHarness: agy");
+      expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
       expect(notices.at(-1)).toContain(settings.path);
+
+      // A trusted project override wins over the global default and names its source.
+      mkdirSync(join(root, ".pi", "pi-flow-external"), { recursive: true });
+      writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
+      await command?.handler("settings", { ...ctx, isProjectTrusted: () => true });
+      expect(notices.at(-1)).toContain("defaultHarness: claude (project: ");
+      expect(notices.at(-1)).toContain(join(".pi", "pi-flow-external", "settings.json"));
+      // Untrusted: the override is ignored and disclosed.
+      await command?.handler("settings", ctx);
+      expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
+      expect(notices.at(-1)).toMatch(/not trusted/);
 
       await command?.handler("doctor", ctx);
       expect(notices.at(-1)).toContain("⚠ Settings:");

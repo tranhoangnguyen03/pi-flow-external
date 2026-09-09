@@ -143,6 +143,53 @@ describe("pi-subagent agent contract", () => {
     disposeSession(session);
   });
 
+  it("resolves roles against a trusted project default-harness override", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "subagents", "claude-security-reviewer.md"),
+      "---\ndescription: Custom security review through Claude.\nbackend: claude\n---\n\nReview security read-only.\n",
+    );
+    mkdirSync(join(cwd, ".pi", "pi-flow-external"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "codex" }));
+
+    // Trusted session: the coordinator prompt names the project default, and a
+    // claude-only role resolved without an explicit harness fails against the
+    // project default instead of the global agy default.
+    const trusted = await createSession({ projectTrusted: true });
+    let trustedPrompt = "";
+    trusted.registration.setResponses([
+      (context) => {
+        trustedPrompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage("noted");
+      },
+    ]);
+    await trusted.session.prompt("Just say noted.");
+    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default)");
+    const trustedAgent = trusted.session.getToolDefinition("Agent") as any;
+    const trustedResult = await trustedAgent.execute(
+      "project-default",
+      { description: "Review security", prompt: "Review.", role: "security-reviewer" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model: trusted.model, modelRegistry: trusted.modelRegistry, projectTrusted: true }),
+    );
+    expect(trustedResult.content[0].text).toMatch(/unavailable for harness "codex".*Supported harnesses for this role: claude/s);
+    disposeSession(trusted.session);
+
+    // Untrusted session: the same call resolves against the global agy default.
+    const untrusted = await createSession();
+    const untrustedAgent = untrusted.session.getToolDefinition("Agent") as any;
+    const untrustedResult = await untrustedAgent.execute(
+      "global-default",
+      { description: "Review security", prompt: "Review.", role: "security-reviewer" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model: untrusted.model, modelRegistry: untrusted.modelRegistry }),
+    );
+    expect(untrustedResult.content[0].text).toMatch(/unavailable for harness "agy".*Supported harnesses for this role: claude/s);
+    disposeSession(untrusted.session);
+  });
+
   it("discovers saved workflows through help without trusting project workflows implicitly", async () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(

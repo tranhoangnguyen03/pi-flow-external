@@ -34,6 +34,7 @@ type CreateSessionOptions = {
   models?: FauxModelDef[];
   defaultModelId?: string;
   thinkingLevel?: ThinkingLevel;
+  projectTrusted?: boolean;
 };
 
 export type HarnessState = {
@@ -145,6 +146,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       models: modelDefs = DEFAULT_MODEL_DEFS,
       defaultModelId,
       thinkingLevel = "high",
+      projectTrusted = false,
     } = options;
     const registration = registerFauxProvider({ models: modelDefs });
     registrations.push(registration);
@@ -157,6 +159,9 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     writeModelsJson(models);
     const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
     const settingsManager = SettingsManager.inMemory({});
+    if (projectTrusted) {
+      settingsManager.setProjectTrusted(true);
+    }
     const sessionManager = SessionManager.inMemory(cwd);
     const extensionOptions = {
       ...(maxConcurrentSubagents === undefined ? {} : { maxConcurrentSubagents }),

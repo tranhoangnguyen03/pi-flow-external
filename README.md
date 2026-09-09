@@ -260,7 +260,21 @@ Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
 }
 ```
 
-Version 1 and 2 files migrate on read: recognized keys carry over, missing `defaultHarness` becomes `agy`, unknown keys warn, and invalid values fall back per-key. `defaultHarness` is global only; project overrides are deferred to issue #26. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
+Version 1 and 2 files migrate on read: recognized keys carry over, missing `defaultHarness` becomes `agy`, unknown keys warn, and invalid values fall back per-key. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
+
+### Project default-harness override
+
+A trusted project can override the global `defaultHarness` without touching global settings or duplicating profiles. Create:
+
+```text
+<project>/.pi/pi-flow-external/settings.json
+```
+
+```json
+{ "defaultHarness": "claude" }
+```
+
+The override applies only when Pi marks the project trusted, supports `defaultHarness` only, and is never created or written by the extension. Precedence: an explicit `harness` in the call wins, then the trusted project default, then the global setting. `/external settings` reports the effective harness and its source; an untrusted or invalid project file is ignored with a warning, and a role that has no profile on the effective harness fails with an actionable error instead of silently switching harnesses. Edit the file and run `/reload`.
 
 Edit the file and run `/reload`. Startup flags override extension factory options, which override this file, which overrides built-in defaults.
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXTERNAL_HARNESSES, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
@@ -150,4 +150,114 @@ export function resolveExternalSettings(
     maxConcurrentSubagents: options.maxConcurrentSubagents ?? settings.maxConcurrentSubagents,
     subagentTimeoutMs: options.subagentTimeoutMs ?? settings.subagentTimeoutMs,
   };
+}
+
+/**
+ * Trusted-project default-harness override (issue #26). The project file is
+ * read-only for the extension, supports `defaultHarness` only, and is honored
+ * only after Pi marks the project trusted. Precedence everywhere:
+ * explicit call harness > trusted project default > global default.
+ */
+export const PROJECT_SETTINGS_RELATIVE_PATH = join(".pi", "pi-flow-external", "settings.json");
+
+export function projectExternalSettingsPath(cwd: string): string {
+  return join(cwd, PROJECT_SETTINGS_RELATIVE_PATH);
+}
+
+export interface EffectiveDefaultHarness {
+  harness: ExternalHarness;
+  source: "project" | "global";
+  projectPath?: string;
+  diagnostics: string[];
+}
+
+function parseProjectSettings(cwd: string): {
+  record: Record<string, unknown> | undefined;
+  path: string;
+  diagnostics: string[];
+} {
+  const path = projectExternalSettingsPath(cwd);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { record: undefined, path, diagnostics: [] };
+    }
+    return {
+      record: undefined,
+      path,
+      diagnostics: [`Could not read project settings ${path}: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { record: undefined, path, diagnostics: [`Project settings ${path} are not valid JSON.`] };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { record: undefined, path, diagnostics: [`Project settings ${path} must be a JSON object.`] };
+  }
+  const record = parsed as Record<string, unknown>;
+  const diagnostics = Object.keys(record)
+    .filter((key) => key !== "defaultHarness")
+    .map((key) => `Unknown project setting "${key}". Only defaultHarness is supported in project settings.`);
+  return { record, path, diagnostics };
+}
+
+export function resolveDefaultHarness(
+  global: ExternalHarness,
+  cwd: string,
+  projectTrusted: boolean,
+): EffectiveDefaultHarness {
+  const path = projectExternalSettingsPath(cwd);
+  if (!existsSync(path)) {
+    return { harness: global, source: "global", diagnostics: [] };
+  }
+  if (!projectTrusted) {
+    return {
+      harness: global,
+      source: "global",
+      diagnostics: [`Project settings found at ${path} but ignored: project is not trusted.`],
+    };
+  }
+  const project = parseProjectSettings(cwd);
+  const diagnostics = [...project.diagnostics];
+  const requested = project.record?.defaultHarness;
+  if (requested === undefined) {
+    return { harness: global, source: "global", projectPath: project.path, diagnostics };
+  }
+  if (isExternalHarness(requested)) {
+    return { harness: requested, source: "project", projectPath: project.path, diagnostics };
+  }
+  diagnostics.push(`Project defaultHarness must be one of: ${EXTERNAL_HARNESSES.join(", ")}. Using the global default.`);
+  return { harness: global, source: "global", projectPath: project.path, diagnostics };
+}
+
+let lastResolvedDefaultHarness: { cwd: string; value: EffectiveDefaultHarness } | undefined;
+
+/** Resolve with a live extension context and remember it for render paths. */
+export function resolveCtxDefaultHarness(
+  global: ExternalHarness,
+  ctx: { cwd: string; isProjectTrusted?: () => boolean },
+): EffectiveDefaultHarness {
+  let trusted = false;
+  try {
+    trusted = ctx.isProjectTrusted?.() ?? false;
+  } catch {
+    trusted = false;
+  }
+  const value = resolveDefaultHarness(global, ctx.cwd, trusted);
+  lastResolvedDefaultHarness = { cwd: ctx.cwd, value };
+  return value;
+}
+
+/**
+ * Render contexts carry the cwd but no trust signal; recall the last
+ * context-resolved value for that cwd (before_agent_start always resolves
+ * before the first Agent render) and fall back to the global default.
+ */
+export function renderDefaultHarness(global: ExternalHarness, cwd: string): ExternalHarness {
+  return lastResolvedDefaultHarness?.cwd === cwd ? lastResolvedDefaultHarness.value.harness : global;
 }
