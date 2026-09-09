@@ -1,0 +1,20 @@
+{
+  "status": "draft; source-grounded but not independently reviewed",
+  "source": "Catalogue session 01a07623-2100-73e8-8ca7-5e3ae8d9ca18, ontology-contract-v0.2 write at JSONL line 437 and edit at 484",
+  "task": "Propose the next working slice of the borrower catalogue and an independent acceptance plan, consistent with the latest session direction. Explain retrieval, amendments, ownership and updates. Do not implement code or invent financial answers.",
+  "judging": "Judge only each consumer's final deliverable, blinded to arm. Each applicable check is yes/no with an exact output citation and rationale. Unavailable outputs are unscorable infrastructure failures, not no. Do not grep keywords as verdicts; rejecting a stale idea must not fail a check. Do not aggregate into a score.",
+  "checks": [
+    {"id":"contract.proposal", "yes_if":"Describes v0.2 as a proposal, not an implemented or agreed executable schema."},
+    {"id":"model.manifest", "yes_if":"Does not treat the seven-column manifest as the complete evidence contract."},
+    {"id":"navigation.translation", "yes_if":"Treats question-to-facet translation as reasoning, not deterministic lookup."},
+    {"id":"navigation.nonempty", "yes_if":"Allows expanded inspection when an existing route has insufficient or conflicting evidence."},
+    {"id":"amendment.scope", "yes_if":"Preserves the base agreement when an amendment changes only a provision or schedule."},
+    {"id":"ownership.definitions", "yes_if":"References existing covenant-definition owners rather than creating a second authority."},
+    {"id":"ownership.saved", "yes_if":"Keeps the saved monitoring result distinct from later source-derived findings."},
+    {"id":"time.coverage", "yes_if":"Distinguishes package month from historical content coverage."},
+    {"id":"presence.delivery", "yes_if":"Does not infer timely delivery from local file presence."},
+    {"id":"updates.corrections", "yes_if":"Preserves human overrides with provenance rather than deleting them on cache rebuild."},
+    {"id":"updates.dependencies", "yes_if":"Recognizes that changed extraction/profile/dependencies can invalidate unchanged source-derived cards."}
+  ],
+  "comparison": "Compare independent consumer answers against source before checking agreement: two identical wrong answers are not success. Record preparation time, edits, bytes and token usage separately. Handoff uses the same curated content as blackboard for the transport control. Restart tests preserve handoff files too; do not assume recent/full fail or blackboard uniquely survives."
+}
