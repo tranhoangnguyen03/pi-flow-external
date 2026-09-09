@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
 import { archiveProfiles, findRetiredDefaultProfiles } from "./defaults.ts";
-import type { LoadedExternalSettings } from "./settings.ts";
+import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 
@@ -32,6 +32,8 @@ export type ExternalCommandOptions = {
   startProfileInterview: (ctx: ExtensionCommandContext) => Promise<void>;
 };
 
+type CommandContextLike = { cwd: string; isProjectTrusted?: () => boolean };
+
 function projectTrusted(ctx: ExtensionCommandContext): boolean {
   try {
     return ctx.isProjectTrusted();
@@ -52,18 +54,24 @@ function helpText(): string {
   ].join("\n");
 }
 
-function settingsText(options: ExternalCommandOptions): string {
+function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
   const effective = options.getRuntimeSettings();
   const settings = options.settings.settings;
+  const harness = resolveCtxDefaultHarness(settings.defaultHarness, ctx);
+  const harnessSource = harness.source === "project"
+    ? ` (project: ${harness.projectPath})`
+    : " (global)";
+  const warnings = [...options.settings.diagnostics, ...harness.diagnostics];
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
-    `defaultHarness: ${settings.defaultHarness}`,
+    `defaultHarness: ${harness.harness}${harnessSource}`,
     `defaultPermission: ${settings.defaultPermission}`,
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
     `Settings: ${options.settings.path}`,
-    ...(options.settings.diagnostics.length ? ["Warnings:", ...options.settings.diagnostics.map((item) => `- ${item}`)] : []),
+    `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness only)`,
+    ...(warnings.length ? ["Warnings:", ...warnings.map((item) => `- ${item}`)] : []),
     "Edit the file, then run /reload. CLI flags override file values.",
   ].join("\n");
 }
@@ -131,11 +139,12 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       const action = args.trim().toLowerCase();
       if (!action) {
         const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()));
-        ctx.ui.notify(`${profiles.size} external profile(s) · ${workflows(ctx).length} saved workflow(s)\n${settingsText(options)}`, "info");
+        ctx.ui.notify(`${profiles.size} external profile(s) · ${workflows(ctx).length} saved workflow(s)\n${settingsText(options, ctx)}`, "info");
       } else if (action === "doctor") {
         ctx.ui.notify(await doctorText(pi, options), "info");
       } else if (action === "settings") {
-        ctx.ui.notify(settingsText(options), options.settings.diagnostics.length ? "warning" : "info");
+        const warnings = options.settings.diagnostics.length || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).diagnostics.length;
+        ctx.ui.notify(settingsText(options, ctx), warnings ? "warning" : "info");
       } else if (action === "profiles") {
         ctx.ui.notify(profilesText(), "info");
       } else if (action === "profile create") {

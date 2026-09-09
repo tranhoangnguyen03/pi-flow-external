@@ -80,6 +80,10 @@ Local fixture tests own selection, boundary, and failure behavior; this check on
 
 Do not run damaged-record and expected-failure provider scenarios manually. Their behavior is deterministic and belongs in the local fixture tests.
 
+## Change-triggered project default-harness check
+
+Run only when project default-harness resolution changes. In a fresh Pi session against a trusted read-only fixture containing `.pi/pi-flow-external/settings.json` with `"defaultHarness": "claude"`, verify `/external settings` reports `defaultHarness: claude (project: ...)`, delegate one read-only task with `role` only (no `harness`) and verify the receipt names a `claude-*` profile, then confirm an explicit `harness: "codex"` call still routes to codex. Repeat once in the same fixture with trust removed and confirm the override is ignored with a warning.
+
 ## Release minimum
 
 Before a runtime release:

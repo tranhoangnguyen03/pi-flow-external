@@ -32,7 +32,7 @@ export interface CreateWorkflowToolOptions {
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
   getDefaultPermission: () => PermissionTier;
-  getDefaultHarness: () => ExternalHarness;
+  getDefaultHarness: (ctx: ExtensionContext) => ExternalHarness;
   getDefaultMaxBudgetUsd: () => number | undefined;
 }
 
@@ -286,7 +286,7 @@ export function createWorkflowTool(
           resolveSubagentType: (selection) => resolveExternalProfile(
             profiles,
             selection,
-            options.getDefaultHarness(),
+            options.getDefaultHarness(ctx),
           ).name,
           resumeAgentResults,
           onLog: (message) => {
