@@ -137,7 +137,9 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
     const shared = node.context;
     parts.push(shared.mode === "recent"
       ? `context recent ${shared.sharedTurns}/${shared.requestedTurns} turns`
-      : `context full ${shared.sharedTurns} turns`);
+      : shared.mode === "blackboard"
+        ? `context blackboard ${shared.sharedThreads ?? shared.sharedTurns}/${shared.requestedThreads ?? "?"} threads`
+        : `context full ${shared.sharedTurns} turns`);
   }
   if (node.permission && node.permission !== "danger") {
     parts.push(node.permissionEnforced === false ? `${node.permission} (advisory)` : node.permission);

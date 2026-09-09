@@ -152,8 +152,12 @@ export async function runWorkflow<T = unknown>(
     }
     const opts = normalizeAgentOptions(agentOptions);
     const originalPrompt = requireString(prompt, "agent prompt");
-    const briefing = prepareParentContext(originalPrompt, opts.context,
-      options.parentMessages, options.parentToolCallId, opts.resumeRunId);
+    // Blackboard reads per-agent (so Agent A can publish for Agent B in same workflow);
+    // recent/full use one frozen snapshot from invocation.
+    const briefing = opts.context?.mode === "blackboard"
+      ? prepareParentContext(originalPrompt, opts.context, undefined, options.parentToolCallId, opts.resumeRunId, options.cwd)
+      : prepareParentContext(originalPrompt, opts.context,
+          options.parentMessages, options.parentToolCallId, opts.resumeRunId, options.cwd);
     const taskPrompt = briefing.prompt;
     const assignedPhase = opts.phase ?? state.currentPhase;
     let subagentType: string | null | undefined;

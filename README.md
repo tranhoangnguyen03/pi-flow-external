@@ -179,10 +179,13 @@ Agent({
 | Omitted or `{ mode: "none" }` | No parent history; write a self-contained prompt |
 | `{ mode: "recent", turns: N }` | Last N available user turns, including the current turn |
 | `{ mode: "full" }` | Available current-branch conversation after compaction, including summaries |
+| `{ mode: "blackboard", threads: [ids] }` | Durable project threads from `.pi/pi-flow-external/blackboard/*.md` (1–10 ids, `^[a-z0-9][a-z0-9_-]{0,63}$`) |
 
 A **user turn** starts with a user message and includes subsequent assistant messages and tool exchanges until the next user message. This is not Pi's per-model-response turn count. `turns` must be a positive integer. If fewer turns remain, all available user turns are shared and the receipt shows the actual/requested count. Recent mode does not automatically include older compaction summaries. Associated tool calls are retained when a result crosses the selected turn boundary.
 
-Choose the smallest sufficient context: `recent` for focused follow-ups, `full` when older discussion matters, and `none` for independent tasks. Supply missing older decisions explicitly. Use `resume` to follow up with an existing child; it cannot be combined with context sharing.
+Choose the smallest sufficient context: `recent` for focused follow-ups, `full` when older discussion matters, `blackboard` for durable semantic threads that survive compaction and sessions, and `none` for independent tasks. Supply missing older decisions explicitly. Use `resume` to follow up with an existing child; it cannot be combined with context sharing.
+
+**Blackboard (faked board for #29 experiment):** Agent A writes a curated finding to `.pi/pi-flow-external/blackboard/<thread-id>.md` via normal file tools; the parent passes `{ mode: "blackboard", threads: ["api-auth"] }` to Agent B. Threads are project-scoped, read per agent call (so earlier workflow children can publish for later ones), and fail explicitly if missing or over 1 MiB. Thread ids are validated (`^[a-z0-9][a-z0-9_-]{0,63}$`) and path-contained. Content is wrapped as background evidence, not instructions, with a SHA-256 digest in the receipt for replay invalidation.
 
 Snapshots are frozen before queueing. They contain labeled background text and completed tool exchanges, never parent system instructions, thinking blocks, tool-result metadata, or pending tool calls. Images/unsupported content and snapshots over **1 MiB** fail explicitly rather than being silently truncated. Full means available post-compaction context, not recovery of old transcripts or a byte-for-byte model request. External agents retain their own instructions and permissions.
 
@@ -226,7 +229,7 @@ Example request:
 Use the workflow tool to ask role "explorer" on harness "claude" for an architecture map and role "reviewer" on harness "codex" for a risk review, then synthesize their findings.
 ```
 
-Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every child selects from one parent snapshot frozen at workflow invocation; earlier child results must still be passed explicitly. Replay fingerprints include the transferred context, so changes invalidate cached results.
+Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Recent/full children select from one parent snapshot frozen at workflow invocation; blackboard children read thread files per agent call so earlier children can publish for later ones. Earlier child results must still be passed explicitly. Replay fingerprints include the transferred context (blackboard receipts carry a content digest), so changes invalidate cached results.
 
 ## Permission tiers, budgets, and resume
 
