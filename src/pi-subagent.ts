@@ -199,9 +199,6 @@ function formatSharedContext(value: unknown): string {
   if (value.mode === "recent") {
     return `recent · up to ${typeof value.turns === "number" ? value.turns : "?"} user turns`;
   }
-  if (value.mode === "blackboard") {
-    return `blackboard · ${Array.isArray(value.threads) ? value.threads.length : "?"} thread${Array.isArray(value.threads) && value.threads.length === 1 ? "" : "s"}`;
-  }
   return "";
 }
 
@@ -351,8 +348,8 @@ function createAgentTool(
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const briefing = prepareParentContext(params.prompt, params.context,
-        params.context && (params.context.mode === "recent" || params.context.mode === "full") ? captureParentContext(ctx.sessionManager) : undefined,
-        toolCallId, params.resume, ctx.cwd);
+        params.context && params.context.mode !== "none" ? captureParentContext(ctx.sessionManager) : undefined,
+        toolCallId, params.resume);
       const state = getState();
       const effectiveState: DelegationState = {
         ...state,

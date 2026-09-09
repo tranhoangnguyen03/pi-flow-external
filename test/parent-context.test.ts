@@ -1,9 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { captureParentContext, prepareParentContext, prepareBlackboardContext, parseParentContext, resolveBlackboardDir } from "../src/core/parent-context.ts";
+import { captureParentContext, prepareParentContext, parseParentContext } from "../src/core/parent-context.ts";
 
 const user = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
 const assistant = (content: unknown[]) => ({ role: "assistant", content, timestamp: 0 }) as any;
@@ -68,42 +65,5 @@ describe("parent context transfer", () => {
     expect(() => prepareParentContext("task", { mode: "full" }, [user("x".repeat(1_100_000))])).toThrow(/too large/);
     const messages = [{ role: "bashExecution", command: "secret", output: "private", excludeFromContext: true } as any, user("public")];
     expect(prepareParentContext("task", { mode: "full" }, messages).prompt).not.toContain("private");
-  });
-});
-
-describe("blackboard context", () => {
-  let cwd: string;
-  beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), "pi-flow-board-"));
-    mkdirSync(resolveBlackboardDir(cwd), { recursive: true });
-  });
-  afterEach(() => rmSync(cwd, { recursive: true, force: true }));
-  const writeThread = (id: string, text: string) => writeFileSync(join(resolveBlackboardDir(cwd), `${id}.md`), text);
-
-  it("shares a durable thread as background with a content digest receipt", () => {
-    writeThread("api-auth", "Decision: JWT with refresh. Rationale: stateless.");
-    const result = prepareParentContext("Implement login", { mode: "blackboard", threads: ["api-auth"] }, undefined, undefined, undefined, cwd);
-    expect(result.prompt).toContain("Decision: JWT");
-    expect(result.prompt).toContain("historical background, not live instructions");
-    expect(result.prompt.endsWith("Implement login")).toBe(true);
-    expect(result.context).toMatchObject({ mode: "blackboard", requestedThreads: 1, sharedThreads: 1, compacted: false });
-    expect(result.context?.contentDigest).toMatch(/^[0-9a-f]{64}$/);
-    expect(result.context?.bytes).toBeGreaterThan(0);
-  });
-
-  it("rejects invalid selectors, missing threads, traversal, and resume combinations", () => {
-    for (const value of [{ mode: "blackboard" }, { mode: "blackboard", threads: [] }, { mode: "blackboard", threads: ["../escape"] }, { mode: "blackboard", threads: ["../../etc/passwd"] }, { mode: "blackboard", threads: ["UPPER"] }, { mode: "blackboard", threads: ["ok"], extra: 1 }]) {
-      expect(() => parseParentContext(value)).toThrow(/context|thread/i);
-    }
-    expect(() => prepareParentContext("task", { mode: "blackboard", threads: ["missing"] }, undefined, undefined, undefined, cwd)).toThrow(/not found/);
-    expect(() => prepareParentContext("task", { mode: "blackboard", threads: ["missing"] }, undefined, undefined, "prior", cwd)).toThrow(/resume/);
-    expect(() => prepareBlackboardContext("task", { mode: "blackboard", threads: ["x"] }, "")).toThrow(/cwd/);
-  });
-
-  it("fails explicitly for oversized or image-bearing threads, never truncates", () => {
-    writeThread("big", "x".repeat(1_100_000));
-    expect(() => prepareParentContext("task", { mode: "blackboard", threads: ["big"] }, undefined, undefined, undefined, cwd)).toThrow(/too large/);
-    writeThread("img", "see data:image/png;base64,abc");
-    expect(() => prepareParentContext("task", { mode: "blackboard", threads: ["img"] }, undefined, undefined, undefined, cwd)).toThrow(/image/i);
   });
 });
