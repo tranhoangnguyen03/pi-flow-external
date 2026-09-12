@@ -260,6 +260,38 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-st
     expect(reportedUsage.at(-1)).toMatchObject({ input: 900, output: 90, cacheRead: 300 });
   });
 
+  it("reports an actionable hint when the installed agy CLI rejects a flag", async () => {
+    const binDir = join(tempDir, "bin-agy-old-flag");
+    mkdirSync(binDir, { recursive: true });
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+console.error("flag provided but not defined: -input-format");
+console.error("Usage of agy:");
+console.error("  --print Run a single prompt non-interactively");
+process.exit(2);
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnAgySubagent({
+      toolCallId: "agy-old-flag",
+      description: "Agy old flag",
+      prompt: "Run against an old CLI.",
+      profile: { name: "agy-old", description: "Agy old.", backend: "agy" },
+      thinkingLevel: undefined,
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("flag provided but not defined: -input-format");
+    expect(result.details.error).toContain("agy 1.1.15+");
+    expect(result.details.error).toContain("agy update");
+  });
+
   it("fails a clean exit that has no terminal result", async () => {
     const binDir = join(tempDir, "bin-agy-missing-result");
     mkdirSync(binDir, { recursive: true });
