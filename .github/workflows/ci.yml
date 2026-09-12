@@ -2,9 +2,8 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -22,10 +21,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -35,3 +36,15 @@ jobs:
 
       - name: Typecheck and test
         run: npm run check
+
+      - name: Package dry run
+        run: npm pack --dry-run
+
+      - name: Release metadata
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          node .github/scripts/release-utils.mjs selftest
+          node .github/scripts/release-utils.mjs validate
