@@ -184,6 +184,18 @@ export function agyPrintTimeout(timeoutMs: number | undefined): string | undefin
   return `${timeoutMs}ms`;
 }
 
+/** Older agy CLIs reject flags this extension passes; Go's flag package then
+ * prints "flag provided but not defined: -X" plus a usage dump and exits before
+ * the agent runs. Turn that into an actionable version hint instead.
+ * --input-format (unconditional here) was added in agy 1.1.15. */
+export function agyFlagErrorHint(stderr: string): string | undefined {
+  const match = /flags? provided but not defined: -([a-z0-9-]+)/i.exec(stderr);
+  if (!match) {
+    return undefined;
+  }
+  return `flag provided but not defined: -${match[1]} (installed agy CLI is too old; this extension needs agy 1.1.15+ for --input-format stream-json — run "agy update" and retry)`;
+}
+
 export function buildAgyArgs({
   profile,
   thinkingLevel,
@@ -446,7 +458,8 @@ export async function spawnAgySubagent(params: {
       : "";
     if (!terminalResult) {
       const stderr = stderrBuffer.text().trim();
-      throw new Error(`agy exited without a terminal result event${exitSuffix}${stderr ? `: ${stderr}` : ""}`);
+      const detail = agyFlagErrorHint(stderr) ?? (stderr ? stderr : undefined);
+      throw new Error(`agy exited without a terminal result event${exitSuffix}${detail ? `: ${detail}` : ""}`);
     }
     const terminalStatus = terminalResult.status?.trim().toUpperCase();
     if (!terminalStatus) {
