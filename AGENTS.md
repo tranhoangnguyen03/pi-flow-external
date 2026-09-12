@@ -52,5 +52,6 @@ Use workflows for requested fan-out or multi-agent orchestration across Claude/C
 ## Verification and release
 
 - Run `npm run check`, `npm pack --dry-run --json`, and `npm audit --omit=dev --audit-level=high` before release.
-- Follow `docs/field-testing.md` for real-backend checks and `docs/releasing.md` for versioning, npm authentication, prerelease tags, 2FA, and registry verification.
+- Follow `docs/field-testing.md` for real-backend checks and `docs/releasing.md` for the automated release flow, versioning, trusted publishing, and registry verification.
+- Releases are automated: merging a PR that bumps the version (labelled `release:patch|minor|major|prerelease`, or `release:none` to skip) tags the commit, publishes to npm via OIDC trusted publishing, and creates the GitHub release. `release:none` PRs must not change shipped files without a bump; CI enforces the label/version/CHANGELOG contract.
 - Never republish an existing npm version or force-push release history.

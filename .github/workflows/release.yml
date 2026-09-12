@@ -1,0 +1,165 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: "Only exchange an OIDC token with npm (no release)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Manual diagnostic: proves npm trusted publishing works without publishing.
+  # Must live in this file because npm binds a trusted publisher to the
+  # workflow filename.
+  oidc-check:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_only
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Exchange OIDC token with npm
+        run: |
+          set -eu
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "no OIDC request context; is id-token: write set?"
+            exit 1
+          fi
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | jq -r '.value // empty')
+          if [ -z "$OIDC" ]; then
+            echo "GitHub did not return an id_token"
+            exit 1
+          fi
+          PAYLOAD=$(printf '%s' "$OIDC" | cut -d. -f2)
+          PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 ))
+          if [ "$PAD" -gt 0 ]; then PAYLOAD="$PAYLOAD$(printf '=%.0s' $(seq 1 "$PAD"))"; fi
+          echo "--- OIDC claims (the values npm matches against the trusted publisher) ---"
+          printf '%s' "$PAYLOAD" | tr '_-' '/+' | base64 -d | jq '{repository, repository_owner, workflow, job_workflow_ref, ref, environment, event_name, aud}'
+          code=$(curl -sS -o "$RUNNER_TEMP/exchange.json" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $OIDC" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@tranhoangnguyen0310%2Fpi-flow-external")
+          echo "npm exchange HTTP $code"
+          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+            jq -r '.message // .error // "no message"' "$RUNNER_TEMP/exchange.json" 2>/dev/null || true
+            exit 1
+          fi
+          if ! jq -e '.token' "$RUNNER_TEMP/exchange.json" >/dev/null 2>&1; then
+            echo "exchange response contained no token"
+            exit 1
+          fi
+          echo "trusted publishing is configured: npm minted a publish token (not printed)"
+
+  # Read-only gate. Keeps the OIDC-minting permissions away from dependency
+  # install scripts.
+  verify:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_only != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm pack --dry-run --json
+      - run: npm audit --omit=dev --audit-level=high
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Read version
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Steps below are independently idempotent: a re-run resumes at the first
+      # step whose artifact is missing. Publishing always happens from the
+      # tagged tree, so a re-run after main has moved cannot ship different
+      # source than the tag points to.
+      - name: Tag and check out the tagged tree
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          TAG="v$V"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git tag -a "$TAG" -m "pi-flow-external $TAG"
+            git push origin "$TAG"
+          fi
+          git fetch --tags --force
+          git checkout --force "$TAG"
+          test "$(node -p "require('./package.json').version")" = "$V"
+
+      - name: Publish to npm
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          if npm view "@tranhoangnguyen0310/pi-flow-external@$V" version >/dev/null 2>&1; then
+            echo "npm already has $V"
+            exit 0
+          fi
+          npm publish --access public --provenance --ignore-scripts
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          TAG="v$V"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          found=""
+          for attempt in $(seq 1 12); do
+            if npm view "@tranhoangnguyen0310/pi-flow-external@$V" version >/dev/null 2>&1; then found=1; break; fi
+            echo "npm has not served $V yet (attempt $attempt/12); waiting 5s"
+            sleep 5
+          done
+          if [ -z "$found" ]; then
+            echo "npm does not have $V; not creating a GitHub release"
+            exit 1
+          fi
+          NOTES=$(node -e '
+            const fs = require("fs");
+            const v = process.env.V;
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split("\n");
+            const start = lines.findIndex((l) => l.startsWith("## [" + v + "]"));
+            if (start < 0) process.exit(0);
+            let end = lines.findIndex((l, i) => i > start && l.startsWith("## ["));
+            if (end < 0) end = lines.length;
+            process.stdout.write(lines.slice(start + 1, end).join("\n").trim());
+          ')
+          if [ -z "$NOTES" ]; then NOTES="Release $TAG"; fi
+          PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            NOTES="${NOTES}"$'\n\n'"**Full Changelog**: https://github.com/${REPO}/compare/${PREV}...${TAG}"
+          fi
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --title "pi-flow-external $TAG" --notes-file "$RUNNER_TEMP/notes.md"
