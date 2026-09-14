@@ -35,7 +35,7 @@ const externalRunsParameters = Type.Object({
     description: "Opaque continuation cursor from a prior response; pass back verbatim to page. Stale/reused cursors fail with an actionable error.",
   })),
   workflowCursor: Type.Optional(Type.String({
-    description: "Opaque cursor for paging workflow-child listings (list action); pass back verbatim.",
+    description: "Opaque cursor paging the workflow-roots listing (list action); pass back verbatim. Not used when workflowRunId filters to one workflow's children.",
   })),
   limit: Type.Optional(Type.Integer({
     minimum: 1,
@@ -45,7 +45,7 @@ const externalRunsParameters = Type.Object({
   limitBytes: Type.Optional(Type.Integer({
     minimum: 4,
     maximum: 65536,
-    description: "Max bytes per output/diagnostics page (inspect); follow nextCursor for the remainder.",
+    description: "Max bytes per inspect page, including the summary view; follow nextCursor for the remainder.",
   })),
   workflowRunId: Type.Optional(Type.String({
     description: "list filter: children of this wf_... workflow only.",
