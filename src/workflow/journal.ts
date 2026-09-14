@@ -176,21 +176,54 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   return { runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children };
 }
 
-export async function listWorkflowJournals(dir: string, project: string, limit = 100): Promise<LoadedWorkflowJournal[]> {
+export interface WorkflowJournalPage {
+  items: LoadedWorkflowJournal[];
+  nextCursor?: string;
+}
+
+function workflowListCursor(name: string): string {
+  return Buffer.from(JSON.stringify({ v: 1, kind: "workflow-list", name })).toString("base64url");
+}
+
+function workflowListStart(names: string[], cursor?: string): number {
+  if (!cursor) return 0;
+  if (cursor.length > 4_096) throw new Error("Invalid workflow list cursor");
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (Object.keys(parsed).sort().join(",") !== "kind,name,v" || parsed.v !== 1 || parsed.kind !== "workflow-list" || typeof parsed.name !== "string") throw new Error();
+    const index = names.indexOf(parsed.name);
+    if (index < 0) throw new Error();
+    return index + 1;
+  } catch {
+    throw new Error("Invalid workflow list cursor");
+  }
+}
+
+export async function listWorkflowJournals(dir: string, project: string, limit = 100, cursor?: string): Promise<WorkflowJournalPage> {
   let names: string[];
   try {
     names = (await readdir(dir)).filter((name) => /^run-wf_[A-Za-z0-9_-]{1,128}\.jsonl$/.test(name)).sort().reverse();
   } catch (error) {
-    if (isNotFound(error)) return [];
+    if (isNotFound(error)) return { items: [] };
     throw error;
   }
+  const start = workflowListStart(names, cursor);
+  const pageLimit = Math.max(1, Math.min(100, limit));
   const journals: LoadedWorkflowJournal[] = [];
-  for (const name of names.slice(0, 200)) {
+  let index = start;
+  for (; index < names.length && index < start + 200; index++) {
+    const name = names[index]!;
     const journal = await loadWorkflowJournal(dir, name.slice(4, -6));
     if (journal?.project === project) journals.push(journal);
-    if (journals.length >= Math.max(1, Math.min(100, limit))) break;
+    if (journals.length >= pageLimit) {
+      index++;
+      break;
+    }
   }
-  return journals;
+  return {
+    items: journals,
+    ...(index < names.length ? { nextCursor: workflowListCursor(names[index - 1]!) } : {}),
+  };
 }
 
 export async function createWorkflowJournalWriter(params: {

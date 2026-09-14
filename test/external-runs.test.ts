@@ -155,8 +155,15 @@ describe("external_runs", () => {
     }
     await journal.complete({ answer: 42 });
 
-    const listed = await execute({ action: "list" });
-    expect(listed.details.workflows).toEqual(expect.arrayContaining([expect.objectContaining({ runId: identity.runId, state: expect.objectContaining({ status: "done" }) })]));
+    const secondIdentity = createWorkflowRunIdentity("second script", null);
+    const second = await createWorkflowJournalWriter({ dir, identity: secondIdentity, name: "second", source: "inline", project: "/project" });
+    await second.complete("second");
+
+    const listed = await execute({ action: "list", limit: 1 });
+    expect(listed.details.workflows).toHaveLength(1);
+    expect(listed.details.nextWorkflowCursor).toEqual(expect.any(String));
+    const nextListed = await execute({ action: "list", limit: 1, workflowCursor: listed.details.nextWorkflowCursor });
+    expect(new Set([...listed.details.workflows, ...nextListed.details.workflows].map((workflow: any) => workflow.runId))).toEqual(new Set([identity.runId, secondIdentity.runId]));
     const inspected = await execute({ action: "inspect", runId: identity.runId, view: "summary" });
     expect(inspected.content[0].text).not.toContain("secret prompt");
     expect(inspected.content[0].text).not.toContain('"answer":42');

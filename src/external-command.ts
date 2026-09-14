@@ -197,16 +197,27 @@ async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: 
 
 async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<void> {
   let cursor: string | undefined;
+  let workflowCursor: string | undefined;
+  let pageKind: "all" | "runs" | "workflows" = "all";
+  let nextRunCursor: string | undefined;
+  let nextWorkflowCursor: string | undefined;
   while (true) {
-    const page = await runAction(options, { action: "list", limit: 50, ...(cursor ? { cursor } : {}) }, ctx);
+    const page = await runAction(options, {
+      action: "list",
+      limit: 50,
+      ...(pageKind === "runs" && cursor ? { cursor } : {}),
+      ...(pageKind === "workflows" && workflowCursor ? { workflowCursor } : {}),
+    }, ctx);
     const details = object(page.details);
     const entries = [
-      ...(Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow", item: object(item) })) : []),
-      ...(Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run", item: object(item) })) : []),
+      ...(pageKind !== "runs" && Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow", item: object(item) })) : []),
+      ...(pageKind !== "workflows" && Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run", item: object(item) })) : []),
     ].filter(({ item }) => typeof item.runId === "string");
     const choices = entries.map(({ kind, item }) => `${kind} ${String(item.runId)} · ${String(object(item.state).status ?? item.status ?? "unknown")}`);
-    const next = typeof details.nextCursor === "string" ? details.nextCursor : undefined;
-    if (next) choices.push("Next page");
+    if (pageKind !== "workflows") nextRunCursor = typeof details.nextCursor === "string" ? details.nextCursor : undefined;
+    if (pageKind !== "runs") nextWorkflowCursor = typeof details.nextWorkflowCursor === "string" ? details.nextWorkflowCursor : undefined;
+    if (nextWorkflowCursor) choices.push("Next workflow page");
+    if (nextRunCursor) choices.push("Next run page");
     if (!choices.length) {
       ctx.ui.notify("No external runs are available in this session and project.", "info");
       return;
@@ -214,8 +225,14 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
     choices.push("Back");
     const choice = await ctx.ui.select("External runs", choices);
     if (!choice || choice === "Back") return;
-    if (choice === "Next page") {
-      cursor = next;
+    if (choice === "Next workflow page") {
+      workflowCursor = nextWorkflowCursor;
+      pageKind = "workflows";
+      continue;
+    }
+    if (choice === "Next run page") {
+      cursor = nextRunCursor;
+      pageKind = "runs";
       continue;
     }
     const selected = entries[choices.indexOf(choice)];

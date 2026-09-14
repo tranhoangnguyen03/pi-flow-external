@@ -49,7 +49,9 @@ describe("/external command", () => {
       const summarySplit = workflowSummary.indexOf('"runId":"run_31"');
       const externalRuns = {
         execute: vi.fn(async (_id: string, params: any) => {
-          if (params.action === "list") return { content: [{ type: "text", text: "list" }], details: { workflows: [{ runId: "wf_all", task: { name: "wide" }, state: { status: "running" } }], runs: [] } };
+          if (params.action === "list") return params.workflowCursor
+            ? { content: [{ type: "text", text: "list" }], details: { workflows: [{ runId: "wf_all", task: { name: "wide" }, state: { status: "running" } }], runs: [] } }
+            : { content: [{ type: "text", text: "list" }], details: { workflows: [{ runId: "wf_first", task: { name: "first" }, state: { status: "done" } }], runs: [], nextWorkflowCursor: "wf-next" } };
           if (params.action === "cancel") return { content: [{ type: "text", text: "cancelled" }], details: { status: "requested" } };
           if (params.runId === "wf_all") return params.cursor
             ? { content: [{ type: "text", text: workflowSummary.slice(summarySplit) }], details: { text: workflowSummary.slice(summarySplit) } }
@@ -111,8 +113,10 @@ describe("/external command", () => {
           confirm: vi.fn(async () => true),
           select: vi.fn(async (title: string, choices: string[]) => {
             if (title === "External runs") return rootActions++ === 0
-              ? choices.find((choice) => choice.includes("wf_all"))
-              : "Back";
+              ? "Next workflow page"
+              : rootActions === 2
+                ? choices.find((choice) => choice.includes("wf_all"))
+                : "Back";
             if (title.includes("wf_all")) return workflowActions++ === 0
               ? choices.find((choice) => choice.includes("run_60"))
               : choices.find((choice) => choice === "Back");
@@ -122,6 +126,7 @@ describe("/external command", () => {
         },
       };
       await command?.handler("runs", interactiveCtx);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "list", workflowCursor: "wf-next" }), undefined, undefined, interactiveCtx);
       expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "wf_all", view: "summary", cursor: "summary-2" }), undefined, undefined, interactiveCtx);
       expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "run_60", view: "output", cursor: "output-2" }), undefined, undefined, interactiveCtx);
       expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), { action: "cancel", runId: "run_60", reason: "cancelled from /external runs" }, undefined, undefined, interactiveCtx);

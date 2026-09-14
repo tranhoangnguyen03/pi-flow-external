@@ -18,6 +18,7 @@ const externalRunsParameters = Type.Object({
   view: Type.Optional(StringEnum(["summary", "output", "diagnostics"] as const)),
   mode: Type.Optional(StringEnum(["any", "all"] as const)),
   cursor: Type.Optional(Type.String()),
+  workflowCursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   limitBytes: Type.Optional(Type.Integer({ minimum: 4, maximum: 65536 })),
   workflowRunId: Type.Optional(Type.String()),
@@ -239,29 +240,32 @@ export function createExternalRunsTool(
 
       if (params.action === "list") {
         if (params.workflowRunId !== undefined && !WORKFLOW_ID.test(params.workflowRunId)) throw new Error("Invalid workflow run ID");
-        const page = await listRunRecords({
-          runsDirectory,
-          sessionId,
-          project,
-          workflowRunId: params.workflowRunId,
-          limit: params.limit,
-          cursor: params.cursor,
-        });
+        const page = params.workflowCursor && !params.cursor
+          ? { items: [] }
+          : await listRunRecords({
+              runsDirectory,
+              sessionId,
+              project,
+              workflowRunId: params.workflowRunId,
+              limit: params.limit,
+              cursor: params.cursor,
+            });
         const workflowDir = getSessionWorkflowDir(ctx);
-        const historical = !params.cursor && !params.workflowRunId && workflowDir
-          ? await listWorkflowJournals(workflowDir, project, params.limit)
-          : [];
-        const current = params.cursor || params.workflowRunId
+        const historical = !params.workflowRunId && workflowDir
+          ? await listWorkflowJournals(workflowDir, project, params.limit, params.workflowCursor)
+          : { items: [] };
+        const current = params.cursor || params.workflowCursor || params.workflowRunId
           ? []
           : options.registry.list(sessionId, project).filter((entry) => entry.kind === "workflow").map((entry) => liveSummary(entry));
         const currentIds = new Set(current.map((entry) => entry.runId));
-        const workflows = [...current, ...historical.filter((journal) => !currentIds.has(journal.runId)).map((journal) => journalSummary(journal))];
-        const liveAgents = params.cursor ? [] : options.registry.list(sessionId, project)
+        const workflows = [...current, ...historical.items.filter((journal) => !currentIds.has(journal.runId)).map((journal) => journalSummary(journal))];
+        const liveAgents = params.cursor || params.workflowCursor ? [] : options.registry.list(sessionId, project)
           .filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId))
           .map(listedAgent);
         const liveIds = new Set(liveAgents.map((entry) => entry.runId));
         const runs = [...liveAgents, ...page.items.filter((entry) => !liveIds.has(entry.runId)).map(historicalAgent)];
-        return result(JSON.stringify({ workflows, runs, nextCursor: page.nextCursor }), { workflows, runs, nextCursor: page.nextCursor });
+        const list = { workflows, runs, nextCursor: page.nextCursor, nextWorkflowCursor: historical.nextCursor };
+        return result(JSON.stringify(list), list);
       }
 
       if (params.action === "inspect") {
