@@ -8,6 +8,7 @@ import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import type { WorkflowToolDetails } from "../src/types.ts";
 import {
+  ChildRunError,
   parseWorkflowScript,
   runWorkflow,
   type WorkflowAgentRunner,
@@ -344,18 +345,27 @@ describe("runWorkflow", () => {
     expect(result.result).toEqual(["A-A", "B-B"]);
   });
 
-  it("returns null and logs when an agent fails", async () => {
-    const logs: string[] = [];
-    const result = await runWorkflow(`${META}return await agent('x', { label: 'boom' });`, {
+  it("throws an uncaught structured child failure", async () => {
+    const recorded: any[] = [];
+    const failure = runWorkflow(`${META}return await agent('x', { label: 'boom' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runAgent: async () => {
-        throw new Error("kaboom");
+        throw new ChildRunError({ runId: "run_boom", outcome: "failed", message: "kaboom" });
       },
-      onLog: (message) => logs.push(message),
+      onAgentResult: (event) => { recorded.push(event); },
     });
-    expect(result.result).toBeNull();
-    expect(logs.some((line) => line.includes("boom") && line.includes("kaboom"))).toBe(true);
+    await expect(failure).rejects.toMatchObject({
+      name: "ChildRunError",
+      runId: "run_boom",
+      outcome: "failed",
+      message: "kaboom",
+    });
+    expect(recorded).toMatchObject([{
+      failed: true,
+      runId: "run_boom",
+      error: { runId: "run_boom", outcome: "failed", message: "kaboom" },
+    }]);
   });
 
   it("does not treat a successful null agent result as a failed agent", async () => {
@@ -370,22 +380,69 @@ describe("runWorkflow", () => {
     expect(ended).toEqual([{ result: null, failed: false }]);
   });
 
-  it("isolates a failing parallel branch without sinking the others", async () => {
+  it("lets the script catch a structured child failure and continue sibling work", async () => {
     const runAgent: WorkflowAgentRunner = async (call) => {
       if (call.label === "bad") {
-        throw new Error("nope");
+        throw new ChildRunError({
+          runId: "run_bad",
+          outcome: "timed_out",
+          message: "nope",
+          outputRef: { runId: "run_bad", view: "output" },
+          diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+        });
       }
       return call.label;
     };
     const result = await runWorkflow(
-      `${META}return await parallel([
+      `${META}const values = await parallel([
         () => agent('1', { label: 'ok1' }),
-        () => agent('2', { label: 'bad' }),
+        async () => { try { return await agent('2', { label: 'bad' }); } catch (error) { return {
+          name: error.name, runId: error.runId, outcome: error.outcome,
+          outputRef: error.outputRef, diagnosticsRef: error.diagnosticsRef,
+        }; } },
         () => agent('3', { label: 'ok2' }),
-      ]);`,
+      ]); return values;`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runAgent },
     );
-    expect(result.result).toEqual(["ok1", null, "ok2"]);
+    expect(result.result).toEqual([
+      "ok1",
+      {
+        name: "ChildRunError",
+        runId: "run_bad",
+        outcome: "timed_out",
+        outputRef: { runId: "run_bad", view: "output" },
+        diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+      },
+      "ok2",
+    ]);
+  });
+
+  it("aborts and drains siblings after an unhandled child failure", async () => {
+    let slowDrained = false;
+    const failure = runWorkflow(
+      `${META}return await parallel([
+        () => agent('slow', { label: 'slow' }),
+        () => agent('bad', { label: 'bad' }),
+      ]);`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        runAgent: async (call, signal) => {
+          if (call.label === "bad") {
+            throw new ChildRunError({ runId: "run_bad", outcome: "failed", message: "bad child" });
+          }
+          return await new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              slowDrained = true;
+              reject(new Error("slow child aborted"));
+            }, { once: true });
+          });
+        },
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({ name: "ChildRunError", runId: "run_bad" });
+    expect(slowDrained).toBe(true);
   });
 
   it("propagates abort raised mid-run", async () => {
@@ -483,20 +540,16 @@ describe("runWorkflow", () => {
     ).rejects.toThrow(/non-plain object Box/i);
   });
 
-  it("rejects class instances returned by subagents instead of flattening them", async () => {
+  it("rejects class instances returned by subagents as child failures", async () => {
     class Box {
       value = 1;
     }
-    const logs: string[] = [];
-    const result = await runWorkflow(`${META}return await agent('x', { label: 'a' });`, {
+    const failure = runWorkflow(`${META}return await agent('x', { label: 'a' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(1),
       runAgent: async () => new Box(),
-      onLog: (message) => logs.push(message),
     });
-
-    expect(result.result).toBeNull();
-    expect(logs.some((line) => /non-plain object Box/i.test(line))).toBe(true);
+    await expect(failure).rejects.toMatchObject({ name: "ChildRunError", message: expect.stringMatching(/non-plain object Box/i) });
   });
 
   it("normalizes JSON-like workflow results to canonical JSON", async () => {
@@ -567,7 +620,12 @@ describe("runWorkflow", () => {
           livePrompts.push(call.prompt);
           return `${call.prompt}:live2`;
         },
-        resumeAgentResults: firstRunEvents.map(({ index, fingerprint, result }) => ({ index, fingerprint, result })),
+        resumeAgentResults: firstRunEvents.map(({ index, fingerprint, result }) => ({
+          index,
+          fingerprint,
+          result,
+          ...(index === 1 ? { runId: "run_first" } : {}),
+        })),
         onAgentResult: (event) => {
           secondRunEvents.push(event);
         },
@@ -577,16 +635,17 @@ describe("runWorkflow", () => {
     expect(secondRun.result).toEqual(["first:live1", "second changed:live2"]);
     expect(livePrompts).toEqual(["second changed"]);
     expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
+    expect(secondRunEvents[0].runId).toBe("run_first");
   });
 
   it("does not replay cached failed agent results on resume", async () => {
     const firstRunEvents: any[] = [];
-    const script = `${META}const a = await agent('first', { label: 'one' });\nconst b = await agent('second', { label: 'two' });\nreturn [a, b];`;
+    const script = `${META}const a = await agent('first', { label: 'one' });\nlet b;\ntry { b = await agent('second', { label: 'two' }); } catch (error) { b = error.outcome; }\nconst c = await agent('third', { label: 'three' });\nreturn [a, b, c];`;
     await runWorkflow(script, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runAgent: async (call) => {
-        if (call.label === "two") throw new Error("transient");
+        if (call.label === "two") throw new ChildRunError({ runId: "run_two", outcome: "failed", message: "transient" });
         return `${call.prompt}:live1`;
       },
       onAgentResult: (event) => {
@@ -609,9 +668,9 @@ describe("runWorkflow", () => {
       },
     });
 
-    expect(second.result).toEqual(["first:live1", "second:live2"]);
-    expect(liveLabels).toEqual(["two"]);
-    expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
+    expect(second.result).toEqual(["first:live1", "second:live2", "third:live2"]);
+    expect(liveLabels).toEqual(["two", "three"]);
+    expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false, false]);
   });
 
   it("emits phase, agent start/end, and failure-log progress events in order", async () => {
@@ -623,14 +682,14 @@ describe("runWorkflow", () => {
       return call.label;
     };
     await runWorkflow(
-      `${META}phase('scan');\nawait agent('a', { label: 'ok' });\nawait agent('b', { label: 'boom' });\nreturn null;`,
+      `${META}phase('scan');\nawait agent('a', { label: 'ok' });\ntry { await agent('b', { label: 'boom' }); } catch {}\nreturn null;`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
         runAgent,
         onPhase: (title) => events.push(`phase:${title}`),
         onAgentStart: (event) => events.push(`start:${event.label}`),
-        onAgentEnd: (event) => events.push(`end:${event.label}:${event.result === null ? "fail" : "ok"}`),
+        onAgentEnd: (event) => events.push(`end:${event.label}:${event.failed ? "fail" : "ok"}`),
         onLog: () => events.push("log"),
       },
     );
@@ -651,7 +710,7 @@ describe("runWorkflow", () => {
       return call.label;
     };
     await runWorkflow(
-      `${META}await parallel([\n() => agent('ok', { label: 'dup' }),\n() => agent('boom', { label: 'dup' }),\n]);\nreturn null;`,
+      `${META}await parallel([\n() => agent('ok', { label: 'dup' }),\nasync () => { try { return await agent('boom', { label: 'dup' }); } catch { return null; } },\n]);\nreturn null;`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
@@ -661,9 +720,7 @@ describe("runWorkflow", () => {
     );
     // Same label, distinct indices: the UI keys on index so the failure mark lands on the right row.
     expect(ended.map((event) => event.index).sort()).toEqual([1, 2]);
-    const byIndex = new Map(ended.map((event) => [event.index, event.failed]));
-    expect(byIndex.get(1)).toBe(false);
-    expect(byIndex.get(2)).toBe(true);
+    expect(ended.map((event) => event.failed).sort()).toEqual([false, true]);
   });
 });
 

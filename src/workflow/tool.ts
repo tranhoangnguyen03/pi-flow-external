@@ -20,7 +20,7 @@ import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
-import type { WorkflowAgentRunner } from "./types.ts";
+import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner } from "./types.ts";
 import {
   createStructuredOutputTool,
   STRUCTURED_OUTPUT_CONTRACT,
@@ -85,6 +85,11 @@ function formatRecentLogs(logs: string[], max = 10): string {
   const hidden = logs.length - shown.length;
   const prefix = hidden > 0 ? `- ... ${hidden} earlier log(s)\n` : "";
   return `\n\nLogs:\n${prefix}${shown.map((log) => `- ${log}`).join("\n")}`;
+}
+
+function childOutcome(details: SubagentToolDetails): ChildRunOutcome {
+  if (details.timedOut) return "timed_out";
+  return details.status === "aborted" ? "cancelled" : "failed";
 }
 
 export function createWorkflowTool(
@@ -252,7 +257,14 @@ export function createWorkflowTool(
           emit();
         }
         if (resultDetails.status !== "done") {
-          throw new Error(resultDetails.error ?? "subagent failed");
+          const runId = resultDetails.runId ?? call.runRecord?.runId ?? childId;
+          throw new ChildRunError({
+            runId,
+            outcome: childOutcome(resultDetails),
+            message: resultDetails.error ?? "subagent failed",
+            outputRef: { runId, view: "output" },
+            diagnosticsRef: { runId, view: "diagnostics" },
+          });
         }
         if (externalOutputSchema) {
           try {
@@ -362,6 +374,7 @@ export function createWorkflowTool(
               snapshot.agents.push(agent);
             }
             agent.status = event.cached ? "done" : "running";
+            if (event.runId) agent.externalRunId = event.runId;
             agent.startedAt = Date.now();
             snapshot.agentCount = snapshot.agents.length;
             if (event.cached) {
@@ -373,18 +386,23 @@ export function createWorkflowTool(
           onAgentEnd: (event) => {
             const agent = snapshot.agents.find((item) => item.index === event.index);
             if (agent) {
-              agent.status = event.failed ? "error" : "done";
+              agent.status = event.error?.outcome === "cancelled" || event.error?.outcome === "timed_out"
+                ? "aborted"
+                : event.failed ? "error" : "done";
               agent.endedAt = Date.now();
-              if (event.failed && !agent.error) {
-                agent.error = "subagent failed";
-              }
+              if (event.error) {
+                agent.error = event.error.message;
+                agent.externalRunId = event.error.runId;
+                agent.timedOut = event.error.outcome === "timed_out";
+              } else if (event.failed && !agent.error) agent.error = "subagent failed";
             }
             emit();
           },
           onAgentResult: async (event) => {
             const agent = snapshot.agents.find((item) => item.index === event.index);
-            if (agent && event.context) {
-              agent.context = event.context;
+            if (agent) {
+              if (event.context) agent.context = event.context;
+              if (event.runId) agent.externalRunId = event.runId;
               emit();
             }
             await journalWriter?.appendAgentResult(event);

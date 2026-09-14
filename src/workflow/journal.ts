@@ -124,7 +124,13 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     if (typeof index !== "number" || typeof fingerprint !== "string") {
       continue;
     }
-    agentResults[index - 1] = { index, fingerprint, result: entry.result, failed: entry.failed === true };
+    agentResults[index - 1] = {
+      index,
+      fingerprint,
+      result: entry.result,
+      failed: entry.failed === true,
+      ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+    };
   }
 
   if (!seenRunStart) {
@@ -183,6 +189,8 @@ export async function createWorkflowJournalWriter(params: {
         schema: event.schema,
         cached: event.cached,
         failed: event.failed === true,
+        runId: event.runId,
+        error: event.error,
         result: event.result,
       });
     },
