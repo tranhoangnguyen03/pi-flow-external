@@ -66,6 +66,7 @@ export interface WorkflowAgentSnapshot {
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt?: number;
+  queuedAt?: number;
   endedAt?: number;
   activity?: string[];
   activityCount?: number;
@@ -139,6 +140,7 @@ export interface SubagentProgressNode {
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt: number;
+  queuedAt?: number;
   endedAt?: number;
   activity: string[];
   activityCount: number;

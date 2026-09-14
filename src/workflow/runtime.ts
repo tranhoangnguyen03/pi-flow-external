@@ -11,6 +11,8 @@ import {
 } from "./runtime-values.ts";
 import type {
   RunWorkflowOptions,
+  WorkflowAgentCall,
+  WorkflowAgentQueuedEvent,
   WorkflowAgentResultEvent,
   WorkflowLimits,
   WorkflowRunResult,
@@ -174,7 +176,7 @@ export async function runWorkflow<T = unknown>(
 
     const index = ++state.agentCount;
     const label = opts.label || defaultAgentLabel(assignedPhase, index);
-    const call = {
+    const call: WorkflowAgentCall = {
       index,
       prompt: taskPrompt,
       ...(briefing.context ? { context: briefing.context } : {}),
@@ -197,8 +199,24 @@ export async function runWorkflow<T = unknown>(
     state.resumePrefixActive = false;
 
     // Queue on the shared global cap. May reject if aborted while waiting.
-    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context });
-    const release = await limiter.acquire(compositeSignal);
+    const queuedEvent: WorkflowAgentQueuedEvent = { index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context };
+    options.onAgentQueued?.(queuedEvent);
+    const runRecord = queuedEvent.runRecord;
+    if (runRecord) call.runRecord = runRecord;
+    let release: () => void;
+    try {
+      release = await limiter.acquire(compositeSignal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await runRecord?.finish({
+        status: compositeSignal.aborted ? "aborted" : "error",
+        error: message,
+        queued: true,
+        backendStarted: false,
+      });
+      options.onAgentEnd?.({ index, label, phase: assignedPhase, result: null, failed: true, cached: false });
+      throw error;
+    }
     let result: unknown;
     let failed = false;
     try {

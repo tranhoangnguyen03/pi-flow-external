@@ -129,8 +129,10 @@ export function createRunRecord(options: RunRecordOptions = {}): RunRecord {
         const document = {
           version: RUN_RECORD_VERSION,
           runId,
+          queuedAt: startedAt,
           startedAt,
           finishedAt,
+          ...(options.metadata === undefined ? {} : { metadata: redactSecrets(options.metadata) }),
           eventCount: persistedEventCount,
           attemptedEventCount,
           writeErrorCount,

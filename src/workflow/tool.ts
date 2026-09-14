@@ -12,6 +12,8 @@ import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode }
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
+import { createRunRecord } from "../core/run-record.ts";
+import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
@@ -208,6 +210,7 @@ export function createWorkflowTool(
           appendInstructions,
           customTools,
           outputSchema: externalOutputSchema ? call.schema : undefined,
+          runRecord: call.runRecord,
         });
         const resultDetails = result.details as SubagentToolDetails;
         const agent = snapshot.agents.find((item) => item.index === childIndex);
@@ -301,6 +304,22 @@ export function createWorkflowTool(
             emit();
           },
           onAgentQueued: (event) => {
+            const queuedAt = Date.now();
+            const profile = profiles.get(event.subagentType);
+            const runRecord = createRunRecord({
+              directory: runRecordsDirectory(),
+              metadata: {
+                kind: "workflow-child",
+                parentSessionId: ctx.sessionManager?.getSessionId?.(),
+                project: ctx.cwd,
+                workflowRunId: identity.runId,
+                description: event.label,
+                prompt: event.prompt,
+                profile: event.subagentType,
+                backend: profile?.backend,
+                queuedAt: new Date(queuedAt).toISOString(),
+              },
+            });
             snapshot.agents.push({
               index: event.index,
               label: event.label,
@@ -308,13 +327,16 @@ export function createWorkflowTool(
               subagentType: event.subagentType,
               backend: profiles.get(event.subagentType)?.backend,
               status: "queued",
+              externalRunId: runRecord.runId,
+              recordPath: runRecord.directory,
               context: event.context,
-              startedAt: Date.now(),
+              queuedAt,
               activity: [],
               activityCount: 0,
             });
             snapshot.agentCount = snapshot.agents.length;
             emit();
+            event.runRecord = runRecord;
           },
           onAgentStart: (event) => {
             let agent = snapshot.agents.find((item) => item.index === event.index);

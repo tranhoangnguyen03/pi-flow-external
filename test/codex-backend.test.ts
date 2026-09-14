@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -167,6 +167,51 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     expect(codexRun.stdin).toBe("Review the latest diff.");
     const rootMessages = JSON.stringify(rootContinuationContext?.messages);
     expect(rootMessages).toContain("codex child done");
+
+    disposeSession(session);
+  });
+
+  it("keeps one evidence id when a queued run is cancelled before spawn", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-queued");
+    const spawnCountPath = join(tempDir, "spawn-count");
+    const releasePath = join(tempDir, "release-first");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Queue test.\nbackend: codex\n---\n");
+    writeFileSync(join(binDir, "codex"), `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+for await (const _chunk of process.stdin) {}
+const count = existsSync(${JSON.stringify(spawnCountPath)}) ? Number(readFileSync(${JSON.stringify(spawnCountPath)}, 'utf8')) : 0;
+writeFileSync(${JSON.stringify(spawnCountPath)}, String(count + 1));
+while (!existsSync(${JSON.stringify(releasePath)})) await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'queued-test' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+`);
+    chmodSync(join(binDir, "codex"), 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
+    const first = tool.execute("first", { description: "First", prompt: "hold", role: "worker", harness: "codex" }, undefined, undefined, context);
+    await vi.waitFor(() => expect(readFileSync(spawnCountPath, "utf8")).toBe("1"));
+
+    const controller = new AbortController();
+    const secondPromise = tool.execute("second", { description: "Second", prompt: "queue", role: "worker", harness: "codex" }, controller.signal, undefined, context);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    const second = await secondPromise;
+    writeFileSync(releasePath, "go");
+    await first;
+
+    expect(readFileSync(spawnCountPath, "utf8")).toBe("1");
+    expect(second.details.runId).toMatch(/^run_/);
+    const summary = JSON.parse(readFileSync(join(agentDir, "pi-flow-external", "runs", second.details.runId, "summary.json"), "utf8"));
+    expect(summary.runId).toBe(second.details.runId);
+    expect(summary.summary).toMatchObject({ status: "aborted", queued: true });
+    expect(readdirSync(join(agentDir, "pi-flow-external", "runs"))).toHaveLength(2);
 
     disposeSession(session);
   });

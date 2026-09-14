@@ -1,5 +1,6 @@
 import type { ParentContextMessages, ParentContextReceipt } from "../core/parent-context.ts";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
+import type { RunRecord } from "../core/run-record.ts";
 
 export interface WorkflowMetaPhase {
   title: string;
@@ -33,6 +34,8 @@ export interface WorkflowAgentCall {
   maxBudgetUsd?: number;
   /** Prior run id whose backend conversation this child continues. */
   resumeRunId?: string;
+  /** Evidence allocated before the call waits for a global concurrency slot. */
+  runRecord?: RunRecord;
 }
 
 export interface WorkflowCachedAgentResult {
@@ -50,6 +53,16 @@ export interface WorkflowAgentResultEvent extends WorkflowCachedAgentResult {
   prompt: string;
   schema?: unknown;
   cached: boolean;
+}
+
+export interface WorkflowAgentQueuedEvent {
+  index: number;
+  label: string;
+  phase?: string;
+  subagentType: string;
+  prompt: string;
+  context?: ParentContextReceipt;
+  runRecord?: RunRecord;
 }
 
 /**
@@ -104,7 +117,7 @@ export interface RunWorkflowOptions {
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
   resumeAgentResults?: WorkflowCachedAgentResult[];
-  onAgentQueued?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; context?: ParentContextReceipt }) => void;
+  onAgentQueued?: (event: WorkflowAgentQueuedEvent) => void;
   onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean }) => void;
   onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;

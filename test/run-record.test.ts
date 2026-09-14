@@ -54,8 +54,10 @@ describe("createRunRecord", () => {
       eventCount: 4,
       attemptedEventCount: 4,
       writeErrorCount: 0,
+      metadata: { backend: "codex", profile: "reviewer" },
       summary: { status: "succeeded", result: "done" },
     });
+    expect(summary.queuedAt).toEqual(expect.any(String));
     expect(summary.startedAt).toEqual(expect.any(String));
     expect(summary.finishedAt).toEqual(expect.any(String));
     if (process.platform !== "win32") {

@@ -23,7 +23,8 @@ import {
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
-import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { attachRunRecordIdentity, CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { createRunRecord } from "./core/run-record.ts";
 import { captureParentContext, parentContextSchema, prepareParentContext } from "./core/parent-context.ts";
 import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
@@ -402,10 +403,29 @@ function createAgentTool(
         });
       }
 
+      const queuedAt = Date.now();
+      const runRecord = createRunRecord({
+        directory: runRecordsDirectory(),
+        metadata: {
+          kind: "agent",
+          parentSessionId: ctx.sessionManager?.getSessionId?.(),
+          project: ctx.cwd,
+          description: params.description,
+          prompt: briefing.prompt,
+          profile: profile.name,
+          backend: profile.backend,
+          queuedAt: new Date(queuedAt).toISOString(),
+        },
+      });
       const progress = effectiveState.progressEnabled
         ? createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend)
         : undefined;
-      if (progress) progress.context = briefing.context;
+      if (progress) {
+        progress.context = briefing.context;
+        progress.queuedAt = queuedAt;
+        progress.runId = runRecord.runId;
+        progress.recordPath = runRecord.directory;
+      }
       const run = progress ? { toolCallId, progress, onUpdate } : undefined;
       if (run) {
         state.activeRuns.set(toolCallId, run);
@@ -427,7 +447,7 @@ function createAgentTool(
           state.activeRuns.delete(toolCallId);
           broadcastActiveRunUpdates(state);
         }
-        return textResult(`Subagent "${params.description}" (${subagentType}) ${status}: ${message}`, {
+        const result = textResult(`Subagent "${params.description}" (${subagentType}) ${status}: ${message}`, {
           description: params.description,
           subagentType,
           backend: profile.backend,
@@ -435,6 +455,9 @@ function createAgentTool(
           error: message,
           ...(run ? { progress: run.progress, activeCount: getRunningRunCount(state), frame: state.frame } : {}),
         });
+        await runRecord.finish({ status, error: message, queued: true, backendStarted: false });
+        attachRunRecordIdentity(result, runRecord);
+        return result;
       }
 
       if (run) {
@@ -471,6 +494,7 @@ function createAgentTool(
             : undefined,
           onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
           excludeTools: CHILD_EXCLUDED_TOOLS,
+          runRecord,
         });
         const details = result.details as SubagentToolDetails;
         if (run && details.progress) {

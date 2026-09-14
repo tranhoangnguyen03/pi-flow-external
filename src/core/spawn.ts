@@ -83,6 +83,8 @@ export interface SpawnSubagentParams {
   maxBudgetUsd?: number;
   /** Prior local run id whose backend conversation should be continued. */
   resumeRunId?: string;
+  /** Evidence identity allocated by the caller before waiting for a concurrency slot. */
+  runRecord?: RunRecord;
 }
 
 interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
@@ -128,6 +130,20 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
   return false;
 }
 
+export function attachRunRecordIdentity(result: AgentToolResult, record: RunRecord): void {
+  const apply = (details: SubagentToolDetails | SubagentProgressNode) => {
+    details.runId = record.runId;
+    details.recordPath = record.directory;
+  };
+  apply(result.details as SubagentToolDetails);
+  const details = result.details as SubagentToolDetails;
+  if (details.progress) apply(details.progress);
+  const first = result.content[0];
+  if (first?.type === "text" && !first.text.includes(`[run ${record.runId}`)) {
+    first.text = `${first.text}\n\n[run ${record.runId}]`;
+  }
+}
+
 function attachRunRecord(
   result: AgentToolResult,
   record: RunRecord,
@@ -146,8 +162,6 @@ function attachRunRecord(
   },
 ): void {
   const apply = (details: SubagentToolDetails | SubagentProgressNode) => {
-    details.runId = record.runId;
-    details.recordPath = record.directory;
     details.backendEventCount = backendEventCount;
     details.nestedActivitySeen = nestedActivitySeen;
     details.nestedTimeoutExtended = nestedTimeoutExtended;
@@ -184,9 +198,10 @@ function attachRunRecord(
   const elevatedNote = extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier
     ? ` · permission elevated ${extras.requestedTier}→${extras.permission.tier}`
     : "";
+  attachRunRecordIdentity(result, record);
   const first = result.content[0];
   if (first?.type === "text") {
-    first.text = `${first.text}\n\n[run ${record.runId}${blocked}${elevatedNote}]`;
+    first.text = first.text.replace(`[run ${record.runId}]`, `[run ${record.runId}${blocked}${elevatedNote}]`);
   }
   if (details.progress) {
     apply(details.progress);
@@ -233,7 +248,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
   const record = params.recordRun === false
     ? undefined
-    : createRunRecord({
+    : params.runRecord ?? createRunRecord({
         directory: runRecordsDirectory(),
         metadata: {
           description: params.description,
@@ -272,6 +287,15 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       onBackendEvent,
       resumeSessionId: resumeSession?.sessionId,
       onProgress: params.onProgress ? (partial) => {
+        if (record) {
+          const details = partial.details as SubagentToolDetails;
+          details.runId = record.runId;
+          details.recordPath = record.directory;
+          if (details.progress) {
+            details.progress.runId = record.runId;
+            details.progress.recordPath = record.directory;
+          }
+        }
         if (params.context) {
           const details = partial.details as SubagentToolDetails;
           details.context = params.context;
