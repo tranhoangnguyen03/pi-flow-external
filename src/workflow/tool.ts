@@ -198,6 +198,10 @@ export function createWorkflowTool(
               agent.activityCount = details.progress.activityCount;
               agent.result = details.progress.result;
               agent.error = details.progress.error;
+              agent.assistantOutput = details.progress.assistantOutput;
+              agent.processStartedAt = details.progress.processStartedAt;
+              agent.firstActivityAt = details.progress.firstActivityAt;
+              agent.lastActivityAt = details.progress.lastActivityAt;
               agent.timedOut = details.progress.timedOut;
               agent.usage = details.progress.usage;
               agent.status = details.progress.status;
@@ -219,6 +223,10 @@ export function createWorkflowTool(
           agent.status = resultDetails.status;
           agent.result = resultDetails.result;
           agent.error = resultDetails.error;
+          agent.assistantOutput = resultDetails.assistantOutput;
+          agent.processStartedAt = progress?.processStartedAt;
+          agent.firstActivityAt = progress?.firstActivityAt;
+          agent.lastActivityAt = progress?.lastActivityAt;
           agent.timedOut = resultDetails.timedOut;
           agent.usage = resultDetails.usage;
           agent.externalRunId = resultDetails.runId;

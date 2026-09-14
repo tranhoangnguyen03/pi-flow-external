@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { agyActivityFromEvent } from "../src/core/agy.ts";
+import { claudeActivityFromEvent } from "../src/core/claude.ts";
+import { codexActivityFromEvent } from "../src/core/codex.ts";
+import { createProgressEmitter } from "../src/core/progress.ts";
 import { hasNestedAgentActivity } from "../src/core/spawn.ts";
 
 describe("external nested-agent observation", () => {
@@ -38,5 +42,32 @@ describe("external nested-agent observation", () => {
       event: "result",
       result: { status: "SUCCESS", structured_output: { type: "agent" } },
     }, "agy")).toBe(false);
+  });
+
+  it("tracks child freshness without treating init or heartbeat as activity", async () => {
+    expect(claudeActivityFromEvent({ type: "system", subtype: "init" })).toBeUndefined();
+    expect(codexActivityFromEvent({ type: "thread.started" })).toBeUndefined();
+    expect(agyActivityFromEvent({ event: "init" })).toBeUndefined();
+
+    vi.useFakeTimers();
+    try {
+      const emitter = createProgressEmitter({
+        toolCallId: "freshness",
+        description: "Freshness",
+        subagentType: "codex-worker",
+        backend: "codex",
+        enabled: true,
+        onProgress: () => undefined,
+      });
+      emitter.addActivity("read file");
+      const observedAt = emitter.progress?.lastActivityAt;
+      emitter.startHeartbeat();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(emitter.progress?.firstActivityAt).toBe(observedAt);
+      expect(emitter.progress?.lastActivityAt).toBe(observedAt);
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

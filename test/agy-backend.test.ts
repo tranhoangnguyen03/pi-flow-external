@@ -457,6 +457,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-re
     const fakeAgyPath = join(binDir, "agy");
     writeFileSync(fakeAgyPath, `#!/usr/bin/env node
 process.exitCode = 1;
+console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer-1', step_type: 'agent_response', text_delta: 'useful partial finding' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-error-result', status: 'ERROR', response: '', error: 'provider unavailable', usage: { input_tokens: 20, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 20 } } }));
 `);
     chmodSync(fakeAgyPath, 0o755);
@@ -479,6 +480,10 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-er
     expect(result.details.error).toContain("status ERROR: provider unavailable");
     expect(result.details.error).toContain("exit code 1");
     expect(result.details).toMatchObject({ conversationId: "agy-error-result" });
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ id: "answer-1", text: "useful partial finding" }],
+    });
   });
 
   it("fails clearly when agy emits an oversized newline-terminated stdout line", async () => {

@@ -417,18 +417,14 @@ function createAgentTool(
           queuedAt: new Date(queuedAt).toISOString(),
         },
       });
-      const progress = effectiveState.progressEnabled
-        ? createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend)
-        : undefined;
-      if (progress) {
-        progress.context = briefing.context;
-        progress.queuedAt = queuedAt;
-        progress.runId = runRecord.runId;
-        progress.recordPath = runRecord.directory;
-      }
-      const run = progress ? { toolCallId, progress, onUpdate } : undefined;
-      if (run) {
-        state.activeRuns.set(toolCallId, run);
+      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend);
+      progress.context = briefing.context;
+      progress.queuedAt = queuedAt;
+      progress.runId = runRecord.runId;
+      progress.recordPath = runRecord.directory;
+      const run = { toolCallId, progress, onUpdate: effectiveState.progressEnabled ? onUpdate : undefined };
+      state.activeRuns.set(toolCallId, run);
+      if (effectiveState.progressEnabled) {
         startAgentHeartbeat(state);
         broadcastActiveRunUpdates(state);
       }
@@ -439,32 +435,30 @@ function createAgentTool(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const status = signal?.aborted ? "aborted" : "error";
-        if (run) {
-          run.progress.status = status;
-          run.progress.error = message;
-          run.progress.endedAt = Date.now();
-          emitActiveRunUpdate(state, run);
-          state.activeRuns.delete(toolCallId);
-          broadcastActiveRunUpdates(state);
-        }
+        run.progress.status = status;
+        run.progress.error = message;
+        run.progress.endedAt = Date.now();
+        emitActiveRunUpdate(state, run);
+        state.activeRuns.delete(toolCallId);
+        broadcastActiveRunUpdates(state);
         const result = textResult(`Subagent "${params.description}" (${subagentType}) ${status}: ${message}`, {
           description: params.description,
           subagentType,
           backend: profile.backend,
           status,
           error: message,
-          ...(run ? { progress: run.progress, activeCount: getRunningRunCount(state), frame: state.frame } : {}),
+          progress: run.progress,
+          activeCount: getRunningRunCount(state),
+          frame: state.frame,
         });
         await runRecord.finish({ status, error: message, queued: true, backendStarted: false });
         attachRunRecordIdentity(result, runRecord);
         return result;
       }
 
-      if (run) {
-        run.progress.status = "running";
-        run.progress.startedAt = Date.now();
-        broadcastActiveRunUpdates(state);
-      }
+      run.progress.status = "running";
+      run.progress.startedAt = Date.now();
+      broadcastActiveRunUpdates(state);
 
       try {
         const result = await spawnSubagent({
@@ -483,7 +477,7 @@ function createAgentTool(
           defaultPermission: effectiveState.defaultPermission,
           maxBudgetUsd: params.max_budget_usd ?? profile.maxBudgetUsd ?? effectiveState.defaultMaxBudgetUsd,
           resumeRunId: params.resume,
-          onProgress: effectiveState.progressEnabled && run
+          onProgress: effectiveState.progressEnabled
             ? (partial) => {
                 const details = partial.details as SubagentToolDetails;
                 if (details.progress) {
@@ -497,21 +491,17 @@ function createAgentTool(
           runRecord,
         });
         const details = result.details as SubagentToolDetails;
-        if (run && details.progress) {
+        if (details.progress) {
           run.progress = details.progress;
         }
-        if (run) {
-          details.progress = run.progress;
-          details.activeCount = getRunningRunCount(state);
-          details.frame = state.frame;
-        }
+        details.progress = run.progress;
+        details.activeCount = getRunningRunCount(state);
+        details.frame = state.frame;
         return result;
       } finally {
         release();
-        if (run) {
-          state.activeRuns.delete(toolCallId);
-          broadcastActiveRunUpdates(state);
-        }
+        state.activeRuns.delete(toolCallId);
+        broadcastActiveRunUpdates(state);
       }
     },
     renderCall(args, theme, context) {

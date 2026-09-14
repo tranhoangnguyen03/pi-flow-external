@@ -24,6 +24,7 @@ export interface RunRecordOptions {
 
 export interface RunRecord {
   readonly runId: string;
+  readonly queuedAt: string;
   readonly directory: string;
   readonly eventsPath: string;
   readonly summaryPath: string;
@@ -101,6 +102,7 @@ export function createRunRecord(options: RunRecordOptions = {}): RunRecord {
 
   return {
     runId,
+    queuedAt: startedAt,
     directory,
     eventsPath,
     summaryPath,

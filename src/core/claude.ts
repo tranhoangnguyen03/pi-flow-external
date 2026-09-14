@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  assistantOutput,
   createProgressEmitter,
   textResult,
   type AgentToolResult,
@@ -290,12 +291,6 @@ function getPreviewFromRecord(record: Record<string, unknown>): string {
 }
 
 export function claudeActivityFromEvent(event: Record<string, unknown>): string | undefined {
-  if (event.type === "system" && event.subtype === "init") {
-    return "claude session started";
-  }
-  if (event.type === "result") {
-    return "claude turn completed";
-  }
   if (event.type === "assistant") {
     const message = asRecord(event.message);
     const content = message?.content;
@@ -364,6 +359,7 @@ export async function spawnClaudeSubagent(params: {
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
   onBackendEvent?: (event: unknown) => void;
+  onProcessStart?: (pid: number | undefined) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
@@ -385,6 +381,7 @@ export async function spawnClaudeSubagent(params: {
   let latestCostUsd: number | undefined;
   let latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
   let resultText = "";
+  const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
   let permissionDenials: number | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
@@ -446,6 +443,10 @@ export async function spawnClaudeSubagent(params: {
     }
     if (text !== undefined) {
       resultText = text;
+      if (event.type === "assistant" && text.trim()) {
+        const message = asRecord(event.message);
+        assistantMessages.push({ ...(typeof message?.id === "string" ? { id: message.id } : {}), text });
+      }
       if (text.trim()) {
         emitter.addActivity(text.split("\n").find((line) => line.trim()) ?? text);
         emitter.emitSoon();
@@ -480,6 +481,8 @@ export async function spawnClaudeSubagent(params: {
       detached: process.platform !== "win32",
     });
     child = proc;
+    if (progress) progress.processStartedAt = Date.now();
+    try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("claude stdin/stdout/stderr pipes were not available");
     }
@@ -570,10 +573,12 @@ export async function spawnClaudeSubagent(params: {
 
     params.onUsage(latestUsage);
     const result = resultText.trim();
+    const output = assistantOutput(assistantMessages, "final", result);
     if (progress) {
       progress.status = "done";
       progress.result = result;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -583,6 +588,7 @@ export async function spawnClaudeSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      assistantOutput: output,
       ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
@@ -593,11 +599,13 @@ export async function spawnClaudeSubagent(params: {
     }
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
+    const output = assistantOutput(assistantMessages, "interrupted");
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
       progress.error = message;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -608,6 +616,7 @@ export async function spawnClaudeSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      assistantOutput: output,
       ...(sessionId ? { sessionId } : {}),
       ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),

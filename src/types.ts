@@ -57,6 +57,11 @@ export type FlowExtensionOptions = SubagentExtensionOptions;
 
 export type SubagentRunStatus = "queued" | "running" | "done" | "error" | "aborted";
 
+export interface SubagentAssistantOutput {
+  status: "preliminary" | "final" | "interrupted";
+  messages: Array<{ id?: string; text: string }>;
+}
+
 export interface WorkflowAgentSnapshot {
   context?: ParentContextReceipt;
   index: number;
@@ -67,11 +72,15 @@ export interface WorkflowAgentSnapshot {
   status: SubagentRunStatus;
   startedAt?: number;
   queuedAt?: number;
+  processStartedAt?: number;
+  firstActivityAt?: number;
+  lastActivityAt?: number;
   endedAt?: number;
   activity?: string[];
   activityCount?: number;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
   timedOut?: boolean;
   usage?: SubagentUsage;
   /** Local field-observation run ID for this external child. */
@@ -146,6 +155,10 @@ export interface SubagentProgressNode {
   activityCount: number;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
+  processStartedAt?: number;
+  firstActivityAt?: number;
+  lastActivityAt?: number;
   timedOut?: boolean;
   usage?: SubagentUsage;
   /** Local field-observation run ID for this external invocation. */
@@ -185,6 +198,7 @@ export interface SubagentToolDetails {
   status: SubagentRunStatus;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
   timedOut?: boolean;
   usage?: SubagentUsage;
   progress?: SubagentProgressNode;

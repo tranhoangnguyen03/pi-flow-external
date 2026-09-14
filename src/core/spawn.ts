@@ -11,6 +11,8 @@ import { join, resolve } from "node:path";
 import {
   createProgressEmitter,
   extractFinalAssistantText,
+  extractAssistantMessages,
+  assistantOutput,
   getFinalAssistantFailure,
   getSubagentUsage,
   textResult,
@@ -89,6 +91,7 @@ export interface SpawnSubagentParams {
 
 interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
   onBackendEvent?: (event: unknown) => void;
+  onProcessStart?: (pid: number | undefined) => void;
   resumeSessionId?: string;
 }
 
@@ -134,6 +137,7 @@ export function attachRunRecordIdentity(result: AgentToolResult, record: RunReco
   const apply = (details: SubagentToolDetails | SubagentProgressNode) => {
     details.runId = record.runId;
     details.recordPath = record.directory;
+    if ("activity" in details) details.queuedAt ??= Date.parse(record.queuedAt);
   };
   apply(result.details as SubagentToolDetails);
   const details = result.details as SubagentToolDetails;
@@ -214,7 +218,9 @@ function rewriteTimeoutResult(
 ): AgentToolResult {
   const details = markSubagentTimedOut(result.details as SubagentToolDetails, params.timeoutMs);
   const message = details.error;
-  return textResult(`Subagent "${params.description}" (${params.profile.name}) aborted: ${message}`, {
+  const partial = details.assistantOutput?.messages.at(-1)?.text;
+  const preview = partial ? `\n\nInterrupted output:\n${partial.slice(-4_000)}` : "";
+  return textResult(`Subagent "${params.description}" (${params.profile.name}) aborted: ${message}${preview}`, {
     ...details,
     description: params.description,
     subagentType: params.profile.name,
@@ -279,12 +285,16 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       });
     }
   };
+  const onProcessStart = (pid: number | undefined) => {
+    void record?.event("process_started", { pid });
+  };
   try {
     let result = await spawnSubagentRuntime({
       ...params,
       permission: effectiveTier,
       signal: timeout.signal,
       onBackendEvent,
+      onProcessStart,
       resumeSessionId: resumeSession?.sessionId,
       onProgress: params.onProgress ? (partial) => {
         if (record) {
@@ -294,6 +304,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           if (details.progress) {
             details.progress.runId = record.runId;
             details.progress.recordPath = record.directory;
+            details.progress.queuedAt ??= Date.parse(record.queuedAt);
           }
         }
         if (params.context) {
@@ -328,6 +339,10 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         status: details.status,
         timedOut: details.timedOut === true,
         result: details.result,
+        assistantOutput: details.assistantOutput,
+        processStartedAt: details.progress?.processStartedAt,
+        firstActivityAt: details.progress?.firstActivityAt,
+        lastActivityAt: details.progress?.lastActivityAt,
         error: details.error,
         usage: details.usage,
         durationMs: Date.now() - startedAt,
@@ -403,6 +418,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       onProgress: params.onProgress,
       onUsage: params.onUsage,
       onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
       permission: params.permission,
@@ -423,6 +439,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       onProgress: params.onProgress,
       onUsage: params.onUsage,
       onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
       permission: params.permission,
@@ -463,6 +480,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       onProgress: params.onProgress,
       onUsage: params.onUsage,
       onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
       permission: params.permission,
@@ -595,12 +613,14 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       );
     }
     const result = extractFinalAssistantText(session.messages) || "(no final text output)";
+    const output = assistantOutput(extractAssistantMessages(session.messages), "final", result);
     const usage = getSubagentUsage(session);
     onUsage(usage);
     if (progress) {
       progress.status = "done";
       progress.result = result;
       progress.usage = usage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${description}" (${subagentType}) completed:\n\n${result}`, {
@@ -610,17 +630,20 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       status: "done",
       result,
       usage,
+      assistantOutput: output,
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = signal?.aborted ? "aborted" : "error";
     const usage = getSubagentUsage(session);
+    const output = assistantOutput(extractAssistantMessages(session.messages), "interrupted");
     onUsage(usage);
     if (progress) {
       progress.status = status;
       progress.error = message;
       progress.usage = usage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -631,6 +654,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       status,
       error: message,
       usage,
+      assistantOutput: output,
       ...(progress ? { progress } : {}),
     });
   } finally {

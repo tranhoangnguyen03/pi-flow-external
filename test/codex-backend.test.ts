@@ -196,7 +196,10 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     const tool = session.getToolDefinition("Agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
     const first = tool.execute("first", { description: "First", prompt: "hold", role: "worker", harness: "codex" }, undefined, undefined, context);
-    await vi.waitFor(() => expect(readFileSync(spawnCountPath, "utf8")).toBe("1"));
+    await vi.waitFor(
+      () => expect(existsSync(spawnCountPath) && readFileSync(spawnCountPath, "utf8") === "1").toBe(true),
+      { timeout: 3_000 },
+    );
 
     const controller = new AbortController();
     const secondPromise = tool.execute("second", { description: "Second", prompt: "queue", role: "worker", harness: "codex" }, controller.signal, undefined, context);
@@ -204,9 +207,17 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     controller.abort();
     const second = await secondPromise;
     writeFileSync(releasePath, "go");
-    await first;
+    const firstResult = await first;
 
     expect(readFileSync(spawnCountPath, "utf8")).toBe("1");
+    expect(firstResult.details.progress).toMatchObject({
+      status: "done",
+      processStartedAt: expect.any(Number),
+      firstActivityAt: expect.any(Number),
+      lastActivityAt: expect.any(Number),
+    });
+    expect(readFileSync(join(agentDir, "pi-flow-external", "runs", firstResult.details.runId, "events.ndjson"), "utf8"))
+      .toContain('"type":"process_started"');
     expect(second.details.runId).toMatch(/^run_/);
     const summary = JSON.parse(readFileSync(join(agentDir, "pi-flow-external", "runs", second.details.runId, "summary.json"), "utf8"));
     expect(summary.runId).toBe(second.details.runId);
@@ -282,6 +293,11 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
     });
 
     expect(result.details.status).toBe("error");
+    expect(result.details.result).toBeUndefined();
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "plausible but unverified" }],
+    });
     expect(result.details.error).toContain("without a terminal JSON event");
   });
 

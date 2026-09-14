@@ -465,6 +465,11 @@ console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' 
     });
 
     expect(result.details.status).toBe("error");
+    expect(result.details.result).toBeUndefined();
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "plausible but unverified" }],
+    });
     expect(result.details.error).toContain("did not affirm success");
   });
 

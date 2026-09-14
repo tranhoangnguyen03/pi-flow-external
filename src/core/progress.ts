@@ -1,6 +1,7 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
   SubagentBackend,
+  SubagentAssistantOutput,
   SubagentProgressNode,
   SubagentToolDetails,
   SubagentType,
@@ -37,6 +38,26 @@ export function createProgressNode(
     activity: [],
     activityCount: 0,
   };
+}
+
+export function assistantOutput(
+  messages: Array<{ id?: string; text: string }>,
+  status: SubagentAssistantOutput["status"],
+  finalText?: string,
+): SubagentAssistantOutput | undefined {
+  const output = messages.filter((message) => message.text.trim()).map((message) => ({ ...message, text: message.text.trim() }));
+  const final = finalText?.trim();
+  if (final && output.at(-1)?.text !== final) output.push({ text: final });
+  return output.length ? { status, messages: output } : undefined;
+}
+
+export function extractAssistantMessages(messages: readonly unknown[]): Array<{ id?: string; text: string }> {
+  return messages.flatMap((value) => {
+    const message = value as { id?: unknown; role?: unknown; content?: unknown };
+    if (message.role !== "assistant") return [];
+    const text = extractTextContent(message.content);
+    return text ? [{ ...(typeof message.id === "string" ? { id: message.id } : {}), text }] : [];
+  });
 }
 
 function addActivity(progress: SubagentProgressNode, line: string): void {
@@ -179,17 +200,15 @@ export interface ProgressEmitter {
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
   const { toolCallId, description, subagentType, backend, enabled, onProgress } = options;
-  const progress = enabled
-    ? createProgressNode(toolCallId, description, subagentType, "running", backend)
-    : undefined;
-  const live = Boolean(progress && onProgress);
+  const progress = createProgressNode(toolCallId, description, subagentType, "running", backend);
+  const live = Boolean(enabled && onProgress);
 
   let lastProgressEmit = 0;
   let pendingProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   const emit = (): void => {
-    if (!progress || !onProgress) {
+    if (!enabled || !onProgress) {
       return;
     }
     if (pendingProgressTimer) {
@@ -211,7 +230,7 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
   };
 
   const emitSoon = (): void => {
-    if (!progress || !onProgress) {
+    if (!enabled || !onProgress) {
       return;
     }
     const elapsed = Date.now() - lastProgressEmit;
@@ -252,11 +271,17 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
     progress,
     addActivity: (line) => {
       if (progress) {
+        const now = Date.now();
+        progress.firstActivityAt ??= now;
+        progress.lastActivityAt = now;
         addActivity(progress, line);
       }
     },
     replaceLatestActivity: (line) => {
       if (progress) {
+        const now = Date.now();
+        progress.firstActivityAt ??= now;
+        progress.lastActivityAt = now;
         replaceLatestActivity(progress, line);
       }
     },

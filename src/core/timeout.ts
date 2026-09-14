@@ -116,6 +116,7 @@ export function markSubagentTimedOut(
         const { result: _result, ...rest } = details.progress;
         return {
           ...rest,
+          ...(rest.assistantOutput ? { assistantOutput: { ...rest.assistantOutput, status: "interrupted" as const } } : {}),
           status: "aborted" as const,
           error: message,
           timedOut: true,
@@ -126,6 +127,7 @@ export function markSubagentTimedOut(
   const { result: _result, ...rest } = details;
   return {
     ...rest,
+    ...(rest.assistantOutput ? { assistantOutput: { ...rest.assistantOutput, status: "interrupted" as const } } : {}),
     status: "aborted",
     error: message,
     timedOut: true,
