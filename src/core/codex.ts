@@ -16,9 +16,9 @@ import {
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
+import { abortChildTree } from "./process-tree.ts";
 
 const CODEX_COMMAND = "codex";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface CodexTokenUsage {
   inputTokens: number;
@@ -278,35 +278,6 @@ function emptyUsage(model: string | undefined): SubagentUsage {
   });
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below. This can happen if the process
-      // exited between hasChildExited() and the process-group signal.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 async function createOutputSchemaFile(schema: unknown): Promise<{ path: string; cleanup: () => Promise<void> } | undefined> {
   if (schema === undefined || schema === null) {
     return undefined;
@@ -450,11 +421,11 @@ export async function spawnCodexSubagent(params: {
     }
 
     abortHandler = () => {
-      abortChild(proc);
+      abortChildTree(proc);
     };
     params.signal?.addEventListener("abort", abortHandler, { once: true });
     if (params.signal?.aborted) {
-      abortChild(proc);
+      abortChildTree(proc);
       throw new Error("Subagent aborted before prompt start");
     }
 
@@ -473,7 +444,7 @@ export async function spawnCodexSubagent(params: {
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
         oversizeError ??= `codex emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
-        abortChild(proc);
+        abortChildTree(proc);
         return;
       }
       for (const line of lines) {
@@ -559,9 +530,7 @@ export async function spawnCodexSubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child && !hasChildExited(child)) {
-      abortChild(child);
-    }
+    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(assistantMessages, "interrupted");

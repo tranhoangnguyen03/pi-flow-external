@@ -8,9 +8,9 @@ import {
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
+import { abortChildTree } from "./process-tree.ts";
 
 const AGY_COMMAND = "agy";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface AgyTokenUsage {
   inputTokens: number;
@@ -234,34 +234,6 @@ export function buildAgyArgs({
   return args;
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall through to direct child kill if the process group is already gone.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 /** Infra-classified agy failures worth one bounded retry (auth/eligibility/network).
  * Agent-level failures (task errors, protocol errors, aborts, timeouts) must not match. */
 const TRANSIENT_AGY_FAILURE_PATTERNS: RegExp[] = [
@@ -399,10 +371,10 @@ export async function spawnAgySubagent(params: {
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("agy stdin/stdout/stderr pipes were not available");
     }
-    abortHandler = () => abortChild(proc);
+    abortHandler = () => abortChildTree(proc);
     params.signal?.addEventListener("abort", abortHandler, { once: true });
     if (params.signal?.aborted) {
-      abortChild(proc);
+      abortChildTree(proc);
       throw new Error("Subagent aborted before prompt start");
     }
     proc.stdout.setEncoding("utf8");
@@ -420,7 +392,7 @@ export async function spawnAgySubagent(params: {
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
         oversizeError ??= `agy emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
-        abortChild(proc);
+        abortChildTree(proc);
         return;
       }
       for (const line of lines) {
@@ -511,7 +483,7 @@ export async function spawnAgySubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child && !hasChildExited(child)) abortChild(child);
+    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(assistantMessages, "interrupted");
