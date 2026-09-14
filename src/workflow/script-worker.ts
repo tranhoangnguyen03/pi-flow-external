@@ -73,6 +73,7 @@ let nextAgentId = 0;
 let startedAgentCount = 0;
 const pendingAgents = new Map();
 const agentObservations = [];
+const chainObservations = [];
 
 const heartbeat = setInterval(() => {
   post({ type: "heartbeat" });
@@ -180,9 +181,23 @@ function requestAgent(prompt, options) {
   });
 }
 
-function observeDiscardedRejection(promise) {
-  promise.catch(() => {});
-  return promise;
+function trackChain(promise) {
+  const observation = { handled: false, settled: false, error: undefined, promise };
+  chainObservations.push(observation);
+  promise.then(
+    () => { observation.settled = true; },
+    (error) => { observation.settled = true; observation.error = error; },
+  ).catch(() => {});
+  const transfer = (next) => {
+    observation.handled = true;
+    return trackChain(next);
+  };
+  return {
+    then: (onFulfilled, onRejected) => transfer(promise.then(onFulfilled, onRejected)),
+    catch: (onRejected) => transfer(promise.catch(onRejected)),
+    finally: (onFinally) => transfer(promise.finally(onFinally)),
+    [Symbol.toStringTag]: "Promise",
+  };
 }
 
 function agent(prompt, agentOptions = {}) {
@@ -204,9 +219,9 @@ function agent(prompt, agentOptions = {}) {
     return observation.promise;
   };
   return {
-    then: (onFulfilled, onRejected) => observeDiscardedRejection(start().then(onFulfilled, onRejected)),
-    catch: (onRejected) => observeDiscardedRejection(start().catch(onRejected)),
-    finally: (onFinally) => observeDiscardedRejection(start().finally(onFinally)),
+    then: (onFulfilled, onRejected) => trackChain(start().then(onFulfilled, onRejected)),
+    catch: (onRejected) => trackChain(start().catch(onRejected)),
+    finally: (onFinally) => trackChain(start().finally(onFinally)),
     [Symbol.toStringTag]: "Promise",
   };
 }
@@ -358,6 +373,9 @@ function isObjectPrototype(value) {
       await Promise.allSettled(pending);
       throw new Error("every started agent() call must be awaited before the workflow returns");
     }
+    await Promise.allSettled(chainObservations.filter((observation) => !observation.handled).map((observation) => observation.promise));
+    const unhandled = chainObservations.find((observation) => !observation.handled && observation.error !== undefined);
+    if (unhandled) throw unhandled.error;
     throwIfFatal();
     const normalizedResult = normalizeJsonSerializable(result, "workflow result");
     post({ type: "complete", result: normalizedResult });

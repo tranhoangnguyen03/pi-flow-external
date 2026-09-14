@@ -201,6 +201,23 @@ describe("runWorkflow", () => {
     expect(completed).toEqual(["a"]);
   });
 
+  it("fails when a discarded then-chain rejects before another awaited child finishes", async () => {
+    const failure = runWorkflow(
+      `${META}agent('fail', { label: 'fail' }).then(() => 'unused');\nreturn await agent('slow', { label: 'slow' });`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        runAgent: async (call) => {
+          if (call.label === "fail") throw new ChildRunError({ runId: "run_fail", outcome: "failed", message: "discarded failure" });
+          await delay(20);
+          return "slow success";
+        },
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({ name: "ChildRunError", runId: "run_fail" });
+  });
+
 
   it("defaults subagent_type to general-purpose and passes an explicit type through", async () => {
     const seen: string[] = [];
