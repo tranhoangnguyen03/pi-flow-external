@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -171,6 +171,89 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     disposeSession(session);
   });
 
+  it("keeps one evidence id when a queued run is cancelled before spawn", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-queued");
+    const spawnCountPath = join(tempDir, "spawn-count");
+    const releasePath = join(tempDir, "release-first");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Queue test.\nbackend: codex\n---\n");
+    writeFileSync(join(binDir, "codex"), `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+for await (const _chunk of process.stdin) {}
+const count = existsSync(${JSON.stringify(spawnCountPath)}) ? Number(readFileSync(${JSON.stringify(spawnCountPath)}, 'utf8')) : 0;
+writeFileSync(${JSON.stringify(spawnCountPath)}, String(count + 1));
+while (!existsSync(${JSON.stringify(releasePath)})) await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'queued-test' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+`);
+    chmodSync(join(binDir, "codex"), 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
+    const first = tool.execute("first", { description: "First", prompt: "hold", role: "worker", harness: "codex" }, undefined, undefined, context);
+    await vi.waitFor(
+      () => expect(existsSync(spawnCountPath) && readFileSync(spawnCountPath, "utf8") === "1").toBe(true),
+      { timeout: 3_000 },
+    );
+
+    const controller = new AbortController();
+    const secondPromise = tool.execute("second", { description: "Second", prompt: "queue", role: "worker", harness: "codex" }, controller.signal, undefined, context);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new Error("queued run no longer needed"));
+    const second = await secondPromise;
+    writeFileSync(releasePath, "go");
+    const firstResult = await first;
+
+    expect(readFileSync(spawnCountPath, "utf8")).toBe("1");
+    expect(firstResult.details.progress).toMatchObject({
+      status: "done",
+      processStartedAt: expect.any(Number),
+      firstActivityAt: expect.any(Number),
+      lastActivityAt: expect.any(Number),
+    });
+    expect(readFileSync(join(agentDir, "pi-flow-external", "runs", firstResult.details.runId, "events.ndjson"), "utf8"))
+      .toContain('"type":"process_started"');
+    expect(second.details.runId).toMatch(/^run_/);
+    const summary = JSON.parse(readFileSync(join(agentDir, "pi-flow-external", "runs", second.details.runId, "summary.json"), "utf8"));
+    expect(summary.runId).toBe(second.details.runId);
+    expect(second.details).toMatchObject({ status: "aborted", error: "queued run no longer needed" });
+    expect(summary.summary).toMatchObject({ status: "aborted", queued: true, error: "queued run no longer needed" });
+    expect(readdirSync(join(agentDir, "pi-flow-external", "runs"))).toHaveLength(2);
+
+    disposeSession(session);
+  });
+
+  it("does not mark a missing codex executable as process started", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const emptyBin = join(tempDir, "empty-bin");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(emptyBin, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Missing executable test.\nbackend: codex\n---\n");
+    process.env.PATH = emptyBin;
+
+    const { session, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const result = await tool.execute(
+      "missing-codex",
+      { description: "Missing Codex", prompt: "work", role: "worker", harness: "codex" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
+    );
+
+    expect(result.details).toMatchObject({ status: "error", runId: expect.stringMatching(/^run_/) });
+    expect(result.details.progress?.processStartedAt).toBeUndefined();
+    const events = readFileSync(join(result.details.recordPath, "events.ndjson"), "utf8");
+    expect(events).not.toContain('"type":"process_started"');
+
+    disposeSession(session);
+  });
+
   it("forwards every parsed codex stream event", async () => {
     const binDir = join(tempDir, "bin-codex-events");
     mkdirSync(binDir, { recursive: true });
@@ -237,6 +320,11 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
     });
 
     expect(result.details.status).toBe("error");
+    expect(result.details.result).toBeUndefined();
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "plausible but unverified" }],
+    });
     expect(result.details.error).toContain("without a terminal JSON event");
   });
 

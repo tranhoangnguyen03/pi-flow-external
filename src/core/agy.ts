@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createProgressEmitter, textResult, type AgentToolResult } from "./progress.ts";
+import { assistantOutput, createProgressEmitter, textResult, type AgentToolResult } from "./progress.ts";
 import {
   createBoundedBuffer,
   MAX_STDERR_CHARS,
@@ -8,9 +8,9 @@ import {
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
+import { abortChildTree } from "./process-tree.ts";
 
 const AGY_COMMAND = "agy";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface AgyTokenUsage {
   inputTokens: number;
@@ -145,13 +145,7 @@ function textFromAgyResult(result: AgyTerminalResult): string | undefined {
   return result.response;
 }
 
-function agyActivityFromEvent(event: Record<string, unknown>): string | undefined {
-  if (event.event === "init") {
-    return "agy session started";
-  }
-  if (event.event === "result") {
-    return "agy turn completed";
-  }
+export function agyActivityFromEvent(event: Record<string, unknown>): string | undefined {
   if (event.event !== "step_update") {
     return undefined;
   }
@@ -240,34 +234,6 @@ export function buildAgyArgs({
   return args;
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall through to direct child kill if the process group is already gone.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 /** Infra-classified agy failures worth one bounded retry (auth/eligibility/network).
  * Agent-level failures (task errors, protocol errors, aborts, timeouts) must not match. */
 const TRANSIENT_AGY_FAILURE_PATTERNS: RegExp[] = [
@@ -294,6 +260,7 @@ export async function spawnAgySubagent(params: {
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
   onBackendEvent?: (event: unknown) => void;
+  onProcessStart?: (pid: number | undefined) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
@@ -315,6 +282,7 @@ export async function spawnAgySubagent(params: {
   const progress = emitter.progress;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let terminalResult: AgyTerminalResult | undefined;
+  const assistantMessages: Array<{ id?: string; text: string }> = [];
   let conversationId: string | undefined;
   let protocolError: string | undefined;
   let oversizeError: string | undefined;
@@ -342,6 +310,19 @@ export async function spawnAgySubagent(params: {
     if (activity) {
       emitter.addActivity(activity);
       emitter.emitSoon();
+    }
+
+    if (event.event === "step_update") {
+      const update = asRecord(event.step_update);
+      const text = (update?.step_type === "agent_response" || update?.step_type === "assistant") && typeof update.text_delta === "string"
+        ? update.text_delta
+        : undefined;
+      if (text) {
+        const id = typeof update?.step_id === "string" ? update.step_id : undefined;
+        const current = id ? assistantMessages.find((message) => message.id === id) : assistantMessages.at(-1);
+        if (current && (!id || current.id === id)) current.text += text;
+        else assistantMessages.push({ ...(id ? { id } : {}), text });
+      }
     }
 
     if (event.event !== "result") {
@@ -383,13 +364,17 @@ export async function spawnAgySubagent(params: {
       detached: process.platform !== "win32",
     });
     child = proc;
+    proc.once("spawn", () => {
+      if (progress) progress.processStartedAt = Date.now();
+      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+    });
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("agy stdin/stdout/stderr pipes were not available");
     }
-    abortHandler = () => abortChild(proc);
+    abortHandler = () => abortChildTree(proc);
     params.signal?.addEventListener("abort", abortHandler, { once: true });
     if (params.signal?.aborted) {
-      abortChild(proc);
+      abortChildTree(proc);
       throw new Error("Subagent aborted before prompt start");
     }
     proc.stdout.setEncoding("utf8");
@@ -407,7 +392,7 @@ export async function spawnAgySubagent(params: {
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
         oversizeError ??= `agy emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
-        abortChild(proc);
+        abortChildTree(proc);
         return;
       }
       for (const line of lines) {
@@ -478,10 +463,12 @@ export async function spawnAgySubagent(params: {
       throw new Error("agy reported SUCCESS without a result response");
     }
     params.onUsage(latestUsage);
+    const output = assistantOutput(assistantMessages, "final", result);
     if (progress) {
       progress.status = "done";
       progress.result = result;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -491,18 +478,21 @@ export async function spawnAgySubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      assistantOutput: output,
       ...(conversationId ? { conversationId, sessionId: conversationId } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child && !hasChildExited(child)) abortChild(child);
+    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
+    const output = assistantOutput(assistantMessages, "interrupted");
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
       progress.error = message;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) ${status === "aborted" ? "aborted" : "failed"}: ${message}`, {
@@ -512,6 +502,7 @@ export async function spawnAgySubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      assistantOutput: output,
       ...(conversationId ? { conversationId, sessionId: conversationId } : {}),
       ...(progress ? { progress } : {}),
     });

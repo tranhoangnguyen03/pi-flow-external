@@ -219,7 +219,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
         prompt: "Review the latest diff.",
         context: { mode: "recent", turns: 1 },
       } : {
-        script: `export const meta = { name: 'context-test', description: 'Context transfer' }; return await agent('Review the latest diff.', { subagent_type: 'claude-reviewer', context: { mode: 'recent', turns: 1 } });`,
+        script: `export const meta = { apiVersion: 1, name: 'context-test', description: 'Context transfer' }; return await agent('Review the latest diff.', { subagent_type: 'claude-reviewer', context: { mode: 'recent', turns: 1 } });`,
       })], { stopReason: "toolUse" }),
       (context) => {
         rootContinuationContext = context;
@@ -465,6 +465,11 @@ console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' 
     });
 
     expect(result.details.status).toBe("error");
+    expect(result.details.result).toBeUndefined();
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "plausible but unverified" }],
+    });
     expect(result.details.error).toContain("did not affirm success");
   });
 

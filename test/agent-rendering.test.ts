@@ -82,15 +82,27 @@ describe("delegation transparency rendering", () => {
       backend: "claude",
       status: "running",
     };
+    const progress = {
+        id: "live",
+        description: "Map repository architecture",
+        subagentType: "claude-explorer",
+        backend: "claude" as const,
+        status: "running" as const,
+        startedAt: Date.now() - 10_000,
+        lastActivityAt: Date.now() - 5_000,
+        activity: ["Reading source"],
+        activityCount: 1,
+      };
     const live = tool.renderResult?.(
-      { content: [{ type: "text", text: "running" }], details: running },
+      { content: [{ type: "text", text: "running" }], details: { ...running, progress } },
       { expanded: false, isPartial: true },
       theme,
       { cwd },
     );
     expect(renderToText(live!)).toContain("external host access");
+    expect(renderToText(live!)).toMatch(/activity \d+s ago/);
     const sharedLive = tool.renderResult?.(
-      { content: [{ type: "text", text: "running" }], details: { ...running, context: { mode: "recent", requestedTurns: 5, sharedTurns: 2, messages: 6, bytes: 512, compacted: false } } },
+      { content: [{ type: "text", text: "running" }], details: { ...running, progress: { ...progress, context: { mode: "recent", requestedTurns: 5, sharedTurns: 2, messages: 6, bytes: 512, compacted: false } } } },
       { expanded: false, isPartial: true },
       theme,
       { cwd },
@@ -115,7 +127,10 @@ describe("delegation transparency rendering", () => {
     expect(receiptText).toContain("evidence 12345678");
     expect(receiptText).toContain("Evidence /tmp/pi-flow-runs/claude_12345678");
     expect(receiptText).toContain("17 backend events");
-    expect(receiptText).not.toContain("run 12345678");
+    expect(receiptText).toContain("Final output");
+    expect(receiptText).toContain("Architecture mapped.");
+    expect(receiptText).toContain("/external runs");
+    expect(receiptText).toContain("claude_12345678");
   });
 
   it("states workflow access once and exposes terminal journal evidence on expansion", () => {
@@ -151,9 +166,13 @@ describe("delegation transparency rendering", () => {
     const completed: WorkflowToolDetails = {
       ...live,
       status: "completed",
-      agents: live.agents.map((agent) => ({ ...agent, status: agent.status === "error" ? "error" : "done" })),
+      agents: [
+        ...live.agents.map((agent) => ({ ...agent, status: agent.status === "error" ? "error" as const : "done" as const })),
+        ...Array.from({ length: 4 }, (_, index) => ({ index: index + 5, label: `extra-${index + 5}`, status: "done" as const })),
+      ],
       runId: "wf_12345678",
       journalPath: "/tmp/pi-flow-workflows/run-wf_12345678.jsonl",
+      result: { answer: "Architecture approved." },
     };
     const receipt = tool.renderResult?.(
       { content: [{ type: "text", text: "complete" }], details: completed },
@@ -164,6 +183,9 @@ describe("delegation transparency rendering", () => {
     const receiptText = renderToText(receipt!);
     expect(receiptText).toContain("Workflow evidence wf_12345678");
     expect(receiptText).toContain("Journal /tmp/pi-flow-workflows/run-wf_12345678.jsonl");
+    expect(receiptText).toContain("Architecture approved.");
+    expect(receiptText).toContain("2 agent(s) not shown");
+    expect(receiptText).toContain("/external runs");
   });
 });
 

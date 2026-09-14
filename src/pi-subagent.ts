@@ -7,6 +7,7 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
@@ -14,6 +15,7 @@ import {
   buildCoordinatorPrompt,
 } from "./prompts.ts";
 import { createExternalHelpTool } from "./external-help.ts";
+import { createExternalRunsTool } from "./external-runs.ts";
 import {
   filterExternalAgentProfiles,
   formatExternalAgentPolicyError,
@@ -23,11 +25,13 @@ import {
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
-import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { attachRunRecordIdentity, CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { createRunRecord } from "./core/run-record.ts";
 import { captureParentContext, parentContextSchema, prepareParentContext } from "./core/parent-context.ts";
 import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
+import { RunRegistry } from "./core/run-registry.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
@@ -60,6 +64,9 @@ const agentToolParameters = Type.Object({
   prompt: Type.String({
     description: "The task briefing to send to the subagent.",
   }),
+  background: Type.Optional(Type.Boolean({
+    description: "Return a stable run handle after registration while the session-owned child continues. Defaults to false.",
+  })),
   role: Type.Optional(Type.String({
     minLength: 1,
     description: "The built-in or custom external role to use, such as reviewer. Required unless using legacy subagent_type.",
@@ -117,6 +124,7 @@ interface DelegationState {
   defaultHarness: ExternalHarness;
   defaultMaxBudgetUsd: number | undefined;
   maxRunRecords: number;
+  registry: RunRegistry;
   progressEnabled: boolean;
   activeRuns: Map<string, ActiveAgentRun>;
   frame: number;
@@ -402,93 +410,155 @@ function createAgentTool(
         });
       }
 
-      const progress = effectiveState.progressEnabled
-        ? createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend)
-        : undefined;
-      if (progress) progress.context = briefing.context;
-      const run = progress ? { toolCallId, progress, onUpdate } : undefined;
-      if (run) {
+      const queuedAt = Date.now();
+      const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
+      const sessionVersion = state.registry.sessionVersion(sessionId);
+      const project = resolve(ctx.cwd);
+      const executionContext = { cwd: project } as ExtensionContext;
+      const limiter = state.limiter;
+      const timeoutMs = state.subagentTimeoutMs;
+      const thinkingLevel = profile.thinking ?? options.getThinkingLevel();
+      const defaultPermission = state.defaultPermission;
+      const maxBudgetUsd = params.max_budget_usd ?? profile.maxBudgetUsd ?? state.defaultMaxBudgetUsd;
+      const background = params.background === true;
+      const runRecord = createRunRecord({
+        directory: runRecordsDirectory(),
+        metadata: {
+          kind: "agent",
+          parentSessionId: sessionId,
+          project,
+          description: params.description,
+          prompt: briefing.prompt,
+          profile: profile.name,
+          backend: profile.backend,
+          queuedAt: new Date(queuedAt).toISOString(),
+        },
+      });
+      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend);
+      progress.context = briefing.context;
+      progress.queuedAt = queuedAt;
+      progress.runId = runRecord.runId;
+      progress.recordPath = runRecord.directory;
+      const executeRun = async (runSignal: AbortSignal) => {
+        const run: ActiveAgentRun = {
+          toolCallId,
+          progress,
+          onUpdate: !background && effectiveState.progressEnabled ? onUpdate : undefined,
+        };
         state.activeRuns.set(toolCallId, run);
-        startAgentHeartbeat(state);
-        broadcastActiveRunUpdates(state);
-      }
+        state.registry.update(runRecord.runId, run.progress);
+        if (!background && effectiveState.progressEnabled) {
+          startAgentHeartbeat(state);
+          broadcastActiveRunUpdates(state);
+        }
 
-      let release: (() => void) | undefined;
-      try {
-        release = await state.limiter.acquire(signal);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const status = signal?.aborted ? "aborted" : "error";
-        if (run) {
+        let release: (() => void) | undefined;
+        try {
+          release = await limiter.acquire(runSignal);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const status = runSignal.aborted ? "aborted" : "error";
           run.progress.status = status;
           run.progress.error = message;
           run.progress.endedAt = Date.now();
+          state.registry.update(runRecord.runId, run.progress);
           emitActiveRunUpdate(state, run);
           state.activeRuns.delete(toolCallId);
           broadcastActiveRunUpdates(state);
+          const result = textResult(`Subagent "${params.description}" (${subagentType}) ${status}: ${message}`, {
+            description: params.description,
+            subagentType,
+            backend: profile.backend,
+            status,
+            error: message,
+            progress: run.progress,
+            activeCount: getRunningRunCount(state),
+            frame: state.frame,
+          });
+          await runRecord.finish({ status, error: message, queued: true, backendStarted: false });
+          attachRunRecordIdentity(result, runRecord);
+          return result;
         }
-        return textResult(`Subagent "${params.description}" (${subagentType}) ${status}: ${message}`, {
-          description: params.description,
-          subagentType,
-          backend: profile.backend,
-          status,
-          error: message,
-          ...(run ? { progress: run.progress, activeCount: getRunningRunCount(state), frame: state.frame } : {}),
-        });
-      }
 
-      if (run) {
         run.progress.status = "running";
         run.progress.startedAt = Date.now();
-        broadcastActiveRunUpdates(state);
-      }
+        state.registry.update(runRecord.runId, run.progress);
+        if (!background) broadcastActiveRunUpdates(state);
 
-      try {
-        const result = await spawnSubagent({
+        try {
+          const result = await spawnSubagent({
           toolCallId,
           description: params.description,
           prompt: briefing.prompt,
           context: briefing.context,
           profile,
           model,
-          thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
-          ctx,
-          signal,
-          timeoutMs: options.getSubagentTimeoutMs(),
-          progressEnabled: effectiveState.progressEnabled,
+          thinkingLevel,
+          ctx: executionContext,
+          signal: runSignal,
+          timeoutMs,
+          progressEnabled: true,
           permission: params.permission,
-          defaultPermission: effectiveState.defaultPermission,
-          maxBudgetUsd: params.max_budget_usd ?? profile.maxBudgetUsd ?? effectiveState.defaultMaxBudgetUsd,
+          defaultPermission,
+          maxBudgetUsd,
           resumeRunId: params.resume,
-          onProgress: effectiveState.progressEnabled && run
-            ? (partial) => {
-                const details = partial.details as SubagentToolDetails;
-                if (details.progress) {
-                  run.progress = details.progress;
-                }
-                emitActiveRunUpdate(state, run);
-              }
-            : undefined,
-          onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
+          onProgress: (partial) => {
+            const details = partial.details as SubagentToolDetails;
+            if (details.progress) run.progress = details.progress;
+            state.registry.update(runRecord.runId, run.progress);
+            if (!background) emitActiveRunUpdate(state, run);
+          },
+          onUsage: background ? () => undefined : (usage) => options.updateStatus(ctx, toolCallId, usage),
           excludeTools: CHILD_EXCLUDED_TOOLS,
+          runRecord,
         });
-        const details = result.details as SubagentToolDetails;
-        if (run && details.progress) {
-          run.progress = details.progress;
-        }
-        if (run) {
+          const details = result.details as SubagentToolDetails;
+          if (details.progress) run.progress = details.progress;
           details.progress = run.progress;
           details.activeCount = getRunningRunCount(state);
           details.frame = state.frame;
-        }
-        return result;
-      } finally {
-        release();
-        if (run) {
+          state.registry.update(runRecord.runId, run.progress);
+          return result;
+        } finally {
+          release();
           state.activeRuns.delete(toolCallId);
-          broadcastActiveRunUpdates(state);
+          if (!background) broadcastActiveRunUpdates(state);
         }
-      }
+      };
+
+      const registered = state.registry.start({
+        runId: runRecord.runId,
+        kind: "agent",
+        sessionId,
+        sessionVersion,
+        project,
+        ...(background ? {} : { signal }),
+        run: executeRun,
+        outcome: (result, runSignal) => {
+          const details = result.details as SubagentToolDetails;
+          return {
+            status: details.status === "done" ? "done" : details.status === "aborted" ? "aborted" : "error",
+            outcome: details.status === "done" ? "succeeded" : details.timedOut ? "timed_out" : details.status === "aborted" ? "cancelled" : "failed",
+            ...(details.result !== undefined ? { result: details.result } : {}),
+            ...(runSignal.aborted && runSignal.reason !== undefined
+              ? { error: runSignal.reason instanceof Error ? runSignal.reason.message : String(runSignal.reason) }
+              : details.error ? { error: details.error } : {}),
+          };
+        },
+      });
+      if (!background) return await registered.result;
+      return textResult(
+        `Subagent "${params.description}" (${subagentType}) queued as ${runRecord.runId}. Use external_runs to inspect, wait, or cancel it.`,
+        {
+          description: params.description,
+          subagentType,
+          backend: profile.backend,
+          status: "queued",
+          runId: runRecord.runId,
+          recordPath: runRecord.directory,
+          progress,
+        },
+      );
     },
     renderCall(args, theme, context) {
       const defaultHarness = options.getDefaultHarness(context.cwd);
@@ -583,6 +653,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       defaultHarness: loadedSettings.settings.defaultHarness,
       defaultMaxBudgetUsd: loadedSettings.settings.defaultMaxBudgetUsd ?? undefined,
       maxRunRecords: loadedSettings.settings.maxRunRecords,
+      registry: new RunRegistry(),
       progressEnabled: false,
       activeRuns: new Map(),
       frame: 0,
@@ -624,6 +695,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getDefaultHarness: (ctx) => resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness,
       workflowEnabled,
     }));
+    const externalRuns = createExternalRunsTool({
+      registry: rootState.registry,
+      runsDirectory: runRecordsDirectory,
+    });
+    pi.registerTool(externalRuns);
     registerProfileCreator(pi, toolOptions);
     registerExternalCommand(pi, {
       settings: loadedSettings,
@@ -636,10 +712,12 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       },
       getMaxRunRecords: () => rootState.maxRunRecords,
       startProfileInterview,
+      externalRuns,
     });
     if (workflowEnabled) {
       pi.registerTool(
         createWorkflowTool({
+          registry: rootState.registry,
           getLimiter: () => syncMaxConcurrentSubagents().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
@@ -657,6 +735,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     }
 
     pi.on("session_start", (_event, ctx) => {
+      rootState.registry.openSession(ctx.sessionManager.getSessionId());
       syncMaxConcurrentSubagents();
       usageStatusState.calls.clear();
       usageStatusState.latestCacheHitRate = undefined;
@@ -670,6 +749,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
+      }
+    });
+
+    pi.on("session_shutdown", async (_event, ctx) => {
+      const cleanup = await rootState.registry.shutdownSession(ctx.sessionManager.getSessionId());
+      if (cleanup.pending.length && ctx.hasUI) {
+        const shown = cleanup.pending.slice(0, 10);
+        ctx.ui.notify(`External run cleanup could not be confirmed for ${shown.join(", ")}${cleanup.pending.length > shown.length ? ` and ${cleanup.pending.length - shown.length} more` : ""}; their evidence is interrupted or uncertain.`, "warning");
       }
     });
 

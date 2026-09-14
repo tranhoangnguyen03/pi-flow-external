@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  assistantOutput,
   createProgressEmitter,
   textResult,
   type AgentToolResult,
@@ -15,9 +16,9 @@ import {
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
+import { abortChildTree } from "./process-tree.ts";
 
 const CODEX_COMMAND = "codex";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface CodexTokenUsage {
   inputTokens: number;
@@ -258,12 +259,6 @@ function getPreviewFromRecord(record: Record<string, unknown>): string {
 }
 
 export function codexActivityFromEvent(event: Record<string, unknown>): string | undefined {
-  if (event.type === "thread.started") {
-    return "codex session started";
-  }
-  if (event.type === "turn.completed") {
-    return "codex turn completed";
-  }
   const item = asRecord(event.item);
   if ((event.type === "item.started" || event.type === "item.completed") && item && item.type !== "agent_message") {
     const itemType = typeof item.type === "string" ? item.type : "item";
@@ -281,35 +276,6 @@ function emptyUsage(model: string | undefined): SubagentUsage {
     outputTokens: 0,
     reasoningOutputTokens: 0,
   });
-}
-
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below. This can happen if the process
-      // exited between hasChildExited() and the process-group signal.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
 }
 
 async function createOutputSchemaFile(schema: unknown): Promise<{ path: string; cleanup: () => Promise<void> } | undefined> {
@@ -339,6 +305,7 @@ export async function spawnCodexSubagent(params: {
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
   onBackendEvent?: (event: unknown) => void;
+  onProcessStart?: (pid: number | undefined) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
@@ -357,6 +324,7 @@ export async function spawnCodexSubagent(params: {
   const progress = emitter.progress;
   let latestUsage = emptyUsage(params.profile.model);
   let resultText = "";
+  const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
@@ -405,6 +373,8 @@ export async function spawnCodexSubagent(params: {
     const text = extractCodexFinalText(event);
     if (text !== undefined) {
       resultText = text;
+      const item = asRecord(event.item);
+      if (text.trim()) assistantMessages.push({ ...(typeof item?.id === "string" ? { id: item.id } : {}), text });
       if (text.trim()) {
         emitter.addActivity(text.split("\n").find((line) => line.trim()) ?? text);
         emitter.emitSoon();
@@ -442,16 +412,20 @@ export async function spawnCodexSubagent(params: {
       detached: process.platform !== "win32",
     });
     child = proc;
+    proc.once("spawn", () => {
+      if (progress) progress.processStartedAt = Date.now();
+      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+    });
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("codex stdin/stdout/stderr pipes were not available");
     }
 
     abortHandler = () => {
-      abortChild(proc);
+      abortChildTree(proc);
     };
     params.signal?.addEventListener("abort", abortHandler, { once: true });
     if (params.signal?.aborted) {
-      abortChild(proc);
+      abortChildTree(proc);
       throw new Error("Subagent aborted before prompt start");
     }
 
@@ -470,7 +444,7 @@ export async function spawnCodexSubagent(params: {
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
         oversizeError ??= `codex emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
-        abortChild(proc);
+        abortChildTree(proc);
         return;
       }
       for (const line of lines) {
@@ -536,10 +510,12 @@ export async function spawnCodexSubagent(params: {
 
     params.onUsage(latestUsage);
     const result = resultText.trim();
+    const output = assistantOutput(assistantMessages, "final", result);
     if (progress) {
       progress.status = "done";
       progress.result = result;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -549,20 +525,21 @@ export async function spawnCodexSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      assistantOutput: output,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child && !hasChildExited(child)) {
-      abortChild(child);
-    }
+    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
+    const output = assistantOutput(assistantMessages, "interrupted");
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
       progress.error = message;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -573,6 +550,7 @@ export async function spawnCodexSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      assistantOutput: output,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });

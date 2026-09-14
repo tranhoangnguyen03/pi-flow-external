@@ -1,5 +1,5 @@
 import { parse, type Node } from "acorn";
-import type { WorkflowMeta, WorkflowMetaPhase } from "./types.ts";
+import { WORKFLOW_API_VERSION, type WorkflowMeta, type WorkflowMetaPhase } from "./types.ts";
 
 type AnyNode = Node & { [key: string]: any; start: number; end: number };
 
@@ -19,7 +19,7 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
 
   const first = ast.body?.[0] as AnyNode | undefined;
   if (first?.type !== "ExportNamedDeclaration") {
-    throw new Error("`export const meta = { name, description }` must be the first statement in the script");
+    throw new Error("`export const meta = { apiVersion: 1, name, description }` must be the first statement in the script");
   }
 
   const declaration = first.declaration as AnyNode | null;
@@ -216,6 +216,11 @@ function staticStringOf(node: AnyNode | undefined): string | undefined {
 function validateMeta(meta: unknown): asserts meta is WorkflowMeta {
   if (!meta || typeof meta !== "object") throw new Error("meta must be an object");
   const value = meta as WorkflowMeta;
+  if (value.apiVersion !== WORKFLOW_API_VERSION) {
+    throw new Error(
+      `Set meta.apiVersion: ${WORKFLOW_API_VERSION} to use catchable child failures. No children were launched`,
+    );
+  }
   if (typeof value.name !== "string" || !value.name.trim()) throw new Error("meta.name must be a non-empty string");
   if (typeof value.description !== "string" || !value.description.trim()) {
     throw new Error("meta.description must be a non-empty string");

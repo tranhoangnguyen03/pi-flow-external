@@ -4,7 +4,7 @@
 
 This fork changes the original pi-flow contract: `Agent` is not a generic Pi subagent launcher. It delegates only to external Claude Code, Codex CLI, and Antigravity harnesses.
 
-- Ordinary driver tools: `Agent`, read-only `external_help`, and optional `workflow`. `pi_flow_profile_create` is active only inside `/external profile create`.
+- Ordinary driver tools: `Agent`, read-only `external_help`, `external_runs`, and optional `workflow`. `pi_flow_profile_create` is active only inside `/external profile create`.
 - User operations use `/external`; `/pi-flow-profile create` is a temporary deprecated alias.
 - Extension-owned concurrency, timeout, and global default-harness settings live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`. Profile backend/model/thinking metadata remains in `subagents/*.md`. A trusted project may override `defaultHarness` via `.pi/pi-flow-external/settings.json` (that key only, read-only to the extension); explicit call harness > project default > global default.
 - Every `Agent` call requires `description`, `prompt`, and either `role` with optional `harness` (`agy`, `claude`, or `codex`) or the legacy exact-profile `subagent_type`. The selectors cannot be combined. Without `harness`, use the global `defaultHarness` setting (initially `agy`).
@@ -16,6 +16,7 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - External backends use their own tools and permission mechanisms. Codex tiers map to its `--sandbox` axis. Claude falls back to `--permission-mode auto` when its effective UID is 0 because Claude refuses bypass mode under root. Execution lanes (implementer, debugger, qa, worker) require shell command authority to inspect repositories and run tests; on Claude (where headless edit auto-denies all Bash commands), execution lanes maintain a danger floor so agents are not artificially handcuffed. Antigravity (`agy`) has no granular headless permission mode — its default sandbox denies even read-only tools — so every agy run is unsandboxed (`--dangerously-skip-permissions`) and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Run them only in trusted repositories and state whether the task is read-only or may edit files.
 - Children receive no parent history by default. `Agent` and workflow `agent()` can opt into `context: {mode: "recent", turns: N}` (last N user turns, including the current one) or `{mode: "full"}` (available post-compaction conversation). Snapshots exclude system instructions, thinking, tool-result metadata, and pending calls; unsupported content/images and more than 1 MiB fail explicitly. Use the smallest sufficient snapshot plus a clear task, absolute paths, and read-only/edit intent. Shared context goes to the external harness and private local evidence; avoid unnecessary sensitive history. `resume` continues an existing child and cannot be combined with sharing. Workflow children select from one frozen parent snapshot, and replay fingerprints include the transferred context.
 - Backend-native nested agents may use a different workspace. Include explicit absolute paths and required context when asking an external backend to delegate further.
+- `Agent` and `workflow` block by default; `background: true` returns a stable handle after validation/registration. Background work is owned by the originating session, not by the launching tool call or a daemon. Blocking-call interruption cancels work; wait interruption only stops waiting. Orderly session shutdown requests cancellation with bounded cleanup. A crash or unconfirmed shutdown leaves unfinished evidence interrupted/uncertain; restart never adopts live work.
 
 ## Delegation transparency invariants
 
@@ -23,7 +24,8 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - `unsandboxed external CLI` and `external host access` disclose the real execution boundary. Never present a read-only prompt as permission enforcement: on agy every run is unsandboxed regardless of tier, so the profile body — not the tier — is what asks the agent to stay read-only.
 - Keep direct intent visible during execution. Workflow access belongs once at the workflow level, not on every child row.
 - Parent-context sharing is a disclosure, not a silent optimization: the intent card names the mode before launch, and receipts name the mode and shared/requested turns. Shared conversation content leaves for the external harness and lands in local evidence, so never describe sharing as internal or free.
-- Keep default progress bounded and human-readable. Expanded output may reveal existing record paths, backend-event counts, workflow IDs, and journal paths.
+- Keep default progress bounded and human-readable. Expanded terminal output shows bounded canonical output and a full-ID `/external runs` route; record paths, backend-event counts, workflow IDs, and journal paths remain advanced evidence.
+- `/external runs` must use the same registry/readers as `external_runs`. Every hidden workflow child and truncated output/diagnostic page needs a cursor-backed navigation path; never add a silent hard cap.
 - Progress snapshots drive live presentation; persisted summaries and event logs remain the durable evidence source. Do not create a second UI-only record format.
 
 ## Receipt and evidence invariants
@@ -34,10 +36,13 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 - Settings retention automatically prunes eligible completed records beyond `maxRunRecords`; active, interrupted, incomplete, and damaged records are not eligible.
 - Structured nested-agent activity may extend the wall-clock deadline once, by one fresh base timeout, capped at twice the original deadline.
 - Do not automatically retry failed or aborted external runs. Preserve the receipt and retry only when the user asks. Exception: the agy backend retries once on infrastructure-classified failures (auth, eligibility, network); the retry is disclosed in the receipt details (`retries`, `retryOf`) and never applies to agent-level failures, aborts, or timeouts.
+- `external_runs` is session/project scoped. `list` pages runs and workflow roots; `inspect` pages summaries/output/diagnostics; `wait` returns outcomes only for the selected one/any/all target set and never cancels pending work; `cancel` targets one stable ID and preserves its reason. No routine run event sends a parent message or notification.
 
 ## Workflow contract
 
-`workflow` remains trusted JavaScript orchestration over the same external-only role roster. Every workflow `agent()` child uses the same `role`/optional `harness` resolution as `Agent`, with legacy exact-profile `subagent_type` available as an escape hatch.
+`workflow` remains trusted JavaScript orchestration over the same external-only role roster. Its first statement declares `meta.apiVersion: 1`; missing/unsupported versions fail before child launch. Every workflow `agent()` child uses the same `role`/optional `harness` resolution as `Agent`, with legacy exact-profile `subagent_type` available as an escape hatch. Successful calls return their value; failed, cancelled, and timed-out calls throw structured catchable child errors. Explicitly handled errors permit siblings to finish; escaping errors fail the workflow and drain active siblings.
+
+Replay is explicit through a persisted `scriptPath` plus `resumeFromRunId`. Reuse only the longest unchanged successful prefix; changed or unsuccessful calls and their suffix execute again. Never describe script recomposition as making child reruns free or side-effect-free. There is no live steering or automatic repaired-script retry.
 
 Use workflows for requested fan-out or multi-agent orchestration across Claude/Codex/Antigravity lanes. Do not route native Pi subagents through `workflow`.
 

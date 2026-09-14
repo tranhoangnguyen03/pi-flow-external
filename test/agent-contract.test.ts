@@ -60,7 +60,7 @@ describe("pi-subagent agent contract", () => {
     expect(properties).toHaveProperty("role");
     expect(properties).toHaveProperty("harness");
     expect(properties).toHaveProperty("subagent_type");
-    expect(properties).not.toHaveProperty("run_in_background");
+    expect(properties).toHaveProperty("background");
     expect(properties).not.toHaveProperty("model");
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");
@@ -73,6 +73,7 @@ describe("pi-subagent agent contract", () => {
     expect((help?.parameters as { properties: Record<string, unknown> }).properties).toEqual(
       expect.objectContaining({ topic: expect.anything(), harness: expect.anything() }),
     );
+    expect(session.getAllTools().find((candidate) => candidate.name === "external_runs")).toBeDefined();
 
     disposeSession(session);
   });
@@ -95,6 +96,185 @@ describe("pi-subagent agent contract", () => {
 
     disposeSession(session);
   });
+
+  it("settles workflow child evidence when resume validation fails", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "codex-worker.md"), "---\ndescription: Codex worker.\nbackend: codex\n---\n");
+    const { session, model, modelRegistry } = await createSession();
+    const workflow = session.getToolDefinition("workflow") as any;
+    const result = await workflow.execute(
+      "resume-validation",
+      {
+        script: "export const meta = { apiVersion: 1, name: 'resume-validation', description: 'Resume validation' }; return await agent('work', { subagent_type: 'codex-worker', resume: '../bad' });",
+      },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    );
+
+    expect(result.details.agents, JSON.stringify(result.details)).toHaveLength(1);
+    const child = result.details.agents[0];
+    expect(child).toMatchObject({ status: "error", externalRunId: expect.stringMatching(/^run_/), recordPath: expect.any(String) });
+    const summary = JSON.parse(readFileSync(join(child.recordPath, "summary.json"), "utf8"));
+    expect(summary.runId).toBe(child.externalRunId);
+    expect(summary.summary).toMatchObject({ status: "error", backendStarted: false });
+
+    disposeSession(session);
+  });
+
+  it("launches Agent and workflow work in the background without retaining tool callbacks", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-background");
+    const startedPath = join(tempDir, "background-started");
+    const directRelease = join(tempDir, "release-direct");
+    const workflowRelease = join(tempDir, "release-workflow");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Background worker.\nbackend: codex\n---\n");
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync, existsSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+appendFileSync(${JSON.stringify(startedPath)}, stdin + '\\n');
+const release = stdin.includes('workflow') ? ${JSON.stringify(workflowRelease)} : ${JSON.stringify(directRelease)};
+while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'background-test' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'finished ' + stdin } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession();
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
+    context.sessionManager.getBranch = () => [];
+    const agent = session.getToolDefinition("Agent") as any;
+    const directUpdate = vi.fn();
+    const direct = await agent.execute(
+      "background-agent",
+      { description: "Background agent", prompt: "direct background", role: "worker", harness: "codex", background: true },
+      undefined,
+      directUpdate,
+      context,
+    );
+    expect(direct.details).toMatchObject({ status: "queued", runId: expect.stringMatching(/^run_/) });
+    await vi.waitFor(() => {
+      expect(existsSync(startedPath)).toBe(true);
+      expect(readFileSync(startedPath, "utf8")).toContain("direct background");
+    }, { timeout: 5_000 });
+    expect(existsSync(directRelease)).toBe(false);
+    expect(directUpdate).not.toHaveBeenCalled();
+
+    writeFileSync(directRelease, "go");
+    await vi.waitFor(() => {
+      const summary = JSON.parse(readFileSync(join(direct.details.recordPath, "summary.json"), "utf8"));
+      expect(summary.summary.status).toBe("done");
+    });
+
+    const blocking = await agent.execute(
+      "blocking-agent",
+      { description: "Blocking agent", prompt: "direct blocking", role: "worker", harness: "codex" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(blocking.details).toMatchObject({ status: "done", result: "finished direct blocking" });
+
+    const workflow = session.getToolDefinition("workflow") as any;
+    const workflowUpdate = vi.fn();
+    const backgroundWorkflow = await workflow.execute(
+      "background-workflow",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'background', description: 'Background workflow' }; return await agent('workflow background', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      workflowUpdate,
+      context,
+    );
+    expect(backgroundWorkflow.details).toMatchObject({ status: "running", runId: expect.stringMatching(/^wf_/) });
+    await vi.waitFor(() => {
+      expect(existsSync(startedPath)).toBe(true);
+      expect(readFileSync(startedPath, "utf8")).toContain("workflow background");
+    }, { timeout: 5_000 });
+    expect(existsSync(workflowRelease)).toBe(false);
+    expect(workflowUpdate).not.toHaveBeenCalled();
+    writeFileSync(workflowRelease, "go");
+    await vi.waitFor(() => expect(readFileSync(backgroundWorkflow.details.journalPath, "utf8")).toContain('"type":"run_complete"'));
+
+    disposeSession(session);
+  });
+
+  it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-cancel-reason");
+    const startedPath = join(tempDir, "cancel-reason-started");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Cancel worker.\nbackend: codex\n---\n");
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(startedPath)}, 'started\\n');
+setInterval(() => {}, 1000);
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 5_000 });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
+    context.sessionManager.getBranch = () => [];
+    const agent = session.getToolDefinition("Agent") as any;
+    const runs = session.getToolDefinition("external_runs") as any;
+    const launched = await agent.execute(
+      "cancel-reason",
+      { description: "Cancel reason", prompt: "wait", role: "worker", harness: "codex", background: true },
+      undefined,
+      undefined,
+      context,
+    );
+    await vi.waitFor(() => expect(existsSync(startedPath)).toBe(true), { timeout: 5_000 });
+    await runs.execute("cancel", { action: "cancel", runId: launched.details.runId, reason: "superseded by parent" }, undefined, undefined, context);
+    const waited = await runs.execute("wait", { action: "wait", runIds: [launched.details.runId] }, undefined, undefined, context);
+
+    expect(waited.details.outcomes).toEqual([expect.objectContaining({ outcome: "cancelled", error: "superseded by parent" })]);
+    expect(JSON.parse(readFileSync(join(launched.details.recordPath, "summary.json"), "utf8")).summary.error).toBe("superseded by parent");
+
+    const workflow = session.getToolDefinition("workflow") as any;
+    const launchedWorkflow = await workflow.execute(
+      "cancel-workflow-reason",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'cancel-reason', description: 'Cancel reason' }; return await agent('wait', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8").match(/started/g)).toHaveLength(2), { timeout: 5_000 });
+    await runs.execute("cancel-workflow", { action: "cancel", runId: launchedWorkflow.details.runId, reason: "workflow superseded" }, undefined, undefined, context);
+    const waitedWorkflow = await runs.execute("wait-workflow", { action: "wait", runIds: [launchedWorkflow.details.runId] }, undefined, undefined, context);
+
+    expect(waitedWorkflow.details.outcomes).toEqual([expect.objectContaining({ outcome: "cancelled", error: "workflow superseded" })]);
+    expect(readFileSync(launchedWorkflow.details.journalPath, "utf8")).toContain('"error":"workflow superseded","outcome":"cancelled"');
+
+    const timedWorkflow = await workflow.execute(
+      "timeout-workflow",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'timeout', description: 'Timeout' }; return await agent('wait', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const waitedTimeout = await runs.execute("wait-timeout", { action: "wait", runIds: [timedWorkflow.details.runId] }, undefined, undefined, context);
+
+    expect(waitedTimeout.details.outcomes).toEqual([expect.objectContaining({ outcome: "timed_out" })]);
+    expect(readFileSync(timedWorkflow.details.journalPath, "utf8")).toContain('"outcome":"timed_out"');
+    disposeSession(session);
+  }, 15_000);
 
   it("loads as a pi package extension from package metadata", async () => {
     const resourceLoader = new DefaultResourceLoader({
@@ -137,6 +317,7 @@ describe("pi-subagent agent contract", () => {
     expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
     expect(getToolNames(rootContext)).toContain("external_help");
+    expect(getToolNames(rootContext)).toContain("external_runs");
     expect(getToolNames(rootContext)).toContain("workflow");
     expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
 
@@ -194,12 +375,12 @@ describe("pi-subagent agent contract", () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "audit.js"),
-      `export const meta = { name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
+      `export const meta = { apiVersion: 1, name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
     );
     mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "workflows", "project.js"),
-      `export const meta = { name: 'project-review', description: 'Project-only review.' };\nreturn await agent('review');`,
+      `export const meta = { apiVersion: 1, name: 'project-review', description: 'Project-only review.' };\nreturn await agent('review');`,
     );
 
     const { session, model, modelRegistry } = await createSession();

@@ -57,12 +57,16 @@ function workflowHelp(workflowsEnabled: boolean, workflows: ReturnType<typeof li
   const availability = workflowsEnabled ? "The workflow tool is enabled." : "The workflow tool is disabled for this extension instance.";
   return `${availability} It runs trusted JavaScript, not a sandbox.
 
-Provide exactly one workflow source: name, scriptPath, or script. Inline scripts start with a literal export const meta = { name, description }, call agent() at least once, await every started call, and return JSON-serializable data. Project .pi/workflows are visible only when the project is trusted.
+Provide exactly one workflow source: name, scriptPath, or script. Every script starts with the literal current declaration export const meta = { apiVersion: 1, name, description }, calls agent() at least once, awaits every started call, and returns JSON-serializable data. Missing/unsupported API versions fail before any child launches. Project .pi/workflows are visible only when the project is trusted.
 
-APIs: agent(prompt, { label, role, harness, subagent_type, permission, max_budget_usd, resume, context, schema, phase }); parallel(thunks); pipeline(items, ...stages); phase(title); log(message). Globals: args and cwd. Agent options other than the profile selector are optional. Choose role/harness or legacy exact subagent_type, never both. Use unique labels and clear task prompts. Context options: {mode:"none"} (default), {mode:"recent",turns:N} (positive integer, includes current user turn), or {mode:"full"} (available context after compaction). All children share a frozen parent snapshot from workflow invocation; earlier child results must still be passed explicitly. Context excludes thinking/system instructions and pending calls; images and snapshots over 1 MiB fail without truncation. Context sharing cannot be combined with resume. Workflow replay fingerprints include the transferred context, so changed context invalidates cached results. Use schema for results that control branching or aggregation. Imports, filesystem globals, Date APIs, and Math.random() are unavailable.
+APIs: agent(prompt, { label, role, harness, subagent_type, permission, max_budget_usd, resume, context, schema, phase }); parallel(thunks); pipeline(items, ...stages); phase(title); log(message). Globals: args and cwd. Agent options other than the profile selector are optional. Choose role/harness or legacy exact subagent_type, never both. Use unique labels and clear task prompts. An agent() succeeds with its value or throws ChildRunError { runId, outcome, message, outputRef, diagnosticsRef }; catch optional failures explicitly. Uncaught failures terminate the workflow and drain siblings. Helpers never convert failures to null. Context options: {mode:"none"} (default), {mode:"recent",turns:N} (positive integer, includes current user turn), or {mode:"full"} (available context after compaction). All children share invocation-time context/settings; earlier child results must still be passed explicitly. Context excludes thinking/system instructions and pending calls; images and snapshots over 1 MiB fail without truncation. Context sharing cannot be combined with resume. Use schema for results that control branching or aggregation. Imports, filesystem globals, Date APIs, and Math.random() are unavailable.
+
+Background and supervision: set background:true on Agent or workflow to return a stable run ID while session-owned work continues. external_runs actions are list (optional workflowRunId/cursor/workflowCursor/limit), inspect (runId, view summary|output|diagnostics, optional opaque cursor/limitBytes), wait (runId or runIds, mode any|all), and cancel (runId, optional reason). Follow nextCursor/nextWorkflowCursor for complete results. Wait returns selected terminal outcomes and pending IDs, never cancels pending work, and returns an unsuccessful workflow early; interrupting wait stops only the wait. Cancelling a workflow stops active children, while cancelling one child is a catchable workflow error. Blocking-call interruption cancels that call; background work survives tool return but is cancelled on orderly owning-session shutdown. It is not a daemon: crashes leave unfinished evidence interrupted/uncertain, restart does not adopt work, and live steering is unavailable.
+
+Replay: resumeFromRunId works only with persisted scriptPath and starts an explicit new attempt. It reuses the longest unchanged prefix of successful child calls; the first changed/failed/cancelled/timed-out call and its suffix run again. Script recomposition is cheap, but child reruns can cost money or repeat side effects. There is no automatic repaired-script replay.
 
 Example:
-export const meta = { name: "review", description: "Map and review a repository" };
+export const meta = { apiVersion: 1, name: "review", description: "Map and review a repository" };
 const [map, review] = await parallel([
   () => agent("Map /absolute/repo read-only.", { label: "map", role: "explorer" }),
   () => agent("Review /absolute/repo read-only.", { label: "review", role: "reviewer", harness: "codex" }),
@@ -78,7 +82,7 @@ export function createExternalHelpTool(
   return defineTool({
     name: "external_help",
     label: "External Help",
-    description: "Read-only help on demand for external roles, permission behavior, and workflow usage or discovery.",
+    description: "Read-only help on demand for external roles, permission behavior, and workflow usage (including background runs, external_runs supervision syntax, and replay) or saved-workflow discovery.",
     promptSnippet: EXTERNAL_HELP_PROMPT_SNIPPET,
     parameters: externalHelpParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

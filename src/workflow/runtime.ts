@@ -1,4 +1,5 @@
 import { prepareParentContext } from "../core/parent-context.ts";
+import { resolve } from "node:path";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
@@ -9,8 +10,11 @@ import {
   requireString,
   truncateLogLine,
 } from "./runtime-values.ts";
+import { ChildRunError, childRunErrorData } from "./types.ts";
 import type {
   RunWorkflowOptions,
+  WorkflowAgentCall,
+  WorkflowAgentQueuedEvent,
   WorkflowAgentResultEvent,
   WorkflowLimits,
   WorkflowRunResult,
@@ -27,6 +31,7 @@ export type {
   WorkflowMetaPhase,
   WorkflowRunResult,
 } from "./types.ts";
+export { ChildRunError } from "./types.ts";
 export { parseWorkflowScript } from "./script-validation.ts";
 export { fingerprintWorkflowAgentCall, hashStableValue } from "./replay-cache.ts";
 
@@ -51,8 +56,19 @@ const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
   workerMaxOldGenerationSizeMb: 512,
   workerMaxYoungGenerationSizeMb: 32,
   workerStackSizeMb: 4,
-  abortGraceMs: 1_000,
+  abortGraceMs: 4_000,
 };
+
+async function settleWithin(promises: Promise<unknown>[], timeoutMs: number): Promise<boolean> {
+  if (promises.length === 0) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    Promise.allSettled(promises).then(() => true),
+    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return settled;
+}
 
 class WorkflowFatalError extends Error {
   readonly workflowFatal = true;
@@ -66,6 +82,17 @@ function isWorkflowFatalError(error: unknown): error is WorkflowFatalError {
   return error instanceof WorkflowFatalError;
 }
 
+function asChildRunError(error: unknown, runId: string): ChildRunError {
+  if (error instanceof ChildRunError) return error;
+  return new ChildRunError({
+    runId,
+    outcome: "failed",
+    message: error instanceof Error ? error.message : String(error),
+    outputRef: { runId, view: "output" },
+    diagnosticsRef: { runId, view: "diagnostics" },
+  });
+}
+
 export function isWorkflowAbortError(error: unknown): error is WorkflowAbortError {
   return error instanceof WorkflowAbortError;
 }
@@ -75,6 +102,7 @@ export async function runWorkflow<T = unknown>(
   options: RunWorkflowOptions,
 ): Promise<WorkflowRunResult<T>> {
   const { meta, body } = parseWorkflowScript(script);
+  const cwd = resolve(options.cwd);
   const limits = normalizeWorkflowLimits(options.limits);
   const state: RuntimeState = {
     logs: [],
@@ -102,7 +130,7 @@ export async function runWorkflow<T = unknown>(
   const abortRuntime = (error: Error) => {
     rememberFatal(error);
     if (!runtimeAbortController.signal.aborted) {
-      runtimeAbortController.abort();
+      runtimeAbortController.abort(error);
     }
   };
 
@@ -174,8 +202,9 @@ export async function runWorkflow<T = unknown>(
 
     const index = ++state.agentCount;
     const label = opts.label || defaultAgentLabel(assignedPhase, index);
-    const call = {
+    const call: WorkflowAgentCall = {
       index,
+      cwd,
       prompt: taskPrompt,
       ...(briefing.context ? { context: briefing.context } : {}),
       label,
@@ -189,44 +218,103 @@ export async function runWorkflow<T = unknown>(
     const fingerprint = fingerprintWorkflowAgentCall(call);
     const cachedResult = state.resumePrefixActive ? resumeAgentResults[index - 1] : undefined;
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
-      options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, cached: true });
+      options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, cached: true, runId: cachedResult.runId });
       options.onAgentEnd?.({ index, label, phase: assignedPhase, result: cachedResult.result, cached: true, failed: false });
-      await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
+      await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result: cachedResult.result, failed: false, cached: true, runId: cachedResult.runId });
       return cachedResult.result;
     }
     state.resumePrefixActive = false;
 
     // Queue on the shared global cap. May reject if aborted while waiting.
-    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context });
-    const release = await limiter.acquire(compositeSignal);
-    let result: unknown;
-    let failed = false;
-    try {
-      options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt });
-      throwIfAborted();
-      result = await options.runAgent(call, compositeSignal);
-      throwIfAborted();
-      result = normalizeJsonSerializable(result, "agent result");
-    } catch (error) {
-      if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) {
-        throw error;
+    const queuedEvent: WorkflowAgentQueuedEvent = { index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context };
+    await options.onAgentQueued?.(queuedEvent);
+    const runRecord = queuedEvent.runRecord;
+    if (runRecord) call.runRecord = runRecord;
+    const executeAgent = async (childSignal?: AbortSignal) => {
+      const executionSignal = AbortSignal.any(
+        [compositeSignal, childSignal].filter((signal): signal is AbortSignal => Boolean(signal)),
+      );
+      const recordFailure = async (childError: ChildRunError) => {
+        log(`agent ${label} failed: ${childError.message}`);
+        const serialized = childRunErrorData(childError);
+        options.onAgentEnd?.({ index, label, phase: assignedPhase, result: undefined, failed: true, cached: false, error: serialized });
+        await recordAgentResult({
+          ...call,
+          prompt: originalPrompt,
+          index,
+          fingerprint,
+          result: undefined,
+          failed: true,
+          cached: false,
+          runId: childError.runId,
+          error: serialized,
+        });
+      };
+      const cancelledError = (message: string) => {
+        const runId = runRecord?.runId ?? `workflow-child-${index}`;
+        return new ChildRunError({
+          runId,
+          outcome: "cancelled",
+          message,
+          outputRef: { runId, view: "output" },
+          diagnosticsRef: { runId, view: "diagnostics" },
+        });
+      };
+
+      let release: (() => void) | undefined;
+      try {
+        release = await limiter.acquire(executionSignal);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await runRecord?.finish({
+          status: executionSignal.aborted ? "aborted" : "error",
+          error: message,
+          queued: true,
+          backendStarted: false,
+        });
+        const fatal = options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error);
+        const childError = fatal || childSignal?.aborted
+          ? cancelledError(fatal ? abortReason : message)
+          : asChildRunError(error, runRecord?.runId ?? `workflow-child-${index}`);
+        await recordFailure(childError);
+        if (fatal) throw error;
+        throw childError;
       }
-      log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
-      result = null;
-      failed = true;
-    } finally {
-      release();
-    }
-    options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
-    await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result, failed, cached: false });
-    return result;
+
+      let result: unknown;
+      try {
+        options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt });
+        throwIfAborted();
+        result = await options.runAgent(call, executionSignal);
+        throwIfAborted();
+        result = normalizeJsonSerializable(result, "agent result");
+      } catch (error) {
+        const fatal = options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error);
+        const message = error instanceof Error ? error.message : String(error);
+        const childError = (fatal || childSignal?.aborted) && !(error instanceof ChildRunError)
+          ? cancelledError(fatal ? abortReason : message)
+          : asChildRunError(error, runRecord?.runId ?? `workflow-child-${index}`);
+        await recordFailure(childError);
+        if (fatal) throw error;
+        throw childError;
+      } finally {
+        release();
+      }
+      options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed: false, cached: false });
+      await recordAgentResult({ ...call, prompt: originalPrompt, index, fingerprint, result, failed: false, cached: false, runId: runRecord?.runId });
+      return result;
+    };
+
+    return options.startAgentRun
+      ? options.startAgentRun(call, (signal) => executeAgent(signal))
+      : executeAgent();
   };
 
   const worker = createWorkflowScriptWorker({
     body,
     metaName: meta.name || "workflow",
     args: options.args,
-    cwd: options.cwd,
+    cwd,
     limits,
   });
 
@@ -258,8 +346,11 @@ export async function runWorkflow<T = unknown>(
       finished = true;
       abortRuntime(isWorkflowFatalError(error) ? error : new WorkflowFatalError(error.message));
       cleanup();
-      void worker.terminate();
-      reject(error);
+      void (async () => {
+        const drained = await settleWithin([worker.terminate(), ...activeAgentTasks], limits.abortGraceMs);
+        if (!drained) options.onLog?.(`workflow cleanup remains uncertain after ${limits.abortGraceMs}ms`);
+        reject(error);
+      })();
     };
 
     const finishResolve = (result: unknown) => {
@@ -283,14 +374,20 @@ export async function runWorkflow<T = unknown>(
 
       finished = true;
       cleanup();
-      void worker.terminate();
-      resolve({
-        meta,
-        result: normalizedResult as T,
-        logs: state.logs,
-        phases: state.phases,
-        agentCount: state.agentCount,
-      });
+      void (async () => {
+        const drained = await settleWithin([...activeAgentTasks, worker.terminate()], limits.abortGraceMs);
+        if (!drained) {
+          reject(new WorkflowFatalError(`workflow cleanup remains uncertain after ${limits.abortGraceMs}ms`));
+          return;
+        }
+        resolve({
+          meta,
+          result: normalizedResult as T,
+          logs: state.logs,
+          phases: state.phases,
+          agentCount: state.agentCount,
+        });
+      })();
     };
 
     const abortWorkflow = (reason: string) => {
@@ -308,9 +405,12 @@ export async function runWorkflow<T = unknown>(
       }
     };
 
-    const onExternalAbort = () => abortWorkflow("workflow aborted");
+    const externalAbortReason = () => options.signal?.reason === undefined
+      ? "workflow aborted"
+      : options.signal.reason instanceof Error ? options.signal.reason.message : String(options.signal.reason);
+    const onExternalAbort = () => abortWorkflow(externalAbortReason());
     if (options.signal?.aborted) {
-      abortWorkflow("workflow aborted");
+      abortWorkflow(externalAbortReason());
     } else {
       options.signal?.addEventListener("abort", onExternalAbort, { once: true });
     }
@@ -359,13 +459,22 @@ export async function runWorkflow<T = unknown>(
             rememberFatal(error instanceof Error ? error : new WorkflowFatalError(String(error)));
           }
           lastProgressAt = Date.now();
-          postToWorker({
-            type: "agentResult",
-            id: message.id,
-            ok: false,
-            fatal,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          if (fatal) {
+            postToWorker({
+              type: "agentResult",
+              id: message.id,
+              ok: false,
+              fatal: true,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } else {
+            postToWorker({
+              type: "agentResult",
+              id: message.id,
+              ok: false,
+              error: childRunErrorData(asChildRunError(error, `workflow-child-${message.id}`)),
+            });
+          }
         }
       })().finally(() => {
         activeAgentTasks.delete(task);
@@ -403,7 +512,7 @@ export async function runWorkflow<T = unknown>(
             finishResolve(message.result);
             break;
           case "error":
-            finishReject(fatalError ?? new Error(message.error));
+            finishReject(fatalError ?? (message.childError ? new ChildRunError(message.childError) : new Error(message.error)));
             break;
         }
       } catch (error) {

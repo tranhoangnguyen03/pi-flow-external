@@ -40,15 +40,38 @@ describe("/external command", () => {
         diagnostics: ['Unknown setting "futureOption".'],
       };
       const startProfileInterview = vi.fn(async () => {});
+      const workflowSummary = JSON.stringify({
+        runId: "wf_all",
+        kind: "workflow",
+        state: { status: "running" },
+        children: Array.from({ length: 60 }, (_, index) => ({ runId: `run_${index + 1}`, label: `child ${index + 1}`, status: "done" })),
+      });
+      const summarySplit = workflowSummary.indexOf('"runId":"run_31"');
+      const externalRuns = {
+        execute: vi.fn(async (_id: string, params: any) => {
+          if (params.action === "list") return params.workflowCursor
+            ? { content: [{ type: "text", text: "list" }], details: { workflows: [{ runId: "wf_all", task: { name: "wide" }, state: { status: "running" } }], runs: [] } }
+            : { content: [{ type: "text", text: "list" }], details: { workflows: [{ runId: "wf_first", task: { name: "first" }, state: { status: "done" } }], runs: [], nextWorkflowCursor: "wf-next" } };
+          if (params.action === "cancel") return { content: [{ type: "text", text: "cancelled" }], details: { status: "requested" } };
+          if (params.runId === "wf_all") return params.cursor
+            ? { content: [{ type: "text", text: workflowSummary.slice(summarySplit) }], details: { text: workflowSummary.slice(summarySplit) } }
+            : { content: [{ type: "text", text: workflowSummary.slice(0, summarySplit) }], details: { text: workflowSummary.slice(0, summarySplit), nextCursor: "summary-2" } };
+          if (params.view === "summary") return { content: [{ type: "text", text: JSON.stringify({ runId: params.runId, state: { status: "running" }, output: { available: true } }) }], details: {} };
+          return params.cursor
+            ? { content: [{ type: "text", text: "output page two" }], details: {} }
+            : { content: [{ type: "text", text: "output page one" }], details: { nextCursor: "output-2" } };
+        }),
+      };
       registerExternalCommand(pi as never, {
         settings,
         getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
         getMaxRunRecords: () => 200,
         startProfileInterview,
+        externalRuns: externalRuns as never,
       });
 
       expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-        "doctor", "settings", "profiles", "profile create", "profile clean-up", "workflows", "runs", "help",
+        "doctor", "settings", "profiles", "profile create", "profile clean-up", "workflows", "runs", "runs summary", "runs --prune", "help",
       ]);
 
       const notices: string[] = [];
@@ -76,6 +99,38 @@ describe("/external command", () => {
 
       await command?.handler("runs", ctx);
       expect(notices.at(-1)).toContain("Runs: 2");
+
+      let childActions = 0;
+      let workflowActions = 0;
+      let rootActions = 0;
+      const editor = vi.fn(async () => "");
+      const interactiveCtx = {
+        ...ctx,
+        hasUI: true,
+        ui: {
+          notify: (message: string) => notices.push(message),
+          editor,
+          confirm: vi.fn(async () => true),
+          select: vi.fn(async (title: string, choices: string[]) => {
+            if (title === "External runs") return rootActions++ === 0
+              ? "Next workflow page"
+              : rootActions === 2
+                ? choices.find((choice) => choice.includes("wf_all"))
+                : "Back";
+            if (title.includes("wf_all")) return workflowActions++ === 0
+              ? choices.find((choice) => choice.includes("run_60"))
+              : choices.find((choice) => choice === "Back");
+            if (title.includes("output")) return "Next page";
+            if (title.includes("run_60")) return childActions++ === 0 ? "Output" : "Cancel run";
+          }),
+        },
+      };
+      await command?.handler("runs", interactiveCtx);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "list", workflowCursor: "wf-next" }), undefined, undefined, interactiveCtx);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "wf_all", view: "summary", cursor: "summary-2" }), undefined, undefined, interactiveCtx);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "run_60", view: "output", cursor: "output-2" }), undefined, undefined, interactiveCtx);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), { action: "cancel", runId: "run_60", reason: "cancelled from /external runs" }, undefined, undefined, interactiveCtx);
+      expect(editor.mock.calls.map((call) => call.at(1))).toEqual(["output page one", "output page two"]);
 
       await command?.handler("profile create", ctx);
       expect(startProfileInterview).toHaveBeenCalledOnce();

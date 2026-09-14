@@ -1,5 +1,6 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { resolve } from "node:path";
 import type { WorkflowToolDetails } from "../types.ts";
 import {
   createWorkflowJournalWriter,
@@ -15,11 +16,14 @@ import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedAgentResult, WorkflowMetaPhase } from "./types.ts";
 
 export const workflowToolParameters = Type.Object({
+  background: Type.Optional(Type.Boolean({
+    description: "Return a stable workflow handle after registration while session-owned execution continues. Defaults to false.",
+  })),
   script: Type.Optional(
     Type.String({
       description: [
         "Raw JavaScript workflow script (no Markdown fences) for an ad-hoc workflow.",
-        "First statement: export const meta = { name: 'short_name', description: 'non-empty' }.",
+        "First statement: export const meta = { apiVersion: 1, name: 'short_name', description: 'non-empty' }.",
         "Use agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Must call agent() at least once and return a JSON-serializable value. Results are canonicalized to JSON; non-plain objects are rejected.",
         "Provide exactly one of `script`, `name`, or `scriptPath`.",
       ].join(" "),
@@ -181,6 +185,7 @@ export async function prepareWorkflowToolSource(
   params: WorkflowToolParams,
   ctx: ExtensionContext,
 ): Promise<PrepareWorkflowToolSourceResult> {
+  const project = resolve(ctx.cwd);
   const source = resolveWorkflowSource(params, ctx);
   if (!source.ok) {
     return sourceError(`${source.message}${formatWarnings(source.warnings)}`, {
@@ -288,6 +293,19 @@ export async function prepareWorkflowToolSource(
         resumeFromRunId,
       });
     }
+    if (journal.project !== project) {
+      const message = `Cannot resume workflow: ${resumeFromRunId} belongs to a different project. No children were launched.`;
+      return sourceError(message, {
+        name: metaName,
+        error: message,
+        logs: source.warnings,
+        source: source.source,
+        sourcePath: source.sourcePath,
+        scriptPath,
+        runId: identity.runId,
+        resumeFromRunId,
+      });
+    }
     resumeAgentResults = journal.agentResults;
   }
 
@@ -299,6 +317,7 @@ export async function prepareWorkflowToolSource(
         identity,
         name: metaName,
         source: source.source,
+        project,
         scriptPath,
         resumeFromRunId,
       });

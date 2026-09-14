@@ -7,18 +7,22 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
+import { createRunRecord } from "../core/run-record.ts";
+import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
+import { RunRegistry } from "../core/run-registry.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
-import type { WorkflowAgentRunner } from "./types.ts";
+import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner } from "./types.ts";
 import {
   createStructuredOutputTool,
   STRUCTURED_OUTPUT_CONTRACT,
@@ -27,6 +31,7 @@ import {
 } from "./structured-output.ts";
 
 export interface CreateWorkflowToolOptions {
+  registry: RunRegistry;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
@@ -85,6 +90,11 @@ function formatRecentLogs(logs: string[], max = 10): string {
   return `\n\nLogs:\n${prefix}${shown.map((log) => `- ${log}`).join("\n")}`;
 }
 
+function childOutcome(details: SubagentToolDetails): ChildRunOutcome {
+  if (details.timedOut) return "timed_out";
+  return details.status === "aborted" ? "cancelled" : "failed";
+}
+
 export function createWorkflowTool(
   options: CreateWorkflowToolOptions,
 ): ToolDefinition<typeof workflowToolParameters, WorkflowToolDetails> {
@@ -96,6 +106,19 @@ export function createWorkflowTool(
     parameters: workflowToolParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const parentMessages = captureParentContext(ctx.sessionManager);
+      const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
+      const sessionVersion = options.registry.sessionVersion(sessionId);
+      const project = resolve(ctx.cwd);
+      const executionContext = { cwd: project } as ExtensionContext;
+      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
+      const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
+      const limiter = options.getLimiter();
+      const thinkingLevel = options.getThinkingLevel();
+      const timeoutMs = options.getSubagentTimeoutMs();
+      const defaultPermission = options.getDefaultPermission();
+      const defaultHarness = options.getDefaultHarness(ctx);
+      const defaultMaxBudgetUsd = options.getDefaultMaxBudgetUsd();
+      const background = params.background === true;
       const prepared = await prepareWorkflowToolSource(params, ctx);
       if (!prepared.ok) {
         return workflowError(prepared.text, prepared.details);
@@ -115,7 +138,6 @@ export function createWorkflowTool(
         resumeAgentResults,
       } = prepared.value;
 
-      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
       const snapshot: WorkflowToolDetails = {
         name: metaName,
         status: "running",
@@ -132,17 +154,21 @@ export function createWorkflowTool(
         resumeFromRunId,
         cachedAgentCount: 0,
       };
-      const emit = () => onUpdate?.(workflowResult(`Workflow "${metaName}" running.`, cloneSnapshot(snapshot)));
+      const emit = () => {
+        options.registry.update(identity.runId, cloneSnapshot(snapshot));
+        if (!background) onUpdate?.(workflowResult(`Workflow "${metaName}" running.`, cloneSnapshot(snapshot)));
+      };
 
-      let agentSeq = 0;
-      const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
+      const executeWorkflow = async (runSignal: AbortSignal) => {
+        let agentSeq = 0;
+        const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
         const profile = profiles.get(call.subagentType);
         if (!profile) {
           throw new Error(
             `Unknown external subagent_type "${call.subagentType}". Available external agents: ${[...profiles.keys()].join(", ")}. Use the native subagent system for Pi-backed agents.`,
           );
         }
-        const model = resolveProfileModel(profile, ctx);
+        const model = models.get(call.subagentType);
         if (usesPiBackend(profile) && !model) {
           throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
         }
@@ -177,14 +203,14 @@ export function createWorkflowTool(
           context: call.context,
           profile,
           model,
-          thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
-          ctx,
+          thinkingLevel: profile.thinking ?? thinkingLevel,
+          ctx: executionContext,
           signal: agentSignal,
-          timeoutMs: options.getSubagentTimeoutMs(),
+          timeoutMs,
           progressEnabled: true,
           permission: call.permission,
-          defaultPermission: options.getDefaultPermission(),
-          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? options.getDefaultMaxBudgetUsd(),
+          defaultPermission,
+          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
           resumeRunId: call.resumeRunId,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
@@ -196,18 +222,24 @@ export function createWorkflowTool(
               agent.activityCount = details.progress.activityCount;
               agent.result = details.progress.result;
               agent.error = details.progress.error;
+              agent.assistantOutput = details.progress.assistantOutput;
+              agent.processStartedAt = details.progress.processStartedAt;
+              agent.firstActivityAt = details.progress.firstActivityAt;
+              agent.lastActivityAt = details.progress.lastActivityAt;
               agent.timedOut = details.progress.timedOut;
               agent.usage = details.progress.usage;
               agent.status = details.progress.status;
               agent.context = details.context;
+              if (call.runRecord) options.registry.update(call.runRecord.runId, details.progress);
               emit();
             }
           },
-          onUsage: (usage) => options.updateStatus(ctx, childId, usage),
+          onUsage: background ? () => undefined : (usage) => options.updateStatus(ctx, childId, usage),
           excludeTools: CHILD_EXCLUDED_TOOLS,
           appendInstructions,
           customTools,
           outputSchema: externalOutputSchema ? call.schema : undefined,
+          runRecord: call.runRecord,
         });
         const resultDetails = result.details as SubagentToolDetails;
         const agent = snapshot.agents.find((item) => item.index === childIndex);
@@ -216,6 +248,10 @@ export function createWorkflowTool(
           agent.status = resultDetails.status;
           agent.result = resultDetails.result;
           agent.error = resultDetails.error;
+          agent.assistantOutput = resultDetails.assistantOutput;
+          agent.processStartedAt = progress?.processStartedAt;
+          agent.firstActivityAt = progress?.firstActivityAt;
+          agent.lastActivityAt = progress?.lastActivityAt;
           agent.timedOut = resultDetails.timedOut;
           agent.usage = resultDetails.usage;
           agent.externalRunId = resultDetails.runId;
@@ -241,7 +277,14 @@ export function createWorkflowTool(
           emit();
         }
         if (resultDetails.status !== "done") {
-          throw new Error(resultDetails.error ?? "subagent failed");
+          const runId = resultDetails.runId ?? call.runRecord?.runId ?? childId;
+          throw new ChildRunError({
+            runId,
+            outcome: childOutcome(resultDetails),
+            message: resultDetails.error ?? "subagent failed",
+            outputRef: { runId, view: "output" },
+            diagnosticsRef: { runId, view: "diagnostics" },
+          });
         }
         if (externalOutputSchema) {
           try {
@@ -257,7 +300,7 @@ export function createWorkflowTool(
           return capture.value;
         }
         return resultDetails.result ?? "";
-      };
+        };
 
       // Spinner animation is driven here, by the runtime, not by a UI-render
       // timer: while any agent is running we advance a frame counter and re-emit
@@ -278,15 +321,37 @@ export function createWorkflowTool(
           args: params.args,
           parentMessages,
           parentToolCallId: toolCallId,
-          cwd: ctx.cwd,
-          signal,
-          limiter: options.getLimiter(),
+          cwd: project,
+          signal: runSignal,
+          limiter,
           runAgent,
+          startAgentRun: (call, run) => {
+            const runId = call.runRecord?.runId;
+            if (!runId) throw new Error("workflow child run evidence was not allocated");
+            return options.registry.start({
+              runId,
+              kind: "agent",
+              sessionId,
+              sessionVersion,
+              project,
+              workflowRunId: identity.runId,
+              run,
+              failure: (error, childSignal) => ({
+                status: runSignal.aborted || childSignal.aborted ? "aborted" : "error",
+                outcome: error instanceof ChildRunError
+                  ? error.outcome
+                  : runSignal.aborted || childSignal.aborted ? "cancelled" : "failed",
+                error: childSignal.aborted && childSignal.reason !== undefined
+                  ? childSignal.reason instanceof Error ? childSignal.reason.message : String(childSignal.reason)
+                  : error instanceof Error ? error.message : String(error),
+              }),
+            }).result;
+          },
           defaultSubagentType: null,
           resolveSubagentType: (selection) => resolveExternalProfile(
             profiles,
             selection,
-            options.getDefaultHarness(ctx),
+            defaultHarness,
           ).name,
           resumeAgentResults,
           onLog: (message) => {
@@ -300,7 +365,24 @@ export function createWorkflowTool(
             snapshot.currentPhase = title;
             emit();
           },
-          onAgentQueued: (event) => {
+          onAgentQueued: async (event) => {
+            const queuedAt = Date.now();
+            const profile = profiles.get(event.subagentType);
+            const runRecord = createRunRecord({
+              directory: runRecordsDirectory(),
+              metadata: {
+                kind: "workflow-child",
+                parentSessionId: sessionId,
+                project,
+                workflowRunId: identity.runId,
+                description: event.label,
+                prompt: event.prompt,
+                profile: event.subagentType,
+                backend: profile?.backend,
+                queuedAt: new Date(queuedAt).toISOString(),
+              },
+            });
+            event.runRecord = runRecord;
             snapshot.agents.push({
               index: event.index,
               label: event.label,
@@ -308,13 +390,16 @@ export function createWorkflowTool(
               subagentType: event.subagentType,
               backend: profiles.get(event.subagentType)?.backend,
               status: "queued",
+              externalRunId: runRecord.runId,
+              recordPath: runRecord.directory,
               context: event.context,
-              startedAt: Date.now(),
+              queuedAt,
               activity: [],
               activityCount: 0,
             });
             snapshot.agentCount = snapshot.agents.length;
             emit();
+            await journalWriter?.appendAgentQueued(event);
           },
           onAgentStart: (event) => {
             let agent = snapshot.agents.find((item) => item.index === event.index);
@@ -332,6 +417,7 @@ export function createWorkflowTool(
               snapshot.agents.push(agent);
             }
             agent.status = event.cached ? "done" : "running";
+            if (event.runId) agent.externalRunId = event.runId;
             agent.startedAt = Date.now();
             snapshot.agentCount = snapshot.agents.length;
             if (event.cached) {
@@ -343,18 +429,23 @@ export function createWorkflowTool(
           onAgentEnd: (event) => {
             const agent = snapshot.agents.find((item) => item.index === event.index);
             if (agent) {
-              agent.status = event.failed ? "error" : "done";
+              agent.status = event.error?.outcome === "cancelled" || event.error?.outcome === "timed_out"
+                ? "aborted"
+                : event.failed ? "error" : "done";
               agent.endedAt = Date.now();
-              if (event.failed && !agent.error) {
-                agent.error = "subagent failed";
-              }
+              if (event.error) {
+                agent.error = event.error.message;
+                agent.externalRunId = event.error.runId;
+                agent.timedOut = event.error.outcome === "timed_out";
+              } else if (event.failed && !agent.error) agent.error = "subagent failed";
             }
             emit();
           },
           onAgentResult: async (event) => {
             const agent = snapshot.agents.find((item) => item.index === event.index);
-            if (agent && event.context) {
-              agent.context = event.context;
+            if (agent) {
+              if (event.context) agent.context = event.context;
+              if (event.runId) agent.externalRunId = event.runId;
               emit();
             }
             await journalWriter?.appendAgentResult(event);
@@ -362,6 +453,7 @@ export function createWorkflowTool(
         });
 
         snapshot.status = "completed";
+        snapshot.outcome = "succeeded";
         snapshot.agentCount = runResult.agentCount;
         snapshot.result = runResult.result;
         try {
@@ -379,11 +471,13 @@ export function createWorkflowTool(
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const aborted = Boolean(signal?.aborted) || isWorkflowAbortError(error);
+        const aborted = runSignal.aborted || isWorkflowAbortError(error);
+        const outcome: ChildRunOutcome = error instanceof ChildRunError ? error.outcome : aborted ? "cancelled" : "failed";
         snapshot.status = aborted ? "aborted" : "error";
+        snapshot.outcome = outcome;
         snapshot.error = message;
         try {
-          await journalWriter?.fail(message);
+          await journalWriter?.fail(message, outcome);
         } catch {
           // Preserve the original workflow failure; journal write failure is secondary.
         }
@@ -400,6 +494,30 @@ export function createWorkflowTool(
       } finally {
         clearInterval(heartbeat);
       }
+      };
+
+      const registered = options.registry.start({
+        runId: identity.runId,
+        kind: "workflow",
+        sessionId,
+        sessionVersion,
+        project,
+        ...(background ? {} : { signal }),
+        run: executeWorkflow,
+        outcome: (result, workflowSignal) => ({
+          status: result.details.status === "completed" ? "done" : result.details.status === "aborted" ? "aborted" : "error",
+          outcome: result.details.outcome ?? (result.details.status === "completed" ? "succeeded" : result.details.status === "aborted" ? "cancelled" : "failed"),
+          ...(result.details.result !== undefined ? { result: result.details.result } : {}),
+          ...(workflowSignal.aborted && workflowSignal.reason !== undefined
+            ? { error: workflowSignal.reason instanceof Error ? workflowSignal.reason.message : String(workflowSignal.reason) }
+            : result.details.error ? { error: result.details.error } : {}),
+        }),
+      });
+      if (!background) return await registered.result;
+      return workflowResult(
+        `Workflow "${metaName}" queued as ${identity.runId}. Use external_runs to inspect, wait, or cancel it.`,
+        cloneSnapshot(snapshot),
+      );
     },
     renderCall(args, theme, _context) {
       const name = typeof args.name === "string" && args.name.trim() ? ` ${theme.fg("muted", args.name.trim())}` : "";
@@ -573,8 +691,14 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
   }
 
   if (expanded && details.status !== "running") {
+    if (details.result !== undefined) {
+      const output = typeof details.result === "string" ? details.result : JSON.stringify(details.result, null, 2);
+      const preview = output.length > 4_000 ? `${output.slice(0, 4_000)}\n… ${output.length - 4_000} more characters` : output;
+      container.addChild(new Text(`  ${theme.bold("Final output")}\n${preview.split("\n").map((line) => `  ${line}`).join("\n")}`, 0, 0));
+    }
     if (details.runId) {
       container.addChild(new Text(`  ${theme.fg("dim", `Workflow evidence ${details.runId}`)}`, 0, 0));
+      container.addChild(new Text(`  ${theme.fg("dim", `Run ${details.runId} · /external runs for all children, full paged output, diagnostics, and cancellation`)}`, 0, 0));
     }
     if (details.journalPath) {
       container.addChild(new Text(`  ${theme.fg("dim", `Journal ${details.journalPath}`)}`, 0, 0));

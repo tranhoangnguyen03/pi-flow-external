@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  assistantOutput,
   createProgressEmitter,
   textResult,
   type AgentToolResult,
@@ -12,9 +13,9 @@ import {
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
+import { abortChildTree } from "./process-tree.ts";
 
 const CLAUDE_COMMAND = "claude";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface ClaudeTokenUsage {
   inputTokens: number;
@@ -290,12 +291,6 @@ function getPreviewFromRecord(record: Record<string, unknown>): string {
 }
 
 export function claudeActivityFromEvent(event: Record<string, unknown>): string | undefined {
-  if (event.type === "system" && event.subtype === "init") {
-    return "claude session started";
-  }
-  if (event.type === "result") {
-    return "claude turn completed";
-  }
   if (event.type === "assistant") {
     const message = asRecord(event.message);
     const content = message?.content;
@@ -323,35 +318,6 @@ function emptyTokenUsage(): ClaudeTokenUsage {
   };
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below. This can happen if the process
-      // exited between hasChildExited() and the process-group signal.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 export async function spawnClaudeSubagent(params: {
   toolCallId: string;
   description: string;
@@ -364,6 +330,7 @@ export async function spawnClaudeSubagent(params: {
   onProgress: ((result: AgentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage) => void;
   onBackendEvent?: (event: unknown) => void;
+  onProcessStart?: (pid: number | undefined) => void;
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
@@ -385,6 +352,7 @@ export async function spawnClaudeSubagent(params: {
   let latestCostUsd: number | undefined;
   let latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
   let resultText = "";
+  const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
   let permissionDenials: number | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
@@ -446,6 +414,10 @@ export async function spawnClaudeSubagent(params: {
     }
     if (text !== undefined) {
       resultText = text;
+      if (event.type === "assistant" && text.trim()) {
+        const message = asRecord(event.message);
+        assistantMessages.push({ ...(typeof message?.id === "string" ? { id: message.id } : {}), text });
+      }
       if (text.trim()) {
         emitter.addActivity(text.split("\n").find((line) => line.trim()) ?? text);
         emitter.emitSoon();
@@ -480,16 +452,20 @@ export async function spawnClaudeSubagent(params: {
       detached: process.platform !== "win32",
     });
     child = proc;
+    proc.once("spawn", () => {
+      if (progress) progress.processStartedAt = Date.now();
+      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+    });
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("claude stdin/stdout/stderr pipes were not available");
     }
 
     abortHandler = () => {
-      abortChild(proc);
+      abortChildTree(proc);
     };
     params.signal?.addEventListener("abort", abortHandler, { once: true });
     if (params.signal?.aborted) {
-      abortChild(proc);
+      abortChildTree(proc);
       throw new Error("Subagent aborted before prompt start");
     }
 
@@ -508,7 +484,7 @@ export async function spawnClaudeSubagent(params: {
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
         oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
-        abortChild(proc);
+        abortChildTree(proc);
         return;
       }
       for (const line of lines) {
@@ -570,10 +546,12 @@ export async function spawnClaudeSubagent(params: {
 
     params.onUsage(latestUsage);
     const result = resultText.trim();
+    const output = assistantOutput(assistantMessages, "final", result);
     if (progress) {
       progress.status = "done";
       progress.result = result;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -583,21 +561,22 @@ export async function spawnClaudeSubagent(params: {
       status: "done",
       result,
       usage: latestUsage,
+      assistantOutput: output,
       ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child && !hasChildExited(child)) {
-      abortChild(child);
-    }
+    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
+    const output = assistantOutput(assistantMessages, "interrupted");
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
       progress.error = message;
       progress.usage = latestUsage;
+      progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -608,6 +587,7 @@ export async function spawnClaudeSubagent(params: {
       status,
       error: message,
       usage: latestUsage,
+      assistantOutput: output,
       ...(sessionId ? { sessionId } : {}),
       ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),

@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import type { WorkflowLimits } from "./types.ts";
+import type { SerializedChildRunError, WorkflowLimits } from "./types.ts";
 
 export type WorkerToParentMessage =
   | { type: "heartbeat" }
@@ -8,11 +8,12 @@ export type WorkerToParentMessage =
   | { type: "phase"; title: unknown }
   | { type: "fatal"; error: string }
   | { type: "complete"; result: unknown }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string; childError?: SerializedChildRunError };
 
 export type ParentToWorkerMessage =
   | { type: "agentResult"; id: number; ok: true; result: unknown }
-  | { type: "agentResult"; id: number; ok: false; error: string; fatal?: boolean }
+  | { type: "agentResult"; id: number; ok: false; error: string; fatal: true }
+  | { type: "agentResult"; id: number; ok: false; error: SerializedChildRunError; fatal?: false }
   | { type: "abort"; reason: string };
 
 export function createWorkflowScriptWorker({
@@ -54,6 +55,16 @@ const { parentPort, workerData } = require("node:worker_threads");
 const vm = require("node:vm");
 
 class WorkflowFatalError extends Error {}
+class ChildRunError extends Error {
+  constructor(error) {
+    super(error.message);
+    this.name = "ChildRunError";
+    this.runId = error.runId;
+    this.outcome = error.outcome;
+    this.outputRef = error.outputRef;
+    this.diagnosticsRef = error.diagnosticsRef;
+  }
+}
 
 let acceptingAgentCalls = true;
 let aborted = false;
@@ -62,6 +73,7 @@ let nextAgentId = 0;
 let startedAgentCount = 0;
 const pendingAgents = new Map();
 const agentObservations = [];
+const chainObservations = [];
 
 const heartbeat = setInterval(() => {
   post({ type: "heartbeat" });
@@ -78,7 +90,7 @@ parentPort.on("message", (message) => {
     if (message.ok) {
       pending.resolve(message.result);
     } else {
-      const error = message.fatal ? new WorkflowFatalError(message.error) : new Error(message.error);
+      const error = message.fatal ? new WorkflowFatalError(message.error) : new ChildRunError(message.error);
       pending.reject(error);
     }
     return;
@@ -95,7 +107,17 @@ function post(message) {
 function postError(error) {
   const message = error instanceof Error ? error.message : String(error);
   try {
-    post({ type: "error", error: message });
+    post({
+      type: "error",
+      error: message,
+      ...(error instanceof ChildRunError ? { childError: {
+        runId: error.runId,
+        outcome: error.outcome,
+        message: error.message,
+        ...(error.outputRef ? { outputRef: error.outputRef } : {}),
+        ...(error.diagnosticsRef ? { diagnosticsRef: error.diagnosticsRef } : {}),
+      } } : {}),
+    });
   } finally {
     clearInterval(heartbeat);
   }
@@ -159,9 +181,23 @@ function requestAgent(prompt, options) {
   });
 }
 
-function observeDiscardedRejection(promise) {
-  promise.catch(() => {});
-  return promise;
+function trackChain(promise) {
+  const observation = { handled: false, settled: false, rejected: false, error: undefined, promise };
+  chainObservations.push(observation);
+  promise.then(
+    () => { observation.settled = true; },
+    (error) => { observation.settled = true; observation.rejected = true; observation.error = error; },
+  ).catch(() => {});
+  const transfer = (next) => {
+    observation.handled = true;
+    return trackChain(next);
+  };
+  return {
+    then: (onFulfilled, onRejected) => transfer(promise.then(onFulfilled, onRejected)),
+    catch: (onRejected) => transfer(promise.catch(onRejected)),
+    finally: (onFinally) => transfer(promise.finally(onFinally)),
+    [Symbol.toStringTag]: "Promise",
+  };
 }
 
 function agent(prompt, agentOptions = {}) {
@@ -183,9 +219,9 @@ function agent(prompt, agentOptions = {}) {
     return observation.promise;
   };
   return {
-    then: (onFulfilled, onRejected) => observeDiscardedRejection(start().then(onFulfilled, onRejected)),
-    catch: (onRejected) => observeDiscardedRejection(start().catch(onRejected)),
-    finally: (onFinally) => observeDiscardedRejection(start().finally(onFinally)),
+    then: (onFulfilled, onRejected) => trackChain(start().then(onFulfilled, onRejected)),
+    catch: (onRejected) => trackChain(start().catch(onRejected)),
+    finally: (onFinally) => trackChain(start().finally(onFinally)),
     [Symbol.toStringTag]: "Promise",
   };
 }
@@ -198,24 +234,7 @@ async function parallel(thunks) {
   if (thunks.some((thunk) => typeof thunk !== "function")) {
     throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => agent(...)");
   }
-  const results = await Promise.all(
-    thunks.map(async (thunk, index) => {
-      try {
-        return { status: "ok", value: await thunk() };
-      } catch (error) {
-        if (error instanceof WorkflowFatalError || aborted || fatalErrorMessage) {
-          return { status: "fatal", error };
-        }
-        log("parallel[" + index + "] failed: " + (error instanceof Error ? error.message : String(error)));
-        return { status: "ok", value: null };
-      }
-    }),
-  );
-  const fatal = results.find((result) => result.status === "fatal");
-  if (fatal) {
-    throw fatal.error;
-  }
-  return results.map((result) => result.value);
+  return await Promise.all(thunks.map((thunk) => thunk()));
 }
 
 async function pipeline(items, ...stages) {
@@ -226,30 +245,15 @@ async function pipeline(items, ...stages) {
   if (stages.some((stage) => typeof stage !== "function")) {
     throw new TypeError("pipeline() stages must be functions: pipeline(items, item => ..., result => ...)");
   }
-  const results = await Promise.all(
-    items.map(async (item, index) => {
-      let value = item;
-      for (const stage of stages) {
-        try {
-          throwIfFatal();
-          value = await stage(value, item, index);
-          throwIfFatal();
-        } catch (error) {
-          if (error instanceof WorkflowFatalError || aborted || fatalErrorMessage) {
-            return { status: "fatal", error };
-          }
-          log("pipeline[" + index + "] failed: " + (error instanceof Error ? error.message : String(error)));
-          return { status: "ok", value: null };
-        }
-      }
-      return { status: "ok", value };
-    }),
-  );
-  const fatal = results.find((result) => result.status === "fatal");
-  if (fatal) {
-    throw fatal.error;
-  }
-  return results.map((result) => result.value);
+  return await Promise.all(items.map(async (item, index) => {
+    let value = item;
+    for (const stage of stages) {
+      throwIfFatal();
+      value = await stage(value, item, index);
+      throwIfFatal();
+    }
+    return value;
+  }));
 }
 
 const safeMath = Object.freeze(Object.fromEntries(
@@ -369,6 +373,9 @@ function isObjectPrototype(value) {
       await Promise.allSettled(pending);
       throw new Error("every started agent() call must be awaited before the workflow returns");
     }
+    await Promise.allSettled(chainObservations.filter((observation) => !observation.handled).map((observation) => observation.promise));
+    const unhandled = chainObservations.find((observation) => !observation.handled && observation.rejected);
+    if (unhandled) throw unhandled.error;
     throwIfFatal();
     const normalizedResult = normalizeJsonSerializable(result, "workflow result");
     post({ type: "complete", result: normalizedResult });

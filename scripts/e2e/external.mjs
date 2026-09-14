@@ -28,6 +28,7 @@ function parseArgs(argv) {
     runRoot: path.join(tmpdir(), `pi-flow-external-e2e-${Date.now()}`),
     timeoutMs: 180_000,
     workflow: false,
+    interrupt: false,
     keep: false,
   };
   for (let index = 0; index < argv.length; index++) {
@@ -45,11 +46,13 @@ function parseArgs(argv) {
     else if (arg === "--run-root") options.runRoot = path.resolve(value());
     else if (arg === "--timeout-ms") options.timeoutMs = Number(value());
     else if (arg === "--workflow") options.workflow = true;
+    else if (arg === "--interrupt") options.interrupt = true;
     else if (arg === "--keep") options.keep = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
   if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, or agy");
+  if (options.workflow && options.interrupt) throw new Error("--workflow and --interrupt are separate checks");
   options.agentDir ??= path.join(options.runRoot, "agent");
   options.model ??= defaults[options.backend].model;
   options.thinking ??= defaults[options.backend].thinking;
@@ -57,7 +60,7 @@ function parseArgs(argv) {
 }
 
 function help() {
-  console.log(`Usage: npm run e2e -- [options]\n\n  --backend <claude|codex|agy>  external backend (default: codex)\n  --model <id>                  child model (backend default when omitted)\n  --thinking <level>            child thinking (default: high)\n  --root-model <provider/model> root Pi model (default: openai-codex/gpt-5.6-sol)\n  --root-thinking <level>       root thinking (default: high)\n  --workflow                    test workflow instead of direct Agent\n  --agent-dir <dir>             Pi agent directory (default: isolated under run root)\n  --run-root <dir>              temporary output directory\n  --timeout-ms <ms>             process timeout (default: 180000)\n  --keep                        preserve profile and output`);
+  console.log(`Usage: npm run e2e -- [options]\n\n  --backend <claude|codex|agy>  external backend (default: codex)\n  --model <id>                  child model (backend default when omitted)\n  --thinking <level>            child thinking (default: high)\n  --root-model <provider/model> root Pi model (default: openai-codex/gpt-5.6-sol)\n  --root-thinking <level>       root thinking (default: high)\n  --workflow                    test supervised background workflow\n  --interrupt                   cancel a background Agent and inspect its evidence\n  --agent-dir <dir>             Pi agent directory (default: isolated under run root)\n  --run-root <dir>              temporary output directory\n  --timeout-ms <ms>             process timeout (default: 180000)\n  --keep                        preserve profile and output`);
 }
 
 function walk(root) {
@@ -75,14 +78,23 @@ function walk(root) {
 
 function run(command, options) {
   return new Promise((resolve) => {
-    const child = spawn(command[0], command.slice(1), { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command[0], command.slice(1), { ...options, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    const terminateTree = (force) => {
+      if (process.platform === "win32") {
+        const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", ...(force ? ["/f"] : [])], { stdio: "ignore", windowsHide: true });
+        killer.once("error", () => {});
+        killer.unref();
+      } else {
+        try { process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM"); } catch {}
+      }
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 3000).unref();
+      terminateTree(false);
+      setTimeout(() => terminateTree(true), 10_000).unref();
     }, options.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -123,11 +135,15 @@ async function main() {
   writeFileSync(profilePath, `---\ndescription: Temporary ${options.backend} E2E profile.\nbackend: ${options.backend}\nmodel: ${options.model}\nthinking: ${options.thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`, { flag: "wx" });
   if (!options.keep) cleanupProfilePath = profilePath;
 
-  const childPrompt = `Read ${JSON.stringify(targetPath)} and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
-  const workflow = `export const meta = { name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} })\n]);\nreturn results;`;
+  const childPrompt = options.interrupt
+    ? `Read ${JSON.stringify(targetPath)}, report ${marker}, then keep inspecting the read-only fixture until cancelled. Do not edit files.`
+    : `Read ${JSON.stringify(targetPath)} and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
+  const workflow = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} })\n]);\nreturn results;`;
   const rootPrompt = options.workflow
-    ? `Call workflow exactly once with this exact script:\n\n${workflow}\n\nReport the returned token lines.`
-    : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;
+    ? `Call workflow exactly once with background:true and this exact script:\n\n${workflow}\n\nUse external_runs wait on the returned workflow run ID, then inspect its output and summary. Report the returned token lines and WORKFLOW_SUPERVISION_OK.`
+    : options.interrupt
+      ? `Call Agent exactly once with background:true, description "External interruption smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Cancel its returned run ID with external_runs using reason "E2E requested cancellation", wait for that run, then inspect its output and diagnostics. Report E2E_CANCELLED.`
+      : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;
   const promptPath = path.join(options.runRoot, "prompt.md");
   writeFileSync(promptPath, rootPrompt);
 
@@ -135,12 +151,13 @@ async function main() {
     "pi", "-p", "--mode", "json", "--model", options.rootModel, "--thinking", options.rootThinking,
     "--session-dir", sessionDir, "--no-extensions", "--extension", path.join(repoRoot, "index.ts"),
     "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
-    "--tools", options.workflow ? "workflow" : "Agent", "--approve", `@${promptPath}`,
+    "--tools", options.workflow ? "workflow,external_runs" : options.interrupt ? "Agent,external_runs" : "Agent", "--approve", `@${promptPath}`,
   ];
 
   let result;
   try {
-    console.log(`Running ${options.backend}${options.workflow ? " workflow" : " Agent"} E2E`);
+    const mode = options.workflow ? " workflow" : options.interrupt ? " interrupted Agent" : " Agent";
+    console.log(`Running ${options.backend}${mode} E2E`);
     result = await run(command, {
       cwd: fixture,
       env: { ...process.env, PI_CODING_AGENT_DIR: options.agentDir, PI_FLOW_EXTERNAL_RUNS_DIR: evidenceDir },
@@ -151,11 +168,16 @@ async function main() {
     const expectedRuns = options.workflow ? 2 : 1;
     assert(!result.timedOut, `Pi timed out after ${options.timeoutMs}ms`);
     assert(result.code === 0, `Pi exited with ${result.code}${result.signal ? ` (${result.signal})` : ""}\n${result.stderr}`);
-    assert(transcript.includes(marker), `Expected marker not found: ${marker}`);
+    if (options.interrupt) assert(transcript.includes("E2E_CANCELLED"), "Root did not report the requested cancellation");
+    else assert(transcript.includes(marker), `Expected marker not found: ${marker}`);
     assert(summaries.length === expectedRuns, `Expected ${expectedRuns} receipt(s), found ${summaries.length}`);
-    assert(summaries.every((file) => JSON.parse(readFileSync(file, "utf8")).summary?.status === "done"), "A receipt was not done");
+    const receipts = summaries.map((file) => JSON.parse(readFileSync(file, "utf8")).summary);
+    const expectedStatus = options.interrupt ? "aborted" : "done";
+    assert(receipts.every((summary) => summary?.status === expectedStatus), `A receipt was not ${expectedStatus}`);
+    if (options.interrupt) assert(receipts.every((summary) => summary?.outcome === "cancelled" && summary?.error === "E2E requested cancellation"), "Cancellation outcome or reason was not preserved");
+    if (options.workflow) assert(transcript.includes("WORKFLOW_SUPERVISION_OK") && transcript.includes("external_runs"), "Workflow supervision was not exercised");
     assert(spawnSync("git", ["status", "--short"], { cwd: fixture, encoding: "utf8" }).stdout.trim() === "", "Fixture was modified");
-    console.log(`PASS ${options.backend}${options.workflow ? " workflow" : " Agent"} E2E`);
+    console.log(`PASS ${options.backend}${mode} E2E`);
   } finally {
     if (!options.keep) {
       try { unlinkSync(profilePath); } catch {}

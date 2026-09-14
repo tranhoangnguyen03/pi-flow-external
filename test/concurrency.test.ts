@@ -110,8 +110,8 @@ describe("ConcurrencyLimiter", () => {
     const pending = limiter.acquire(controller.signal);
     expect(limiter.pendingCount).toBe(1);
 
-    controller.abort();
-    await expect(pending).rejects.toThrow(/Aborted/);
+    controller.abort(new Error("queue cancelled exactly"));
+    await expect(pending).rejects.toThrow("queue cancelled exactly");
     expect(limiter.pendingCount).toBe(0);
 
     // The aborted waiter never held a slot, so releasing the holder returns to 0.

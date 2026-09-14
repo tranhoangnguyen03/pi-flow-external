@@ -1,5 +1,5 @@
 import type { ParentContextReceipt } from "./core/parent-context.ts";
-import type { WorkflowMetaPhase } from "./workflow/types.ts";
+import type { ChildRunOutcome, WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
 export const EXTERNAL_HARNESSES = ["agy", "claude", "codex"] as const;
@@ -57,6 +57,11 @@ export type FlowExtensionOptions = SubagentExtensionOptions;
 
 export type SubagentRunStatus = "queued" | "running" | "done" | "error" | "aborted";
 
+export interface SubagentAssistantOutput {
+  status: "preliminary" | "final" | "interrupted";
+  messages: Array<{ id?: string; text: string }>;
+}
+
 export interface WorkflowAgentSnapshot {
   context?: ParentContextReceipt;
   index: number;
@@ -66,11 +71,16 @@ export interface WorkflowAgentSnapshot {
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt?: number;
+  queuedAt?: number;
+  processStartedAt?: number;
+  firstActivityAt?: number;
+  lastActivityAt?: number;
   endedAt?: number;
   activity?: string[];
   activityCount?: number;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
   timedOut?: boolean;
   usage?: SubagentUsage;
   /** Local field-observation run ID for this external child. */
@@ -98,6 +108,7 @@ export interface WorkflowAgentSnapshot {
 export interface WorkflowToolDetails {
   name: string;
   status: "running" | "completed" | "error" | "aborted";
+  outcome?: "succeeded" | ChildRunOutcome;
   agentCount: number;
   phases: string[];
   plannedPhases?: WorkflowMetaPhase[];
@@ -139,11 +150,16 @@ export interface SubagentProgressNode {
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt: number;
+  queuedAt?: number;
   endedAt?: number;
   activity: string[];
   activityCount: number;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
+  processStartedAt?: number;
+  firstActivityAt?: number;
+  lastActivityAt?: number;
   timedOut?: boolean;
   usage?: SubagentUsage;
   /** Local field-observation run ID for this external invocation. */
@@ -183,6 +199,7 @@ export interface SubagentToolDetails {
   status: SubagentRunStatus;
   result?: string;
   error?: string;
+  assistantOutput?: SubagentAssistantOutput;
   timedOut?: boolean;
   usage?: SubagentUsage;
   progress?: SubagentProgressNode;

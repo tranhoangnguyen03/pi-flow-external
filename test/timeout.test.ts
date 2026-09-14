@@ -30,6 +30,7 @@ describe("subagent timeout helpers", () => {
       backend: "pi",
       status: "done",
       result: "late success after timeout",
+      assistantOutput: { status: "final", messages: [{ text: "useful before timeout" }] },
       progress: {
         id: "late-child",
         description: "Late child",
@@ -41,6 +42,7 @@ describe("subagent timeout helpers", () => {
         activity: [],
         activityCount: 0,
         result: "late success after timeout",
+        assistantOutput: { status: "final", messages: [{ text: "useful before timeout" }] },
       },
     };
 
@@ -50,9 +52,11 @@ describe("subagent timeout helpers", () => {
     expect(timedOut.timedOut).toBe(true);
     expect(timedOut.error).toBe("Subagent timed out after 20ms");
     expect(timedOut.result).toBeUndefined();
+    expect(timedOut.assistantOutput).toEqual({ status: "interrupted", messages: [{ text: "useful before timeout" }] });
     expect(timedOut.progress?.status).toBe("aborted");
     expect(timedOut.progress?.timedOut).toBe(true);
     expect(timedOut.progress?.error).toBe("Subagent timed out after 20ms");
     expect(timedOut.progress?.result).toBeUndefined();
+    expect(timedOut.progress?.assistantOutput?.status).toBe("interrupted");
   });
 });

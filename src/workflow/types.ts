@@ -1,5 +1,47 @@
 import type { ParentContextMessages, ParentContextReceipt } from "../core/parent-context.ts";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
+import type { RunRecord } from "../core/run-record.ts";
+
+export type ChildRunOutcome = "failed" | "cancelled" | "timed_out";
+
+export interface ChildRunReference {
+  runId: string;
+  view: "output" | "diagnostics";
+}
+
+export interface SerializedChildRunError {
+  runId: string;
+  outcome: ChildRunOutcome;
+  message: string;
+  outputRef?: ChildRunReference;
+  diagnosticsRef?: ChildRunReference;
+}
+
+export class ChildRunError extends Error {
+  readonly runId: string;
+  readonly outcome: ChildRunOutcome;
+  readonly outputRef?: ChildRunReference;
+  readonly diagnosticsRef?: ChildRunReference;
+
+  constructor(error: SerializedChildRunError) {
+    super(error.message);
+    this.name = "ChildRunError";
+    this.runId = error.runId;
+    this.outcome = error.outcome;
+    this.outputRef = error.outputRef;
+    this.diagnosticsRef = error.diagnosticsRef;
+  }
+}
+
+export function childRunErrorData(error: ChildRunError): SerializedChildRunError {
+  return {
+    runId: error.runId,
+    outcome: error.outcome,
+    message: error.message,
+    ...(error.outputRef ? { outputRef: error.outputRef } : {}),
+    ...(error.diagnosticsRef ? { diagnosticsRef: error.diagnosticsRef } : {}),
+  };
+}
 
 export interface WorkflowMetaPhase {
   title: string;
@@ -8,16 +50,21 @@ export interface WorkflowMetaPhase {
 }
 
 export interface WorkflowMeta {
+  apiVersion: typeof WORKFLOW_API_VERSION;
   name: string;
   description: string;
   phases?: WorkflowMetaPhase[];
 }
+
+export const WORKFLOW_API_VERSION = 1 as const;
 
 /** A single agent() invocation requested by a workflow script. */
 export interface WorkflowAgentCall {
   /** Receipt for the frozen parent snapshot this child received, when sharing was requested. */
   context?: ParentContextReceipt;
   index?: number;
+  /** Normalized workspace used by this child and included in replay identity. */
+  cwd: string;
   prompt: string;
   label: string;
   phase?: string;
@@ -30,6 +77,8 @@ export interface WorkflowAgentCall {
   maxBudgetUsd?: number;
   /** Prior run id whose backend conversation this child continues. */
   resumeRunId?: string;
+  /** Evidence allocated before the call waits for a global concurrency slot. */
+  runRecord?: RunRecord;
 }
 
 export interface WorkflowCachedAgentResult {
@@ -37,6 +86,7 @@ export interface WorkflowCachedAgentResult {
   fingerprint: string;
   result: unknown;
   failed?: boolean;
+  runId?: string;
 }
 
 export interface WorkflowAgentResultEvent extends WorkflowCachedAgentResult {
@@ -47,13 +97,24 @@ export interface WorkflowAgentResultEvent extends WorkflowCachedAgentResult {
   prompt: string;
   schema?: unknown;
   cached: boolean;
+  error?: SerializedChildRunError;
+}
+
+export interface WorkflowAgentQueuedEvent {
+  index: number;
+  label: string;
+  phase?: string;
+  subagentType: string;
+  prompt: string;
+  context?: ParentContextReceipt;
+  runRecord?: RunRecord;
 }
 
 /**
  * Runs one subagent and resolves with its final text. The workflow tool
  * supplies the real implementation (profile resolution + spawnSubagent); tests
- * inject a fake. Throwing is treated as a per-agent failure (the branch becomes
- * null and is logged) unless the workflow signal aborted.
+ * inject a fake. Unsuccessful children throw ChildRunError unless the workflow
+ * itself is aborting.
  */
 export type WorkflowAgentRunner = (
   call: WorkflowAgentCall,
@@ -94,6 +155,8 @@ export interface RunWorkflowOptions {
   /** Shared global concurrency cap; agent() queues on this. */
   limiter: ConcurrencyLimiter;
   runAgent: WorkflowAgentRunner;
+  /** Own one queued child independently while still composing its signal with the workflow signal. */
+  startAgentRun?: (call: WorkflowAgentCall, run: (signal: AbortSignal) => Promise<unknown>) => Promise<unknown>;
   defaultSubagentType?: string | null;
   /** Resolve role/harness or legacy exact-profile selection before queueing and fingerprinting. */
   resolveSubagentType?: (selection: { role?: string; harness?: string; subagentType?: string }) => string;
@@ -101,9 +164,9 @@ export interface RunWorkflowOptions {
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
   resumeAgentResults?: WorkflowCachedAgentResult[];
-  onAgentQueued?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; context?: ParentContextReceipt }) => void;
-  onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean }) => void;
-  onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean }) => void;
+  onAgentQueued?: (event: WorkflowAgentQueuedEvent) => unknown;
+  onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean; runId?: string }) => void;
+  onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean; error?: SerializedChildRunError }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;
 }
 
