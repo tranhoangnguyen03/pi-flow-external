@@ -1,22 +1,22 @@
 import { createReadStream } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { open, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { extractClaudeFinalText } from "./claude.ts";
-import { extractCodexFinalText } from "./codex.ts";
+import { agyActivityFromEvent } from "./agy.ts";
+import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
+import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
 
 const CURSOR_VERSION = 1;
 const DEFAULT_PAGE_BYTES = 32 * 1024;
 const MAX_PAGE_BYTES = 64 * 1024;
-const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]+$/;
+const MAX_CURSOR_CHARS = 4096;
+const MAX_LIST_SCAN = 200;
+const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{1,128}$/;
 
 export type RunInspectionView = "output" | "diagnostics" | "summary";
 export type RunRecordIntegrity = "complete" | "incomplete" | "damaged";
 export type RunOutputStatus = "preliminary" | "final" | "interrupted";
 
-export interface RunInspectionItem {
-  id?: string;
-  text: string;
-}
+export interface RunInspectionItem { id?: string; text: string }
 
 export interface RunInspectionPage {
   runId: string;
@@ -41,55 +41,27 @@ export interface RunRecordListItem {
   integrity: RunRecordIntegrity;
 }
 
-interface InspectionCursor {
-  v: typeof CURSOR_VERSION;
-  kind: "inspect";
-  runId: string;
-  view: RunInspectionView;
-  position: number;
-  textOffset: number;
-  sawOutput: boolean;
-}
-
-interface ListCursor {
-  v: typeof CURSOR_VERSION;
-  kind: "list";
-  scope: string;
-  position: number;
-}
-
-interface SummaryDocument {
-  runId?: string;
+interface CursorBase { v: typeof CURSOR_VERSION; kind: "inspect"; runId: string; view: RunInspectionView }
+type InspectionCursor = CursorBase & (
+  | { source: "events"; position: number; textOffset: number }
+  | { source: "terminal"; itemIndex: number; textOffset: number }
+  | { source: "summary"; itemIndex: 0; textOffset: number }
+);
+interface ListCursor { v: typeof CURSOR_VERSION; kind: "list"; scope: string; after: string }
+interface SummaryDocument { runId?: string; queuedAt?: string; startedAt?: string; finishedAt?: string; metadata?: unknown; summary?: unknown }
+interface SummaryState { document?: SummaryDocument; integrity: RunRecordIntegrity }
+interface EvidenceEvent { runId?: string; sequence?: number; timestamp?: string; type?: string; data?: unknown }
+interface CompleteLine { start: number; end: number; text: string }
+interface ScanResult { missing: boolean; stopped: boolean; truncatedTail: boolean; malformed: boolean; endPosition: number }
+interface RunObservation {
+  metadata?: Record<string, unknown>;
   queuedAt?: string;
-  metadata?: unknown;
-  summary?: unknown;
-}
-
-interface SummaryState {
-  document?: SummaryDocument;
+  processStartedAt?: string;
+  firstActivityAt?: string;
+  lastActivityAt?: string;
+  outputAvailable: boolean;
   integrity: RunRecordIntegrity;
-}
-
-interface EvidenceEvent {
-  runId?: string;
-  sequence?: number;
-  timestamp?: string;
-  type?: string;
-  data?: unknown;
-}
-
-interface CompleteLine {
-  start: number;
-  end: number;
-  text: string;
-}
-
-interface ScanResult {
-  missing: boolean;
-  stopped: boolean;
   truncatedTail: boolean;
-  malformed: boolean;
-  endPosition: number;
 }
 
 export async function inspectRun({
@@ -112,98 +84,123 @@ export async function inspectRun({
   if (decoded?.runId !== undefined && decoded.runId !== runId) throw new Error("Cursor belongs to a different run");
   if (decoded?.view !== undefined && decoded.view !== view) throw new Error("Cursor belongs to a different view");
 
-  const state: InspectionCursor = decoded?.kind === "inspect"
-    ? decoded
-    : { v: CURSOR_VERSION, kind: "inspect", runId, view, position: 0, textOffset: 0, sawOutput: false };
   const directory = join(runsDirectory, runId);
+  const eventsPath = join(directory, "events.ndjson");
   const summary = await readSummary(join(directory, "summary.json"), runId);
-  const summaryRecord = asRecord(summary.document?.summary);
-  const outputStatus: RunOutputStatus = !summary.document
-    ? "preliminary"
-    : summaryRecord?.status === "done" ? "final" : "interrupted";
+  const terminal = asRecord(summary.document?.summary);
+  const terminalStatus = asString(terminal?.status);
 
   if (view === "summary") {
-    const text = summary.document ? JSON.stringify(summary.document) : "Run has no terminal summary yet.";
+    if (decoded?.kind === "inspect" && decoded.source !== "summary") throw new Error("Cursor source does not match summary view");
+    const observation = await readObservation(eventsPath, runId);
+    const text = JSON.stringify(summaryProjection(runId, summary, observation));
+    const offset = decoded?.kind === "inspect" ? decoded.textOffset : 0;
+    assertTextOffset(text, offset, "summary");
+    const portion = sliceUtf8(text, offset, limit);
     return {
       runId,
       view,
-      items: [{ text }],
-      outputStatus,
-      integrity: summary.integrity,
-      truncatedTail: false,
+      items: portion.text ? [{ text: portion.text }] : [],
+      outputStatus: outputStatus(terminalStatus),
+      integrity: mergedIntegrity(summary, observation),
+      truncatedTail: observation.truncatedTail,
+      ...(portion.nextOffset < text.length
+        ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "summary", itemIndex: 0, textOffset: portion.nextOffset }) }
+        : {}),
     };
   }
+
+  if (decoded?.kind === "inspect" && decoded.source === "summary") throw new Error("Cursor source does not match inspection view");
+  const canonical = canonicalResult(terminal);
+  const fallback = assistantItems(terminal);
+  if (decoded?.kind === "inspect" && decoded.source === "terminal") {
+    if (view !== "output") throw new Error("Cursor source does not match diagnostics view");
+    const observation = await readObservation(eventsPath, runId);
+    return terminalPage(
+      runId,
+      view,
+      canonical ? [{ text: canonical }] : fallback,
+      decoded,
+      limit,
+      mergedIntegrity(summary, observation),
+      observation.truncatedTail,
+      terminalStatus,
+    );
+  }
+
+  const state = decoded?.kind === "inspect" && decoded.source === "events"
+    ? decoded
+    : eventCursor(runId, view, 0, 0);
+  await validateEventCursor(eventsPath, runId, view, state);
 
   const items: RunInspectionItem[] = [];
   let usedBytes = 0;
   let nextCursor: InspectionCursor | undefined;
-  let sawOutput = state.sawOutput;
   let activeAgyId: string | undefined;
-  const scan = await scanCompleteLines(join(directory, "events.ndjson"), state.position, (line) => {
+  let outputBeforeCursor = false;
+  let canonicalBeforeCursor = false;
+  let canonicalCompletedOnPage = false;
+  let outputOnPage = false;
+  const scanStart = summary.document && state.position > 0 ? 0 : state.position;
+  const scan = await scanCompleteLines(eventsPath, scanStart, (line) => {
     const event = parseEvent(line.text, runId);
     if (!event) return "malformed";
     const projected = view === "output" ? outputFromEvent(event) : diagnosticFromEvent(event);
     if (!projected) return "continue";
-
+    if (line.start < state.position) {
+      if (view === "output") {
+        outputBeforeCursor = true;
+        canonicalBeforeCursor ||= canonical !== undefined && projected.text === canonical;
+      }
+      return "continue";
+    }
     const startingOffset = line.start === state.position ? state.textOffset : 0;
     const remaining = limit - usedBytes;
     if (remaining <= 0) {
-      nextCursor = { ...state, position: line.start, textOffset: startingOffset, sawOutput };
+      nextCursor = eventCursor(runId, view, line.start, startingOffset);
       return "stop";
     }
     const chunk = sliceUtf8(projected.text, startingOffset, remaining);
     if (!chunk.text && startingOffset < projected.text.length) {
-      nextCursor = { ...state, position: line.start, textOffset: startingOffset, sawOutput };
+      nextCursor = eventCursor(runId, view, line.start, startingOffset);
       return "stop";
     }
     if (chunk.text) {
-      if (view === "output" && projected.kind === "agy" && activeAgyId === projected.id && items.length > 0) {
-        items[items.length - 1]!.text += chunk.text;
-      } else {
-        items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
-      }
+      if (view === "output" && projected.kind === "agy" && activeAgyId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
+      else items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
       activeAgyId = projected.kind === "agy" ? projected.id : undefined;
       usedBytes += Buffer.byteLength(chunk.text);
-      if (view === "output") sawOutput = true;
+      outputOnPage ||= view === "output";
     }
     if (chunk.nextOffset < projected.text.length) {
-      nextCursor = { ...state, position: line.start, textOffset: chunk.nextOffset, sawOutput };
+      nextCursor = eventCursor(runId, view, line.start, chunk.nextOffset);
       return "stop";
     }
-    state.textOffset = 0;
-    state.position = line.end;
-    state.sawOutput = sawOutput;
+    canonicalCompletedOnPage ||= view === "output" && canonical !== undefined && projected.text === canonical;
     return "continue";
   });
 
-  let truncatedTail = scan.truncatedTail;
-  let malformed = scan.malformed || scan.missing;
-  if (!nextCursor && !scan.stopped && view === "output" && !sawOutput) {
-    const fallback = summaryResult(summaryRecord);
-    if (fallback) {
-      const fallbackOffset = state.position === scan.endPosition ? state.textOffset : 0;
-      const chunk = sliceUtf8(fallback, fallbackOffset, limit - usedBytes);
-      if (chunk.text) items.push({ text: chunk.text });
-      sawOutput = true;
-      if (chunk.nextOffset < fallback.length) {
-        nextCursor = { ...state, position: scan.endPosition, textOffset: chunk.nextOffset, sawOutput: false };
-      }
-    }
+  if (!nextCursor && !scan.stopped && view === "output" && summary.document) {
+    const terminalItems = canonical && !canonicalBeforeCursor && !canonicalCompletedOnPage
+      ? [{ text: canonical }]
+      : !canonical && !outputBeforeCursor && !outputOnPage ? fallback : [];
+    const served = serveItems(terminalItems, 0, 0, limit - usedBytes);
+    items.push(...served.items);
+    if (served.next) nextCursor = { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next };
   }
-  if (!nextCursor && !summary.document && !scan.missing) {
-    nextCursor = { ...state, position: scan.endPosition, textOffset: 0, sawOutput };
-  }
+  if (!nextCursor && !summary.document && !scan.missing) nextCursor = eventCursor(runId, view, scan.endPosition, 0);
 
-  const integrity: RunRecordIntegrity = malformed || (summary.document && truncatedTail)
-    ? "damaged"
-    : summary.integrity;
+  const integrity: RunRecordIntegrity = scan.malformed || scan.missing || (summary.document && scan.truncatedTail) ? "damaged" : summary.integrity;
+  const status = view === "output" && terminalStatus === "done" && nextCursor?.source === "events" && !canonicalBeforeCursor && !canonicalCompletedOnPage
+    ? "preliminary"
+    : outputStatus(terminalStatus);
   return {
     runId,
     view,
     items,
-    outputStatus,
+    outputStatus: status,
     integrity,
-    truncatedTail,
+    truncatedTail: scan.truncatedTail,
     ...(nextCursor ? { nextCursor: encodeCursor(nextCursor) } : {}),
   };
 }
@@ -224,67 +221,124 @@ export async function listRunRecords({
   cursor?: string;
 }): Promise<{ items: RunRecordListItem[]; nextCursor?: string }> {
   const scope = JSON.stringify({ sessionId, project, workflowRunId });
+  if (scope.length > 1024) throw new Error("Run list scope is too long");
   const decoded = cursor ? decodeCursor(cursor) : undefined;
   if (decoded && decoded.kind !== "list") throw new Error("Invalid list cursor");
   if (decoded?.kind === "list" && decoded.scope !== scope) throw new Error("Cursor belongs to a different list scope");
-  const position = decoded?.kind === "list" ? decoded.position : 0;
+  const after = decoded?.kind === "list" ? decoded.after : undefined;
+  if (!Number.isFinite(limit)) throw new Error("Run list limit must be finite");
   const pageSize = Math.max(1, Math.min(100, Math.floor(limit)));
   let entries: string[];
   try {
-    entries = await readdir(runsDirectory);
+    entries = (await readdir(runsDirectory)).filter((name) => RUN_ID_PATTERN.test(name)).sort().reverse();
   } catch (error) {
     if (isNotFound(error)) return { items: [] };
     throw error;
   }
 
-  const records = (await Promise.all(entries.filter((name) => RUN_ID_PATTERN.test(name)).map((runId) => readListItem(runsDirectory, runId))))
-    .filter((item): item is RunRecordListItem => Boolean(item))
-    .filter((item) => sessionId === undefined || item.parentSessionId === sessionId)
-    .filter((item) => project === undefined || item.project === project)
-    .filter((item) => workflowRunId === undefined || item.workflowRunId === workflowRunId)
-    .sort((a, b) => (b.queuedAt ?? "").localeCompare(a.queuedAt ?? "") || b.runId.localeCompare(a.runId));
-  const items = records.slice(position, position + pageSize);
-  const nextPosition = position + items.length;
+  const candidates = after ? entries.filter((name) => name < after) : entries;
+  const items: RunRecordListItem[] = [];
+  let scanned = 0;
+  let lastScanned: string | undefined;
+  for (const candidate of candidates) {
+    if (scanned >= MAX_LIST_SCAN || items.length >= pageSize) break;
+    scanned++;
+    lastScanned = candidate;
+    const item = await readListItem(runsDirectory, candidate);
+    if (!item) continue;
+    if (sessionId !== undefined && item.parentSessionId !== sessionId) continue;
+    if (project !== undefined && item.project !== project) continue;
+    if (workflowRunId !== undefined && item.workflowRunId !== workflowRunId) continue;
+    items.push(item);
+  }
+  const hasMore = lastScanned !== undefined && candidates.some((name) => name < lastScanned!);
   return {
     items,
-    ...(nextPosition < records.length
-      ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "list", scope, position: nextPosition }) }
-      : {}),
+    ...(hasMore ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "list", scope, after: lastScanned! }) } : {}),
   };
 }
 
 async function readListItem(runsDirectory: string, runId: string): Promise<RunRecordListItem | undefined> {
   const directory = join(runsDirectory, runId);
   const summary = await readSummary(join(directory, "summary.json"), runId);
-  const document = summary.document;
-  let metadata = asRecord(document?.metadata);
-  if (!document) {
-    let started: EvidenceEvent | undefined;
-    await scanCompleteLines(join(directory, "events.ndjson"), 0, (line) => {
-      const event = parseEvent(line.text, runId);
-      if (event?.type === "run_started") {
-        started = event;
-        return "stop";
-      }
-      return event ? "continue" : "malformed";
-    });
-    metadata = asRecord(started?.data);
-    if (!metadata && summary.integrity === "damaged") return undefined;
-  }
-  const terminal = asRecord(document?.summary);
+  const observation = summary.document ? undefined : await readObservation(join(directory, "events.ndjson"), runId);
+  const metadata = asRecord(summary.document?.metadata) ?? observation?.metadata;
+  if (!metadata && summary.integrity === "damaged") return undefined;
+  const terminal = asRecord(summary.document?.summary);
+  const processStarted = Boolean(timeValue(terminal?.processStartedAt) ?? observation?.processStartedAt ?? observation?.outputAvailable);
+  const status = asString(terminal?.status) ?? (processStarted ? "running" : "queued");
+  const queuedAt = asString(summary.document?.queuedAt) ?? observation?.queuedAt;
   return {
     runId,
-    ...(typeof document?.queuedAt === "string"
-      ? { queuedAt: document.queuedAt }
-      : typeof metadata?.queuedAt === "string" ? { queuedAt: metadata.queuedAt } : {}),
-    ...(typeof terminal?.status === "string" ? { status: terminal.status } : {}),
-    ...(typeof metadata?.description === "string" ? { description: metadata.description } : {}),
-    ...(typeof metadata?.backend === "string" ? { backend: metadata.backend } : {}),
-    ...(typeof metadata?.project === "string" ? { project: metadata.project } : {}),
-    ...(typeof metadata?.parentSessionId === "string" ? { parentSessionId: metadata.parentSessionId } : {}),
-    ...(typeof metadata?.workflowRunId === "string" ? { workflowRunId: metadata.workflowRunId } : {}),
-    outputAvailable: Boolean(summaryResult(terminal) || asRecord(terminal?.assistantOutput)),
-    integrity: summary.integrity,
+    ...(queuedAt ? { queuedAt } : {}),
+    status,
+    ...(asString(metadata?.description) ? { description: asString(metadata?.description) } : {}),
+    ...(asString(metadata?.backend) ? { backend: asString(metadata?.backend) } : {}),
+    ...(asString(metadata?.project) ? { project: asString(metadata?.project) } : {}),
+    ...(asString(metadata?.parentSessionId) ? { parentSessionId: asString(metadata?.parentSessionId) } : {}),
+    ...(asString(metadata?.workflowRunId) ? { workflowRunId: asString(metadata?.workflowRunId) } : {}),
+    outputAvailable: Boolean(canonicalResult(terminal) || assistantItems(terminal).length || observation?.outputAvailable),
+    integrity: observation ? observation.integrity : summary.integrity,
+  };
+}
+
+async function readObservation(eventsPath: string, runId: string): Promise<RunObservation> {
+  const observation: RunObservation = { outputAvailable: false, integrity: "incomplete", truncatedTail: false };
+  const scan = await scanCompleteLines(eventsPath, 0, (line) => {
+    const event = parseEvent(line.text, runId);
+    if (!event) return "malformed";
+    if (event.type === "run_started") {
+      observation.metadata = asRecord(event.data);
+      observation.queuedAt = asString(observation.metadata?.queuedAt) ?? event.timestamp;
+    } else if (event.type === "process_started") {
+      observation.processStartedAt ??= event.timestamp;
+    } else if (event.type === "backend_event") {
+      const output = outputFromEvent(event);
+      observation.outputAvailable ||= Boolean(output);
+      if (output || activityFromEvent(event)) {
+        observation.firstActivityAt ??= event.timestamp;
+        observation.lastActivityAt = event.timestamp;
+      }
+    }
+    return "continue";
+  });
+  observation.truncatedTail = scan.truncatedTail;
+  observation.integrity = scan.missing || scan.malformed ? "damaged" : "incomplete";
+  return observation;
+}
+
+function summaryProjection(runId: string, summary: SummaryState, observation: RunObservation): Record<string, unknown> {
+  const document = summary.document;
+  const metadata = asRecord(document?.metadata) ?? observation.metadata;
+  const terminal = asRecord(document?.summary);
+  const processStartedAt = timeValue(terminal?.processStartedAt) ?? observation.processStartedAt;
+  const firstActivityAt = timeValue(terminal?.firstActivityAt) ?? observation.firstActivityAt;
+  const lastActivityAt = timeValue(terminal?.lastActivityAt) ?? observation.lastActivityAt;
+  const status = asString(terminal?.status) ?? (processStartedAt || observation.outputAvailable ? "running" : "queued");
+  return {
+    runId,
+    task: compactObject({
+      description: boundedString(metadata?.description),
+      backend: metadata?.backend,
+      profile: typeof metadata?.profile === "string" ? metadata.profile : asRecord(metadata?.profile)?.name,
+      project: boundedString(metadata?.project),
+      parentSessionId: metadata?.parentSessionId,
+      workflowRunId: metadata?.workflowRunId,
+    }),
+    state: compactObject({
+      status,
+      queuedAt: asString(document?.queuedAt) ?? observation.queuedAt,
+      processStartedAt,
+      firstActivityAt,
+      lastActivityAt,
+      finishedAt: document?.finishedAt,
+      error: boundedString(terminal?.error),
+      integrity: mergedIntegrity(summary, observation),
+    }),
+    output: {
+      available: Boolean(canonicalResult(terminal) || assistantItems(terminal).length || observation.outputAvailable),
+      status: outputStatus(asString(terminal?.status)),
+    },
   };
 }
 
@@ -305,27 +359,30 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
   }
   if (envelope?.backend === "agy" && backendEvent.event === "step_update") {
     const update = asRecord(backendEvent.step_update);
-    const text = (update?.step_type === "agent_response" || update?.step_type === "assistant")
-      ? asString(update.text_delta)
-      : undefined;
+    const text = (update?.step_type === "agent_response" || update?.step_type === "assistant") ? asString(update.text_delta) : undefined;
     const id = asString(update?.step_id);
     return text ? { kind: "agy", ...(id ? { id } : {}), text } : undefined;
   }
   return undefined;
 }
 
+function activityFromEvent(event: EvidenceEvent): string | undefined {
+  const envelope = asRecord(event.data);
+  const backendEvent = asRecord(envelope?.event);
+  if (!backendEvent) return undefined;
+  if (envelope?.backend === "claude") return claudeActivityFromEvent(backendEvent);
+  if (envelope?.backend === "codex") return codexActivityFromEvent(backendEvent);
+  if (envelope?.backend === "agy") return agyActivityFromEvent(backendEvent);
+  return undefined;
+}
+
 function diagnosticFromEvent(event: EvidenceEvent): { kind: "codex"; id?: string; text: string } {
-  return {
-    kind: "codex",
-    ...(event.sequence !== undefined ? { id: String(event.sequence) } : {}),
-    text: JSON.stringify({ timestamp: event.timestamp, type: event.type, data: event.data }),
-  };
+  return { kind: "codex", ...(event.sequence !== undefined ? { id: String(event.sequence) } : {}), text: JSON.stringify({ timestamp: event.timestamp, type: event.type, data: event.data }) };
 }
 
 async function readSummary(path: string, runId: string): Promise<SummaryState> {
   try {
-    const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
-    const document = asRecord(parsed);
+    const document = asRecord(JSON.parse(await readFile(path, "utf8")));
     if (!document || document.runId !== runId || !asRecord(document.summary)) return { integrity: "damaged" };
     return { document: document as SummaryDocument, integrity: "complete" };
   } catch (error) {
@@ -333,11 +390,7 @@ async function readSummary(path: string, runId: string): Promise<SummaryState> {
   }
 }
 
-async function scanCompleteLines(
-  path: string,
-  start: number,
-  visit: (line: CompleteLine) => "continue" | "stop" | "malformed",
-): Promise<ScanResult> {
+async function scanCompleteLines(path: string, start: number, visit: (line: CompleteLine) => "continue" | "stop" | "malformed"): Promise<ScanResult> {
   let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let pendingStart = start;
   let malformed = false;
@@ -359,6 +412,64 @@ async function scanCompleteLines(
     if (isNotFound(error)) return { missing: true, stopped: false, truncatedTail: false, malformed: false, endPosition: start };
     throw error;
   }
+}
+
+async function validateEventCursor(path: string, runId: string, view: RunInspectionView, cursor: Extract<InspectionCursor, { source: "events" }>): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const size = (await handle.stat()).size;
+    if (cursor.position > size) throw new Error("Cursor points past available evidence");
+    if (cursor.position > 0) {
+      const prior = Buffer.alloc(1);
+      await handle.read(prior, 0, 1, cursor.position - 1);
+      if (prior[0] !== 0x0a) throw new Error("Cursor is not at a record boundary");
+    }
+    if (cursor.textOffset > 0) {
+      let projected: RunInspectionItem | undefined;
+      await scanCompleteLines(path, cursor.position, (line) => {
+        const event = parseEvent(line.text, runId);
+        projected = event ? (view === "output" ? outputFromEvent(event) : diagnosticFromEvent(event)) : undefined;
+        return "stop";
+      });
+      if (!projected) throw new Error("Cursor text offset has no matching record");
+      assertTextOffset(projected.text, cursor.textOffset, "cursor");
+    }
+  } catch (error) {
+    if (isNotFound(error) && cursor.position === 0 && cursor.textOffset === 0) return;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function terminalPage(runId: string, view: "output", items: RunInspectionItem[], cursor: Extract<InspectionCursor, { source: "terminal" }>, limit: number, integrity: RunRecordIntegrity, truncatedTail: boolean, terminalStatus: string | undefined): RunInspectionPage {
+  validateItemCursor(items, cursor.itemIndex, cursor.textOffset);
+  const served = serveItems(items, cursor.itemIndex, cursor.textOffset, limit);
+  return {
+    runId,
+    view,
+    items: served.items,
+    outputStatus: outputStatus(terminalStatus),
+    integrity,
+    truncatedTail,
+    ...(served.next ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next }) } : {}),
+  };
+}
+
+function serveItems(items: RunInspectionItem[], itemIndex: number, textOffset: number, budget: number): { items: RunInspectionItem[]; next?: { itemIndex: number; textOffset: number } } {
+  const served: RunInspectionItem[] = [];
+  let remaining = budget;
+  for (let index = itemIndex; index < items.length; index++) {
+    const item = items[index]!;
+    const offset = index === itemIndex ? textOffset : 0;
+    if (remaining <= 0) return { items: served, next: { itemIndex: index, textOffset: offset } };
+    const chunk = sliceUtf8(item.text, offset, remaining);
+    if (chunk.text) served.push({ ...(item.id ? { id: item.id } : {}), text: chunk.text });
+    remaining -= Buffer.byteLength(chunk.text);
+    if (chunk.nextOffset < item.text.length) return { items: served, next: { itemIndex: index, textOffset: chunk.nextOffset } };
+  }
+  return { items: served };
 }
 
 function parseEvent(line: string, runId: string): EvidenceEvent | undefined {
@@ -383,21 +494,60 @@ function sliceUtf8(text: string, offset: number, budget: number): { text: string
   return { text: text.slice(offset, end), nextOffset: end };
 }
 
-function summaryResult(summary: Record<string, unknown> | undefined): string | undefined {
-  if (typeof summary?.result === "string" && summary.result) return summary.result;
+function assistantItems(summary: Record<string, unknown> | undefined): RunInspectionItem[] {
   const output = asRecord(summary?.assistantOutput);
   const messages = Array.isArray(output?.messages) ? output.messages : [];
-  const texts = messages.map((message) => asString(asRecord(message)?.text)).filter((text): text is string => Boolean(text));
-  return texts.length ? texts.join("\n") : undefined;
+  return messages.flatMap((message) => {
+    const record = asRecord(message);
+    const text = asString(record?.text);
+    const id = asString(record?.id);
+    return text ? [{ ...(id ? { id } : {}), text }] : [];
+  });
+}
+
+function canonicalResult(summary: Record<string, unknown> | undefined): string | undefined {
+  return summary?.status === "done" ? textValue(summary.structuredOutput ?? summary.result) : undefined;
+}
+
+function textValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value || undefined;
+  if (value === undefined || value === null) return undefined;
+  return JSON.stringify(value);
+}
+
+function outputStatus(status: string | undefined): RunOutputStatus {
+  return status === undefined ? "preliminary" : status === "done" ? "final" : "interrupted";
+}
+
+function mergedIntegrity(summary: SummaryState, observation: RunObservation): RunRecordIntegrity {
+  return observation.integrity === "damaged" || (summary.document && observation.truncatedTail) ? "damaged" : summary.integrity;
+}
+
+function timeValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  return typeof value === "number" && Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+}
+
+function boundedString(value: unknown): string | undefined {
+  const text = asString(value);
+  return text && text.length > 512 ? `${text.slice(0, 512)}…` : text;
+}
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function normalizeByteLimit(value: number): number {
   if (!Number.isFinite(value)) throw new Error("limitBytes must be finite");
-  return Math.max(1, Math.min(MAX_PAGE_BYTES, Math.floor(value)));
+  return Math.max(4, Math.min(MAX_PAGE_BYTES, Math.floor(value)));
 }
 
 function assertRunId(runId: string): void {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("Invalid run ID");
+}
+
+function eventCursor(runId: string, view: RunInspectionView, position: number, textOffset: number): Extract<InspectionCursor, { source: "events" }> {
+  return { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "events", position, textOffset };
 }
 
 function encodeCursor(cursor: InspectionCursor | ListCursor): string {
@@ -405,18 +555,42 @@ function encodeCursor(cursor: InspectionCursor | ListCursor): string {
 }
 
 function decodeCursor(value: string): InspectionCursor | ListCursor {
+  if (!value || value.length > MAX_CURSOR_CHARS) throw new Error("Invalid cursor");
   try {
     const parsed = asRecord(JSON.parse(Buffer.from(value, "base64url").toString("utf8")));
     if (!parsed || parsed.v !== CURSOR_VERSION || (parsed.kind !== "inspect" && parsed.kind !== "list")) throw new Error();
-    if (parsed.kind === "inspect") {
-      if (!RUN_ID_PATTERN.test(asString(parsed.runId) ?? "") || !isView(parsed.view) || !isNonNegativeInteger(parsed.position) || !isNonNegativeInteger(parsed.textOffset) || typeof parsed.sawOutput !== "boolean") throw new Error();
-      return parsed as unknown as InspectionCursor;
+    if (parsed.kind === "list") {
+      if (!hasKeys(parsed, ["v", "kind", "scope", "after"]) || typeof parsed.scope !== "string" || !RUN_ID_PATTERN.test(asString(parsed.after) ?? "")) throw new Error();
+      return parsed as unknown as ListCursor;
     }
-    if (typeof parsed.scope !== "string" || !isNonNegativeInteger(parsed.position)) throw new Error();
-    return parsed as unknown as ListCursor;
+    if (!RUN_ID_PATTERN.test(asString(parsed.runId) ?? "") || !isView(parsed.view) || (parsed.source !== "events" && parsed.source !== "terminal" && parsed.source !== "summary")) throw new Error();
+    if (parsed.source === "events") {
+      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "position", "textOffset"]) || !isNonNegativeInteger(parsed.position) || !isNonNegativeInteger(parsed.textOffset)) throw new Error();
+    } else {
+      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "itemIndex", "textOffset"]) || !isNonNegativeInteger(parsed.itemIndex) || !isNonNegativeInteger(parsed.textOffset)) throw new Error();
+      if (parsed.source === "summary" && parsed.itemIndex !== 0) throw new Error();
+    }
+    return parsed as unknown as InspectionCursor;
   } catch {
     throw new Error("Invalid cursor");
   }
+}
+
+function validateItemCursor(items: RunInspectionItem[], itemIndex: number, textOffset: number): void {
+  const item = items[itemIndex];
+  if (!item) throw new Error("Cursor item is outside available terminal output");
+  assertTextOffset(item.text, textOffset, "cursor");
+}
+
+function assertTextOffset(text: string, offset: number, label: string): void {
+  const splitsSurrogate = offset > 0 && offset < text.length && /[\uD800-\uDBFF]/.test(text[offset - 1]!) && /[\uDC00-\uDFFF]/.test(text[offset]!);
+  if (!isNonNegativeInteger(offset) || (offset >= text.length && offset !== 0) || splitsSurrogate) throw new Error(`${label === "cursor" ? "Cursor" : label} text offset is outside available content`);
+}
+
+function hasKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const expected = [...keys].sort();
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 function isView(value: unknown): value is RunInspectionView {
