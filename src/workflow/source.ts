@@ -1,5 +1,6 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { resolve } from "node:path";
 import type { WorkflowToolDetails } from "../types.ts";
 import {
   createWorkflowJournalWriter,
@@ -184,6 +185,7 @@ export async function prepareWorkflowToolSource(
   params: WorkflowToolParams,
   ctx: ExtensionContext,
 ): Promise<PrepareWorkflowToolSourceResult> {
+  const project = resolve(ctx.cwd);
   const source = resolveWorkflowSource(params, ctx);
   if (!source.ok) {
     return sourceError(`${source.message}${formatWarnings(source.warnings)}`, {
@@ -291,6 +293,19 @@ export async function prepareWorkflowToolSource(
         resumeFromRunId,
       });
     }
+    if (journal.project !== project) {
+      const message = `Cannot resume workflow: ${resumeFromRunId} belongs to a different project. No children were launched.`;
+      return sourceError(message, {
+        name: metaName,
+        error: message,
+        logs: source.warnings,
+        source: source.source,
+        sourcePath: source.sourcePath,
+        scriptPath,
+        runId: identity.runId,
+        resumeFromRunId,
+      });
+    }
     resumeAgentResults = journal.agentResults;
   }
 
@@ -302,7 +317,7 @@ export async function prepareWorkflowToolSource(
         identity,
         name: metaName,
         source: source.source,
-        project: ctx.cwd,
+        project,
         scriptPath,
         resumeFromRunId,
       });

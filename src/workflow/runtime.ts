@@ -1,4 +1,5 @@
 import { prepareParentContext } from "../core/parent-context.ts";
+import { resolve } from "node:path";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
@@ -101,6 +102,7 @@ export async function runWorkflow<T = unknown>(
   options: RunWorkflowOptions,
 ): Promise<WorkflowRunResult<T>> {
   const { meta, body } = parseWorkflowScript(script);
+  const cwd = resolve(options.cwd);
   const limits = normalizeWorkflowLimits(options.limits);
   const state: RuntimeState = {
     logs: [],
@@ -128,7 +130,7 @@ export async function runWorkflow<T = unknown>(
   const abortRuntime = (error: Error) => {
     rememberFatal(error);
     if (!runtimeAbortController.signal.aborted) {
-      runtimeAbortController.abort();
+      runtimeAbortController.abort(error);
     }
   };
 
@@ -202,6 +204,7 @@ export async function runWorkflow<T = unknown>(
     const label = opts.label || defaultAgentLabel(assignedPhase, index);
     const call: WorkflowAgentCall = {
       index,
+      cwd,
       prompt: taskPrompt,
       ...(briefing.context ? { context: briefing.context } : {}),
       label,
@@ -224,7 +227,7 @@ export async function runWorkflow<T = unknown>(
 
     // Queue on the shared global cap. May reject if aborted while waiting.
     const queuedEvent: WorkflowAgentQueuedEvent = { index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context };
-    options.onAgentQueued?.(queuedEvent);
+    await options.onAgentQueued?.(queuedEvent);
     const runRecord = queuedEvent.runRecord;
     if (runRecord) call.runRecord = runRecord;
     const executeAgent = async (childSignal?: AbortSignal) => {
@@ -247,6 +250,16 @@ export async function runWorkflow<T = unknown>(
           error: serialized,
         });
       };
+      const cancelledError = (message: string) => {
+        const runId = runRecord?.runId ?? `workflow-child-${index}`;
+        return new ChildRunError({
+          runId,
+          outcome: "cancelled",
+          message,
+          outputRef: { runId, view: "output" },
+          diagnosticsRef: { runId, view: "diagnostics" },
+        });
+      };
 
       let release: (() => void) | undefined;
       try {
@@ -259,11 +272,12 @@ export async function runWorkflow<T = unknown>(
           queued: true,
           backendStarted: false,
         });
-        if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) throw error;
-        const childError = childSignal?.aborted
-          ? new ChildRunError({ runId: runRecord?.runId ?? `workflow-child-${index}`, outcome: "cancelled", message })
+        const fatal = options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error);
+        const childError = fatal || childSignal?.aborted
+          ? cancelledError(fatal ? abortReason : message)
           : asChildRunError(error, runRecord?.runId ?? `workflow-child-${index}`);
         await recordFailure(childError);
+        if (fatal) throw error;
         throw childError;
       }
 
@@ -275,11 +289,13 @@ export async function runWorkflow<T = unknown>(
         throwIfAborted();
         result = normalizeJsonSerializable(result, "agent result");
       } catch (error) {
-        if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) throw error;
-        const childError = childSignal?.aborted && !(error instanceof ChildRunError)
-          ? new ChildRunError({ runId: runRecord?.runId ?? `workflow-child-${index}`, outcome: "cancelled", message: error instanceof Error ? error.message : String(error) })
+        const fatal = options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error);
+        const message = error instanceof Error ? error.message : String(error);
+        const childError = (fatal || childSignal?.aborted) && !(error instanceof ChildRunError)
+          ? cancelledError(fatal ? abortReason : message)
           : asChildRunError(error, runRecord?.runId ?? `workflow-child-${index}`);
         await recordFailure(childError);
+        if (fatal) throw error;
         throw childError;
       } finally {
         release();
@@ -298,7 +314,7 @@ export async function runWorkflow<T = unknown>(
     body,
     metaName: meta.name || "workflow",
     args: options.args,
-    cwd: options.cwd,
+    cwd,
     limits,
   });
 

@@ -1,6 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import { getRunRecord, inspectRun, listRunRecords, type RunInspectionView, type RunRecordListItem } from "./core/run-inspection.ts";
 import { RunRegistry, type RegisteredRunEntry, type RegisteredRunOutcome } from "./core/run-registry.ts";
 import { EXTERNAL_RUNS_PROMPT_SNIPPET } from "./prompts.ts";
@@ -40,7 +42,7 @@ function result(text: string, details: ExternalRunsDetails) {
 function scope(ctx: ExtensionContext): { sessionId: string; project: string } {
   const sessionId = ctx.sessionManager?.getSessionId?.();
   if (!sessionId) throw new Error("external_runs requires a persisted originating session");
-  return { sessionId, project: ctx.cwd };
+  return { sessionId, project: resolve(ctx.cwd) };
 }
 
 function assertRunId(runId: unknown): asserts runId is string {
@@ -148,28 +150,39 @@ function liveSummary(entry: RegisteredRunEntry, allChildren = false): { runId: s
 }
 
 function journalSummary(journal: LoadedWorkflowJournal, allChildren = false) {
+  const status = journal.status === "running" ? "interrupted_or_uncertain" : journal.status;
   return {
     runId: journal.runId,
     kind: "workflow",
     task: { name: clip(journal.name), source: journal.source },
-    state: { status: journal.status, outcome: journal.outcome, error: journal.error, agentCount: journal.children.length },
-    output: { available: journal.result !== undefined, status: journal.status === "running" ? "preliminary" : journal.status === "done" ? "final" : "interrupted" },
-    children: (allChildren ? journal.children : journal.children.slice(0, 50)).map((child) => ({ runId: child.runId, label: clip(child.label), status: child.failed ? "error" : "done" })),
+    state: { status, outcome: journal.outcome, error: journal.error, agentCount: journal.children.length },
+    output: { available: journal.result !== undefined, status: journal.status === "done" ? "final" : "interrupted" },
+    children: (allChildren ? journal.children : journal.children.slice(0, 50)).map((child) => ({
+      runId: child.runId,
+      label: clip(child.label),
+      status: journal.status === "running" && child.status === "queued" ? "interrupted_or_uncertain" : child.status,
+    })),
   };
 }
 
-function encodeProjectionCursor(runId: string, view: RunInspectionView, offset: number): string {
-  return Buffer.from(JSON.stringify({ v: 1, kind: "projection-inspect", runId, view, offset })).toString("base64url");
+function projectionRevision(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
-function decodeProjectionCursor(value: string, runId: string, view: RunInspectionView): number {
+function encodeProjectionCursor(runId: string, view: RunInspectionView, offset: number, text: string): string {
+  return Buffer.from(JSON.stringify({ v: 1, kind: "projection-inspect", runId, view, offset, revision: projectionRevision(text) })).toString("base64url");
+}
+
+function decodeProjectionCursor(value: string, runId: string, view: RunInspectionView, text: string): number {
   if (!value || value.length > 4096) throw new Error("Invalid cursor");
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
     const keys = Object.keys(parsed).sort().join(",");
-    if (keys !== "kind,offset,runId,v,view" || parsed.v !== 1 || parsed.kind !== "projection-inspect" || parsed.runId !== runId || parsed.view !== view || !Number.isSafeInteger(parsed.offset) || (parsed.offset as number) < 0) throw new Error();
+    if (keys !== "kind,offset,revision,runId,v,view" || parsed.v !== 1 || parsed.kind !== "projection-inspect" || parsed.runId !== runId || parsed.view !== view || !Number.isSafeInteger(parsed.offset) || (parsed.offset as number) < 0 || typeof parsed.revision !== "string") throw new Error();
+    if (parsed.revision !== projectionRevision(text)) throw new Error("stale");
     return parsed.offset as number;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "stale") throw new Error("Run changed while paging; restart inspection without a cursor");
     throw new Error("Invalid cursor");
   }
 }
@@ -285,9 +298,9 @@ export function createExternalRunsTool(
               ? { runId: params.runId, result: entry?.outcome?.result ?? historical?.result }
               : { runId: params.runId, status: entry?.outcome?.status ?? historical?.status ?? "running", error: entry?.outcome?.error ?? historical?.error };
           const text = JSON.stringify(source);
-          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
+          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view, text) : 0;
           const page = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
-          const nextCursor = page.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, page.nextOffset);
+          const nextCursor = page.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, page.nextOffset, text);
           return result(page.text, { runId: params.runId, view, text: page.text, nextCursor });
         }
         const durable = await getRunRecord(runsDirectory, params.runId);
@@ -295,17 +308,17 @@ export function createExternalRunsTool(
         if (view === "summary") {
           const source = entry ? liveAgentSummary(entry) : historicalAgent(durable!);
           const text = JSON.stringify(source);
-          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
+          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view, text) : 0;
           const portion = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
-          const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset);
+          const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset, text);
           return result(portion.text, { runId: params.runId, view, text: portion.text, nextCursor });
         }
         if (view === "output" && entry?.kind === "agent" && (!params.cursor || isProjectionCursor(params.cursor))) {
           const text = liveAgentOutput(entry);
           if (text !== undefined) {
-            const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
+            const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view, text) : 0;
             const portion = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
-            const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset);
+            const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset, text);
             return result(portion.text, { runId: params.runId, view, text: portion.text, outputStatus: entry.state === "running" ? "preliminary" : entry.outcome?.outcome === "succeeded" ? "final" : "interrupted", nextCursor });
           }
         }

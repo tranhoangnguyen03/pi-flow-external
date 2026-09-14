@@ -7,6 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
@@ -107,7 +108,7 @@ export function createWorkflowTool(
       const parentMessages = captureParentContext(ctx.sessionManager);
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const sessionVersion = options.registry.sessionVersion(sessionId);
-      const project = ctx.cwd;
+      const project = resolve(ctx.cwd);
       const executionContext = { cwd: project } as ExtensionContext;
       const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
       const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
@@ -364,7 +365,7 @@ export function createWorkflowTool(
             snapshot.currentPhase = title;
             emit();
           },
-          onAgentQueued: (event) => {
+          onAgentQueued: async (event) => {
             const queuedAt = Date.now();
             const profile = profiles.get(event.subagentType);
             const runRecord = createRunRecord({
@@ -381,6 +382,7 @@ export function createWorkflowTool(
                 queuedAt: new Date(queuedAt).toISOString(),
               },
             });
+            event.runRecord = runRecord;
             snapshot.agents.push({
               index: event.index,
               label: event.label,
@@ -397,7 +399,7 @@ export function createWorkflowTool(
             });
             snapshot.agentCount = snapshot.agents.length;
             emit();
-            event.runRecord = runRecord;
+            await journalWriter?.appendAgentQueued(event);
           },
           onAgentStart: (event) => {
             let agent = snapshot.agents.find((item) => item.index === event.index);

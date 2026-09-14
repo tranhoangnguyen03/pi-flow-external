@@ -16,7 +16,8 @@ import {
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
 import { createWorkflowTool } from "../src/workflow/tool.ts";
-import { loadWorkflowJournal } from "../src/workflow/journal.ts";
+import { createWorkflowJournalWriter, createWorkflowRunIdentity, loadWorkflowJournal } from "../src/workflow/journal.ts";
+import { prepareWorkflowToolSource } from "../src/workflow/source.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
 import { resolveExternalProfile } from "../src/profiles.ts";
 import type { SubagentProfile } from "../src/types.ts";
@@ -216,6 +217,18 @@ describe("runWorkflow", () => {
     );
 
     await expect(failure).rejects.toMatchObject({ name: "ChildRunError", runId: "run_fail" });
+
+    await expect(runWorkflow(
+      `${META}agent('fast', { label: 'fast' }).then(() => { throw undefined; });\nreturn await agent('slow', { label: 'slow' });`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        runAgent: async (call) => {
+          if (call.label === "slow") await delay(20);
+          return call.label;
+        },
+      },
+    )).rejects.toThrow("undefined");
   });
 
 
@@ -467,8 +480,43 @@ describe("runWorkflow", () => {
     expect(registry.get("run_sibling")?.outcome?.status).toBe("done");
   });
 
+  it("preserves queued child cancellation reasons and evidence references", async () => {
+    const limiter = new ConcurrencyLimiter(1);
+    const release = await limiter.acquire();
+    const registry = new RunRegistry();
+    const result = runWorkflow(
+      `${META}try { await agent('target', { label: 'target' }); } catch (error) { return { message: error.message, outcome: error.outcome, outputRef: error.outputRef, diagnosticsRef: error.diagnosticsRef }; }`,
+      {
+        cwd: "/tmp",
+        limiter,
+        runAgent: async () => "must not start",
+        onAgentQueued: (event) => {
+          event.runRecord = { runId: "run_target", finish: async () => undefined } as any;
+        },
+        startAgentRun: (_call, run) => registry.start({
+          runId: "run_target",
+          kind: "agent",
+          sessionId: "session",
+          project: "/tmp",
+          run,
+        }).result,
+      },
+    );
+
+    await vi.waitFor(() => expect(limiter.pendingCount).toBe(1));
+    registry.cancel("run_target", "queued target is obsolete");
+    release();
+    await expect(result).resolves.toMatchObject({ result: {
+      message: "queued target is obsolete",
+      outcome: "cancelled",
+      outputRef: { runId: "run_target", view: "output" },
+      diagnosticsRef: { runId: "run_target", view: "diagnostics" },
+    } });
+  });
+
   it("aborts and drains siblings after an unhandled child failure", async () => {
     let slowDrained = false;
+    const recorded: any[] = [];
     const failure = runWorkflow(
       `${META}return await parallel([
         () => agent('slow', { label: 'slow' }),
@@ -488,11 +536,19 @@ describe("runWorkflow", () => {
             }, { once: true });
           });
         },
+        onAgentQueued: (event) => {
+          event.runRecord = { runId: `run_${event.label}`, finish: async () => undefined } as any;
+        },
+        onAgentResult: (event) => { recorded.push(event); },
       },
     );
 
     await expect(failure).rejects.toMatchObject({ name: "ChildRunError", runId: "run_bad" });
     expect(slowDrained).toBe(true);
+    expect(recorded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: "run_bad", failed: true, error: expect.objectContaining({ outcome: "failed" }) }),
+      expect.objectContaining({ runId: "run_slow", failed: true, error: expect.objectContaining({ outcome: "cancelled", outputRef: { runId: "run_slow", view: "output" }, diagnosticsRef: { runId: "run_slow", view: "diagnostics" } }) }),
+    ]));
   });
 
   it("bounds fatal cleanup when a child ignores cancellation", async () => {
@@ -913,6 +969,33 @@ describe("saved workflow registry", () => {
       const journal = await loadWorkflowJournal(dir, runId);
 
       expect(journal?.agentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects replay journals from another normalized project", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
+    try {
+      const sessionFile = join(dir, "session.jsonl");
+      const workflowDir = join(dir, "session.workflows");
+      const scriptPath = join(workflowDir, "saved.js");
+      const script = workflowScript("saved");
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(scriptPath, script);
+      const identity = createWorkflowRunIdentity(script, null);
+      const journal = await createWorkflowJournalWriter({ dir: workflowDir, identity, name: "saved", source: "path", project: join(dir, "project-a"), scriptPath });
+      await journal.complete("done");
+      const ctx = {
+        cwd: join(dir, "project-b", "..", "project-b"),
+        isProjectTrusted: () => false,
+        sessionManager: { isPersisted: () => true, getSessionFile: () => sessionFile },
+      } as any;
+
+      const prepared = await prepareWorkflowToolSource({ scriptPath, resumeFromRunId: identity.runId }, ctx);
+
+      expect(prepared.ok).toBe(false);
+      expect(prepared.ok ? "" : prepared.details.error).toMatch(/different project.*no children were launched/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

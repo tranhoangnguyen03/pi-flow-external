@@ -13,10 +13,10 @@ describe("external_runs", () => {
     for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  function setup() {
+  function setup(completedLimit = 100) {
     const runsDirectory = mkdtempSync(join(tmpdir(), "external-runs-"));
     directories.push(runsDirectory);
-    const registry = new RunRegistry();
+    const registry = new RunRegistry(completedLimit);
     const tool = createExternalRunsTool({ registry, runsDirectory: () => runsDirectory }) as any;
     const ctx = { cwd: "/project", sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } } as any;
     const execute = (params: Record<string, unknown>, signal?: AbortSignal) => tool.execute("external-runs", params, signal, undefined, ctx);
@@ -125,6 +125,25 @@ describe("external_runs", () => {
     await expect(workflowChild.result).rejects.toThrow("stopped");
   });
 
+  it("rejects stale live projection cursors after registry eviction", async () => {
+    const { execute, registry, runsDirectory } = setup(1);
+    const record = createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Durable description" } });
+    let finish!: (value: string) => void;
+    const live = registry.start({ runId: record.runId, kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise((resolve) => { finish = resolve; }) });
+    registry.update(record.runId, { status: "running", description: "Live description differs", activity: [], activityCount: 0 });
+    const first = await execute({ action: "inspect", runId: record.runId, view: "summary", limitBytes: 32 });
+    expect(first.details.nextCursor).toEqual(expect.any(String));
+
+    finish("done");
+    await live.result;
+    await record.finish({ status: "done", result: "done" });
+    await registry.start({ runId: "run_evictor", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "done" }).result;
+    expect(registry.get(record.runId)).toBeUndefined();
+
+    await expect(execute({ action: "inspect", runId: record.runId, view: "summary", limitBytes: 32, cursor: first.details.nextCursor }))
+      .rejects.toThrow(/run changed.*restart inspection/i);
+  });
+
   it("cancels only current-session live targets and reports already-terminal work accurately", async () => {
     const { execute, registry, runsDirectory } = setup();
     const terminal = await completedRecord(runsDirectory);
@@ -185,5 +204,38 @@ describe("external_runs", () => {
     const failed = await createWorkflowJournalWriter({ dir, identity: failedIdentity, name: "failed", source: "inline", project: "/project" });
     await failed.fail("deadline exceeded", "timed_out");
     await expect(execute({ action: "wait", runIds: [failedIdentity.runId] })).resolves.toMatchObject({ details: { outcomes: [{ outcome: "timed_out", error: "deadline exceeded" }] } });
+
+    const incompleteIdentity = createWorkflowRunIdentity("incomplete script", null);
+    const incomplete = await createWorkflowJournalWriter({ dir, identity: incompleteIdentity, name: "incomplete", source: "inline", project: "/project" });
+    await incomplete.appendAgentQueued({ index: 1, label: "orphan", subagentType: "codex-worker", prompt: "private", runRecord: { runId: "run_orphan" } as any });
+    await incomplete.appendAgentQueued({ index: 2, label: "cleaned", subagentType: "codex-worker", prompt: "private", runRecord: { runId: "run_cleaned" } as any });
+    await incomplete.appendAgentResult({
+      index: 2,
+      fingerprint: "cleanup",
+      result: undefined,
+      label: "cleaned",
+      subagentType: "codex-worker",
+      prompt: "private",
+      cached: false,
+      failed: true,
+      runId: "run_cleaned",
+      error: {
+        runId: "run_cleaned",
+        outcome: "cancelled",
+        message: "fatal sibling cleanup",
+        outputRef: { runId: "run_cleaned", view: "output" },
+        diagnosticsRef: { runId: "run_cleaned", view: "diagnostics" },
+      },
+    });
+    const interrupted = await execute({ action: "inspect", runId: incompleteIdentity.runId, view: "summary" });
+    expect(JSON.parse(interrupted.content[0].text)).toMatchObject({
+      state: { status: "interrupted_or_uncertain" },
+      output: { status: "interrupted" },
+      children: [
+        { runId: "run_orphan", status: "interrupted_or_uncertain" },
+        { runId: "run_cleaned", status: "aborted" },
+      ],
+    });
+    await expect(execute({ action: "cancel", runId: incompleteIdentity.runId })).rejects.toThrow(/no longer live/i);
   });
 });

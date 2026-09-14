@@ -49,7 +49,7 @@ npm run e2e -- --backend codex --workflow
 npm run e2e -- --backend agy --workflow
 ```
 
-Each command declares `meta.apiVersion: 1`, starts a two-child workflow with `background: true`, waits for the selected workflow through `external_runs`, follows its summary/output cursors, requires two complete child receipts, and verifies the read-only fixture stayed clean. This covers real workflow child handling without duplicating deterministic failure semantics already owned by offline runtime tests.
+Each command declares `meta.apiVersion: 1`, starts a two-child workflow with `background: true`, waits for the selected workflow through `external_runs`, inspects its summary/output, requires two complete child receipts, and verifies the read-only fixture stayed clean. Forced multi-page cursor behavior remains covered by deterministic offline tests; this check exercises real workflow child handling without duplicating those semantics.
 
 ## Change-triggered interruption and output check
 

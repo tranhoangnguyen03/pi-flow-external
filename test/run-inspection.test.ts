@@ -80,8 +80,7 @@ describe("run evidence inspection", () => {
       cursor = portion.nextCursor;
     } while (cursor);
     expect(paged).toBe("first findingdraft answercanonical answer");
-    expect(statuses[0]).toBe("preliminary");
-    expect(statuses.at(-1)).toBe("final");
+    expect(statuses.every((status) => status === "final")).toBe(true);
 
     const repeated = createRunRecord({ directory: root });
     await repeated.event("backend_event", {
@@ -131,14 +130,14 @@ describe("run evidence inspection", () => {
     await expect(inspectRun({
       runsDirectory: root,
       runId: first.runId,
-      view: "output",
-      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "output", source: "events", position: 1, textOffset: 0 }),
+      view: "diagnostics",
+      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: 1, textOffset: 0 }),
     })).rejects.toThrow(/cursor.*record boundary/i);
     await expect(inspectRun({
       runsDirectory: root,
       runId: first.runId,
-      view: "output",
-      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "output", source: "events", position: Number.MAX_SAFE_INTEGER, textOffset: 0 }),
+      view: "diagnostics",
+      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: Number.MAX_SAFE_INTEGER, textOffset: 0 }),
     })).rejects.toThrow(/cursor.*evidence/i);
     const decoded = JSON.parse(Buffer.from(page.nextCursor!, "base64url").toString("utf8"));
     await expect(inspectRun({ runsDirectory: root, runId: first.runId, view: "output", cursor: cursor({ ...decoded, textOffset: 99_999 }) })).rejects.toThrow(/cursor.*text offset/i);
@@ -195,6 +194,14 @@ describe("run evidence inspection", () => {
       state: { status: "running", processStartedAt: expect.any(String), lastActivityAt: expect.any(String) },
       output: { available: true, status: "preliminary" },
     });
+
+    const firstPage = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary", limitBytes: 40 });
+    await record.event("backend_event", {
+      backend: "codex",
+      event: { type: "item.completed", item: { id: "later", type: "agent_message", text: "new output" } },
+    });
+    await expect(inspectRun({ runsDirectory: root, runId: record.runId, view: "summary", limitBytes: 40, cursor: firstPage.nextCursor }))
+      .rejects.toThrow(/run changed.*restart inspection/i);
   });
 
   it("reads legacy records and lists scoped workflow children with stable keyset pagination", async () => {

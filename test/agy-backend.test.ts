@@ -14,6 +14,7 @@ import {
 } from "../src/core/agy.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { MAX_STDOUT_LINE_CHARS } from "../src/core/stream.ts";
+import { inspectRun } from "../src/core/run-inspection.ts";
 
 describe("pi-subagent agy backend", () => {
   let tempDir = "";
@@ -139,7 +140,8 @@ writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.argv.s
 console.log(JSON.stringify({ event: 'init', conversation_id: 'agy-test-session', init: { permission_mode: 'always-proceed' } }));
 await new Promise((resolve) => setTimeout(resolve, 20));
 console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE', step_type: 'tool', tool_name: 'spawn_agent' } }));
-console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE', step_type: 'agent_response', text_delta: 'agy child done' } }));
+console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'IN_PROGRESS', step_type: 'agent_response', text_delta: 'agy child ' } }));
+console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'DONE', step_type: 'agent_response', text_delta: 'done' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-test-session', status: 'SUCCESS', response: 'agy child done', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 25, cache_read_tokens: 200, total_tokens: 1075 } } }));
 `);
     chmodSync(fakeAgyPath, 0o755);
@@ -193,15 +195,23 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
       backend: "agy",
       profile: "agy-reviewer",
       status: "done",
-      backendEventCount: 4,
+      backendEventCount: 5,
       nestedActivitySeen: true,
       nestedAgentControl: "allowed-observed",
       nestedTimeoutExtended: true,
       permission: { tier: "danger", enforced: true },
     });
     expect(summary.summary.effectiveTimeoutMs).toBeGreaterThan(summary.summary.configuredTimeoutMs);
-    expect(events.match(/"type":"backend_event"/g)).toHaveLength(4);
+    expect(events.match(/"type":"backend_event"/g)).toHaveLength(5);
     expect(events).toContain('"type":"nested_timeout_extended"');
+    let output = "";
+    let cursor: string | undefined;
+    do {
+      const page = await inspectRun({ runsDirectory: recordsRoot, runId: runDirectories[0]!, view: "output", limitBytes: 4, cursor });
+      output += page.items.map((item) => item.text).join("");
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(output).toBe("agy child done");
     disposeSession(session);
   });
 

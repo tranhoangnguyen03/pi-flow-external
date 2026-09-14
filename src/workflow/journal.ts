@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
-import { WORKFLOW_API_VERSION, type ChildRunOutcome, type WorkflowAgentResultEvent, type WorkflowCachedAgentResult } from "./types.ts";
+import { WORKFLOW_API_VERSION, type ChildRunOutcome, type WorkflowAgentQueuedEvent, type WorkflowAgentResultEvent, type WorkflowCachedAgentResult } from "./types.ts";
 
 const JOURNAL_VERSION = 1;
 const RUN_ID_PREFIX = "wf_";
@@ -37,12 +37,13 @@ export interface LoadedWorkflowJournal {
   outcome?: "succeeded" | ChildRunOutcome;
   result?: unknown;
   error?: string;
-  children: Array<{ runId?: string; label?: string; failed: boolean; error?: unknown }>;
+  children: Array<{ index: number; runId?: string; label?: string; status: "queued" | "done" | "error" | "aborted"; outcome?: ChildRunOutcome; error?: unknown }>;
 }
 
 export interface WorkflowJournalWriter {
   runId: string;
   path: string;
+  appendAgentQueued(event: WorkflowAgentQueuedEvent): Promise<void>;
   appendAgentResult(event: WorkflowAgentResultEvent): Promise<void>;
   complete(result: unknown): Promise<void>;
   fail(error: string, outcome?: ChildRunOutcome): Promise<void>;
@@ -147,6 +148,16 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
       terminalError = typeof entry.error === "string" ? entry.error : "workflow failed";
       continue;
     }
+    if (entry.type === "agent_queued") {
+      if (typeof entry.index !== "number") continue;
+      children[entry.index - 1] = {
+        index: entry.index,
+        ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+        ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+        status: "queued",
+      };
+      continue;
+    }
     if (entry.type !== "agent_result") {
       continue;
     }
@@ -162,18 +173,23 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
       failed: entry.failed === true,
       ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
     };
-    children.push({
+    const childOutcome = entry.error && typeof entry.error === "object" && (entry.error as Record<string, unknown>).outcome;
+    children[index - 1] = {
+      index,
       ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
       ...(typeof entry.label === "string" ? { label: entry.label } : {}),
-      failed: entry.failed === true,
+      status: entry.failed === true
+        ? childOutcome === "cancelled" || childOutcome === "timed_out" ? "aborted" : "error"
+        : "done",
+      ...(childOutcome === "failed" || childOutcome === "cancelled" || childOutcome === "timed_out" ? { outcome: childOutcome } : {}),
       ...(entry.error !== undefined ? { error: entry.error } : {}),
-    });
+    };
   }
 
   if (!seenRunStart) {
     throw new Error(`Workflow journal ${path} does not match run id ${runId}`);
   }
-  return { runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children };
+  return { runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children: children.filter(Boolean) };
 }
 
 export interface WorkflowJournalPage {
@@ -265,6 +281,16 @@ export async function createWorkflowJournalWriter(params: {
   return {
     runId: params.identity.runId,
     path,
+    appendAgentQueued: async (event) => {
+      await enqueueAppend({
+        type: "agent_queued",
+        index: event.index,
+        label: event.label,
+        phase: event.phase,
+        subagentType: event.subagentType,
+        runId: event.runRecord?.runId,
+      });
+    },
     appendAgentResult: async (event) => {
       await enqueueAppend({
         type: "agent_result",

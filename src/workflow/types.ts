@@ -63,6 +63,8 @@ export interface WorkflowAgentCall {
   /** Receipt for the frozen parent snapshot this child received, when sharing was requested. */
   context?: ParentContextReceipt;
   index?: number;
+  /** Normalized workspace used by this child and included in replay identity. */
+  cwd: string;
   prompt: string;
   label: string;
   phase?: string;
@@ -162,7 +164,7 @@ export interface RunWorkflowOptions {
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
   resumeAgentResults?: WorkflowCachedAgentResult[];
-  onAgentQueued?: (event: WorkflowAgentQueuedEvent) => void;
+  onAgentQueued?: (event: WorkflowAgentQueuedEvent) => unknown;
   onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean; runId?: string }) => void;
   onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean; error?: SerializedChildRunError }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;

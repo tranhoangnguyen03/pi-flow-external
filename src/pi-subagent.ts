@@ -7,6 +7,7 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
@@ -412,7 +413,7 @@ function createAgentTool(
       const queuedAt = Date.now();
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const sessionVersion = state.registry.sessionVersion(sessionId);
-      const project = ctx.cwd;
+      const project = resolve(ctx.cwd);
       const executionContext = { cwd: project } as ExtensionContext;
       const limiter = state.limiter;
       const timeoutMs = state.subagentTimeoutMs;

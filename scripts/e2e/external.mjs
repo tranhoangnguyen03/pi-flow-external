@@ -78,14 +78,23 @@ function walk(root) {
 
 function run(command, options) {
   return new Promise((resolve) => {
-    const child = spawn(command[0], command.slice(1), { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command[0], command.slice(1), { ...options, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    const terminateTree = (force) => {
+      if (process.platform === "win32") {
+        const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", ...(force ? ["/f"] : [])], { stdio: "ignore", windowsHide: true });
+        killer.once("error", () => {});
+        killer.unref();
+      } else {
+        try { process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM"); } catch {}
+      }
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 3000).unref();
+      terminateTree(false);
+      setTimeout(() => terminateTree(true), 10_000).unref();
     }, options.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -131,9 +140,9 @@ async function main() {
     : `Read ${JSON.stringify(targetPath)} and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
   const workflow = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} })\n]);\nreturn results;`;
   const rootPrompt = options.workflow
-    ? `Call workflow exactly once with background:true and this exact script:\n\n${workflow}\n\nUse external_runs wait on the returned workflow run ID, then inspect its output and complete summary (following every cursor). Report the returned token lines and WORKFLOW_SUPERVISION_OK.`
+    ? `Call workflow exactly once with background:true and this exact script:\n\n${workflow}\n\nUse external_runs wait on the returned workflow run ID, then inspect its output and summary. Report the returned token lines and WORKFLOW_SUPERVISION_OK.`
     : options.interrupt
-      ? `Call Agent exactly once with background:true, description "External interruption smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Cancel its returned run ID with external_runs using reason "E2E requested cancellation", wait for that run, then inspect its complete output and diagnostics (following cursors). Report E2E_CANCELLED.`
+      ? `Call Agent exactly once with background:true, description "External interruption smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Cancel its returned run ID with external_runs using reason "E2E requested cancellation", wait for that run, then inspect its output and diagnostics. Report E2E_CANCELLED.`
       : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;
   const promptPath = path.join(options.runRoot, "prompt.md");
   writeFileSync(promptPath, rootPrompt);

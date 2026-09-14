@@ -182,11 +182,11 @@ function requestAgent(prompt, options) {
 }
 
 function trackChain(promise) {
-  const observation = { handled: false, settled: false, error: undefined, promise };
+  const observation = { handled: false, settled: false, rejected: false, error: undefined, promise };
   chainObservations.push(observation);
   promise.then(
     () => { observation.settled = true; },
-    (error) => { observation.settled = true; observation.error = error; },
+    (error) => { observation.settled = true; observation.rejected = true; observation.error = error; },
   ).catch(() => {});
   const transfer = (next) => {
     observation.handled = true;
@@ -374,7 +374,7 @@ function isObjectPrototype(value) {
       throw new Error("every started agent() call must be awaited before the workflow returns");
     }
     await Promise.allSettled(chainObservations.filter((observation) => !observation.handled).map((observation) => observation.promise));
-    const unhandled = chainObservations.find((observation) => !observation.handled && observation.error !== undefined);
+    const unhandled = chainObservations.find((observation) => !observation.handled && observation.rejected);
     if (unhandled) throw unhandled.error;
     throwIfFatal();
     const normalizedResult = normalizeJsonSerializable(result, "workflow result");

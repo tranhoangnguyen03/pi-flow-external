@@ -204,7 +204,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     const controller = new AbortController();
     const secondPromise = tool.execute("second", { description: "Second", prompt: "queue", role: "worker", harness: "codex" }, controller.signal, undefined, context);
     await new Promise((resolve) => setImmediate(resolve));
-    controller.abort();
+    controller.abort(new Error("queued run no longer needed"));
     const second = await secondPromise;
     writeFileSync(releasePath, "go");
     const firstResult = await first;
@@ -221,7 +221,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     expect(second.details.runId).toMatch(/^run_/);
     const summary = JSON.parse(readFileSync(join(agentDir, "pi-flow-external", "runs", second.details.runId, "summary.json"), "utf8"));
     expect(summary.runId).toBe(second.details.runId);
-    expect(summary.summary).toMatchObject({ status: "aborted", queued: true });
+    expect(second.details).toMatchObject({ status: "aborted", error: "queued run no longer needed" });
+    expect(summary.summary).toMatchObject({ status: "aborted", queued: true, error: "queued run no longer needed" });
     expect(readdirSync(join(agentDir, "pi-flow-external", "runs"))).toHaveLength(2);
 
     disposeSession(session);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -47,8 +48,8 @@ export interface RunRecordListItem {
 interface CursorBase { v: typeof CURSOR_VERSION; kind: "inspect"; runId: string; view: RunInspectionView }
 type InspectionCursor = CursorBase & (
   | { source: "events"; position: number; textOffset: number }
-  | { source: "terminal"; itemIndex: number; textOffset: number }
-  | { source: "summary"; itemIndex: 0; textOffset: number }
+  | { source: "terminal"; itemIndex: number; textOffset: number; revision: string }
+  | { source: "summary"; itemIndex: 0; textOffset: number; revision: string }
 );
 interface ListCursor { v: typeof CURSOR_VERSION; kind: "list"; scope: string; after: string }
 interface SummaryDocument { runId?: string; queuedAt?: string; startedAt?: string; finishedAt?: string; metadata?: unknown; summary?: unknown }
@@ -97,6 +98,8 @@ export async function inspectRun({
     if (decoded?.kind === "inspect" && decoded.source !== "summary") throw new Error("Cursor source does not match summary view");
     const observation = await readObservation(eventsPath, runId);
     const text = JSON.stringify(summaryProjection(runId, summary, observation));
+    const revision = contentRevision(text);
+    if (decoded?.kind === "inspect" && decoded.revision !== revision) throw staleCursorError();
     const offset = decoded?.kind === "inspect" ? decoded.textOffset : 0;
     assertTextOffset(text, offset, "summary");
     const portion = sliceUtf8(text, offset, limit);
@@ -108,28 +111,34 @@ export async function inspectRun({
       integrity: mergedIntegrity(summary, observation),
       truncatedTail: observation.truncatedTail,
       ...(portion.nextOffset < text.length
-        ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "summary", itemIndex: 0, textOffset: portion.nextOffset }) }
+        ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "summary", itemIndex: 0, textOffset: portion.nextOffset, revision }) }
         : {}),
     };
   }
 
   if (decoded?.kind === "inspect" && decoded.source === "summary") throw new Error("Cursor source does not match inspection view");
-  const canonical = canonicalResult(terminal);
-  const fallback = assistantItems(terminal);
-  if (decoded?.kind === "inspect" && decoded.source === "terminal") {
-    if (view !== "output") throw new Error("Cursor source does not match diagnostics view");
+  if (view === "output" && summary.document && terminalStatus === "done") {
+    if (decoded?.kind === "inspect" && decoded.source === "events") throw staleCursorError();
     const observation = await readObservation(eventsPath, runId);
+    const items = terminalOutputItems(terminal);
+    const revision = contentRevision(JSON.stringify(items));
+    const terminalCursor = decoded?.kind === "inspect"
+      ? decoded
+      : { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
+    if (terminalCursor.source !== "terminal") throw new Error("Cursor source does not match output view");
+    if (terminalCursor.revision !== revision) throw staleCursorError();
     return terminalPage(
       runId,
       view,
-      canonical ? [{ text: canonical }] : fallback,
-      decoded,
+      items,
+      terminalCursor,
       limit,
       mergedIntegrity(summary, observation),
       observation.truncatedTail,
       terminalStatus,
     );
   }
+  if (decoded?.kind === "inspect" && decoded.source === "terminal") throw new Error("Cursor source does not match diagnostics view");
 
   const state = decoded?.kind === "inspect" && decoded.source === "events"
     ? decoded
@@ -140,23 +149,11 @@ export async function inspectRun({
   let usedBytes = 0;
   let nextCursor: InspectionCursor | undefined;
   let activeAgyId: string | undefined;
-  let outputBeforeCursor = false;
-  let canonicalBeforeCursor = false;
-  let canonicalCompletedOnPage = false;
-  let outputOnPage = false;
-  const scanStart = summary.document && state.position > 0 ? 0 : state.position;
-  const scan = await scanCompleteLines(eventsPath, scanStart, (line) => {
+  const scan = await scanCompleteLines(eventsPath, state.position, (line) => {
     const event = parseEvent(line.text, runId);
     if (!event) return "malformed";
     const projected = view === "output" ? outputFromEvent(event) : diagnosticFromEvent(event);
     if (!projected) return "continue";
-    if (line.start < state.position) {
-      if (view === "output") {
-        outputBeforeCursor = true;
-        canonicalBeforeCursor ||= canonical !== undefined && projected.text === canonical;
-      }
-      return "continue";
-    }
     const startingOffset = line.start === state.position ? state.textOffset : 0;
     const remaining = limit - usedBytes;
     if (remaining <= 0) {
@@ -173,35 +170,22 @@ export async function inspectRun({
       else items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
       activeAgyId = projected.kind === "agy" ? projected.id : undefined;
       usedBytes += Buffer.byteLength(chunk.text);
-      outputOnPage ||= view === "output";
     }
     if (chunk.nextOffset < projected.text.length) {
       nextCursor = eventCursor(runId, view, line.start, chunk.nextOffset);
       return "stop";
     }
-    canonicalCompletedOnPage ||= view === "output" && canonical !== undefined && projected.text === canonical;
     return "continue";
   });
 
-  if (!nextCursor && !scan.stopped && view === "output" && summary.document) {
-    const terminalItems = canonical && !canonicalBeforeCursor && !canonicalCompletedOnPage
-      ? [{ text: canonical }]
-      : !canonical && !outputBeforeCursor && !outputOnPage ? fallback : [];
-    const served = serveItems(terminalItems, 0, 0, limit - usedBytes);
-    items.push(...served.items);
-    if (served.next) nextCursor = { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next };
-  }
   if (!nextCursor && !summary.document && !scan.missing) nextCursor = eventCursor(runId, view, scan.endPosition, 0);
 
   const integrity: RunRecordIntegrity = scan.malformed || scan.missing || (summary.document && scan.truncatedTail) ? "damaged" : summary.integrity;
-  const status = view === "output" && terminalStatus === "done" && nextCursor?.source === "events" && !canonicalBeforeCursor && !canonicalCompletedOnPage
-    ? "preliminary"
-    : outputStatus(terminalStatus);
   return {
     runId,
     view,
     items,
-    outputStatus: status,
+    outputStatus: outputStatus(terminalStatus),
     integrity,
     truncatedTail: scan.truncatedTail,
     ...(nextCursor ? { nextCursor: encodeCursor(nextCursor) } : {}),
@@ -465,7 +449,7 @@ async function validateEventCursor(path: string, runId: string, view: RunInspect
 }
 
 function terminalPage(runId: string, view: "output", items: RunInspectionItem[], cursor: Extract<InspectionCursor, { source: "terminal" }>, limit: number, integrity: RunRecordIntegrity, truncatedTail: boolean, terminalStatus: string | undefined): RunInspectionPage {
-  validateItemCursor(items, cursor.itemIndex, cursor.textOffset);
+  if (items.length || cursor.itemIndex !== 0 || cursor.textOffset !== 0) validateItemCursor(items, cursor.itemIndex, cursor.textOffset);
   const served = serveItems(items, cursor.itemIndex, cursor.textOffset, limit);
   return {
     runId,
@@ -474,7 +458,7 @@ function terminalPage(runId: string, view: "output", items: RunInspectionItem[],
     outputStatus: outputStatus(terminalStatus),
     integrity,
     truncatedTail,
-    ...(served.next ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next }) } : {}),
+    ...(served.next ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next, revision: cursor.revision }) } : {}),
   };
 }
 
@@ -524,6 +508,21 @@ function assistantItems(summary: Record<string, unknown> | undefined): RunInspec
     const id = asString(record?.id);
     return text ? [{ ...(id ? { id } : {}), text }] : [];
   });
+}
+
+function terminalOutputItems(summary: Record<string, unknown> | undefined): RunInspectionItem[] {
+  const items = assistantItems(summary);
+  const canonical = canonicalResult(summary);
+  if (canonical && !items.some((item) => item.text === canonical)) items.push({ text: canonical });
+  return items;
+}
+
+function contentRevision(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function staleCursorError(): Error {
+  return new Error("Run changed while paging; restart inspection without a cursor");
 }
 
 function canonicalResult(summary: Record<string, unknown> | undefined): string | undefined {
@@ -588,7 +587,7 @@ function decodeCursor(value: string): InspectionCursor | ListCursor {
     if (parsed.source === "events") {
       if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "position", "textOffset"]) || !isNonNegativeInteger(parsed.position) || !isNonNegativeInteger(parsed.textOffset)) throw new Error();
     } else {
-      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "itemIndex", "textOffset"]) || !isNonNegativeInteger(parsed.itemIndex) || !isNonNegativeInteger(parsed.textOffset)) throw new Error();
+      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "itemIndex", "textOffset", "revision"]) || !isNonNegativeInteger(parsed.itemIndex) || !isNonNegativeInteger(parsed.textOffset) || typeof parsed.revision !== "string" || !/^[a-f0-9]{64}$/.test(parsed.revision)) throw new Error();
       if (parsed.source === "summary" && parsed.itemIndex !== 0) throw new Error();
     }
     return parsed as unknown as InspectionCursor;

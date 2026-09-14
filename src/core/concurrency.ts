@@ -33,6 +33,11 @@ interface Waiter {
 
 const ABORT_MESSAGE = "Aborted while waiting for a concurrency slot";
 
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error && signal.reason.name !== "AbortError") return signal.reason;
+  return new Error(signal.reason === undefined || signal.reason instanceof Error ? ABORT_MESSAGE : String(signal.reason));
+}
+
 export class ConcurrencyLimiter {
   private active = 0;
   private readonly waiters: Waiter[] = [];
@@ -63,7 +68,7 @@ export class ConcurrencyLimiter {
   /** Async. Resolves with a release fn once a slot is available. */
   acquire(signal?: AbortSignal): Promise<Release> {
     if (signal?.aborted) {
-      return Promise.reject(new Error(ABORT_MESSAGE));
+      return Promise.reject(abortError(signal));
     }
     if (this.active < this.max) {
       this.active++;
@@ -81,7 +86,7 @@ export class ConcurrencyLimiter {
           if (index !== -1) {
             this.waiters.splice(index, 1);
           }
-          reject(new Error(ABORT_MESSAGE));
+          reject(abortError(signal));
         };
         signal.addEventListener("abort", waiter.onAbort, { once: true });
       }
