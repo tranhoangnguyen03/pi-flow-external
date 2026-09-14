@@ -9,6 +9,7 @@ import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts"
 import { archiveProfiles, findRetiredDefaultProfiles } from "./defaults.ts";
 import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
+import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 
 const COMMANDS = [
@@ -18,7 +19,9 @@ const COMMANDS = [
   { value: "profile create", description: "Create an external profile" },
   { value: "profile clean-up", description: "Archive retired pi-flow default profiles" },
   { value: "workflows", description: "List saved workflows" },
-  { value: "runs", description: "Summarize receipts; add --prune to prune eligible completed records" },
+  { value: "runs", description: "Browse session runs and their complete paged output" },
+  { value: "runs summary", description: "Summarize durable receipts" },
+  { value: "runs --prune", description: "Prune eligible completed receipts" },
   { value: "help", description: "Show this reference" },
 ] as const;
 
@@ -30,6 +33,7 @@ export type ExternalCommandOptions = {
   getRuntimeSettings: () => RuntimeSettings;
   getMaxRunRecords: () => number;
   startProfileInterview: (ctx: ExtensionCommandContext) => Promise<void>;
+  externalRuns: ReturnType<typeof createExternalRunsTool>;
 };
 
 type CommandContextLike = { cwd: string; isProjectTrusted?: () => boolean };
@@ -127,6 +131,98 @@ async function runsText(pi: ExtensionAPI): Promise<string> {
   }
 }
 
+type JsonObject = Record<string, unknown>;
+type ExternalRunsResult = { content: Array<{ type: string; text?: string }>; details: JsonObject };
+
+function object(value: unknown): JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+function pageText(value: ExternalRunsResult): string {
+  return value.content.flatMap((item) => item.type === "text" && typeof item.text === "string" ? [item.text] : []).join("\n");
+}
+
+async function runAction(options: ExternalCommandOptions, params: ExternalRunsParams, ctx: ExtensionCommandContext): Promise<ExternalRunsResult> {
+  return await options.externalRuns.execute("external-command", params, undefined, undefined, ctx) as ExternalRunsResult;
+}
+
+async function readSummary(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<JsonObject> {
+  let text = "";
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  do {
+    const page = await runAction(options, { action: "inspect", runId, view: "summary", ...(cursor ? { cursor } : {}) }, ctx);
+    text += pageText(page);
+    cursor = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
+    if (cursor && seen.has(cursor)) throw new Error("Run inspection returned a repeated cursor");
+    if (cursor) seen.add(cursor);
+  } while (cursor);
+  return object(JSON.parse(text));
+}
+
+async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics", ctx: ExtensionCommandContext): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const page = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
+    await ctx.ui.editor(`${view} ${runId}`, pageText(page));
+    const next = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
+    if (!next || await ctx.ui.select(`${view} ${runId}`, ["Next page", "Back"]) !== "Next page") return;
+    cursor = next;
+  } while (cursor);
+}
+
+async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<void> {
+  const summary = await readSummary(options, runId, ctx);
+  const children = Array.isArray(summary.children) ? summary.children.map(object).filter((child) => typeof child.runId === "string") : [];
+  const state = object(summary.state);
+  const childChoices = children.map((child) => `Child ${String(child.runId)}${child.label ? ` · ${String(child.label)}` : ""}`);
+  const actions = ["Summary", "Output", "Diagnostics", ...childChoices, ...(state.status === "running" || state.status === "queued" ? ["Cancel run"] : []), "Back"];
+  while (true) {
+    const choice = await ctx.ui.select(`Run ${runId}`, actions);
+    if (!choice || choice === "Back") return;
+    if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, JSON.stringify(summary, null, 2));
+    else if (choice === "Output" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "diagnostics", ctx);
+    else if (choice === "Cancel run") {
+      if (await ctx.ui.confirm("Cancel external run?", `${runId}\n\nStopping execution does not roll back side effects.`)) {
+        const result = await runAction(options, { action: "cancel", runId, reason: "cancelled from /external runs" }, ctx);
+        ctx.ui.notify(pageText(result), "info");
+      }
+      return;
+    } else {
+      const child = children[childChoices.indexOf(choice)];
+      if (child) await navigateRun(options, String(child.runId), ctx);
+    }
+  }
+}
+
+async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<void> {
+  let cursor: string | undefined;
+  while (true) {
+    const page = await runAction(options, { action: "list", limit: 50, ...(cursor ? { cursor } : {}) }, ctx);
+    const details = object(page.details);
+    const entries = [
+      ...(Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow", item: object(item) })) : []),
+      ...(Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run", item: object(item) })) : []),
+    ].filter(({ item }) => typeof item.runId === "string");
+    const choices = entries.map(({ kind, item }) => `${kind} ${String(item.runId)} · ${String(object(item.state).status ?? item.status ?? "unknown")}`);
+    const next = typeof details.nextCursor === "string" ? details.nextCursor : undefined;
+    if (next) choices.push("Next page");
+    if (!choices.length) {
+      ctx.ui.notify("No external runs are available in this session and project.", "info");
+      return;
+    }
+    choices.push("Back");
+    const choice = await ctx.ui.select("External runs", choices);
+    if (!choice || choice === "Back") return;
+    if (choice === "Next page") {
+      cursor = next;
+      continue;
+    }
+    const selected = entries[choices.indexOf(choice)];
+    if (selected) await navigateRun(options, String(selected.item.runId), ctx);
+  }
+}
+
 export function registerExternalCommand(pi: ExtensionAPI, options: ExternalCommandOptions): void {
   pi.registerCommand("external", {
     description: "Inspect and configure external Claude, Codex, and Agy harnesses",
@@ -175,7 +271,13 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "workflows") {
         const saved = workflows(ctx);
         ctx.ui.notify(saved.length ? saved.map((workflow) => `${workflow.name}: ${workflow.description}`).join("\n") : "No saved workflows.", "info");
-      } else if (action === "runs" || action === "runs --prune") {
+      } else if (action === "runs" && ctx.hasUI) {
+        try {
+          await navigateRuns(options, ctx);
+        } catch (error) {
+          ctx.ui.notify(`Could not inspect external runs: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+      } else if (action === "runs" || action === "runs summary" || action === "runs --prune") {
         let pruneLine = "";
         if (action === "runs --prune") {
           const { pruned, kept } = await pruneRunRecords(runRecordsDirectory(), options.getMaxRunRecords());
@@ -185,7 +287,7 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "help") {
         ctx.ui.notify(helpText(), "info");
       } else {
-        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|profile clean-up|workflows|runs|runs --prune|help]", "warning");
+        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|profile clean-up|workflows|runs|runs summary|runs --prune|help]", "warning");
       }
     },
   });

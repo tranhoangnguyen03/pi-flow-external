@@ -24,7 +24,7 @@ const externalRunsParameters = Type.Object({
   reason: Type.Optional(Type.String({ maxLength: 512 })),
 });
 
-type ExternalRunsParams = Static<typeof externalRunsParameters>;
+export type ExternalRunsParams = Static<typeof externalRunsParameters>;
 type ExternalRunsDetails = Record<string, unknown>;
 
 export interface CreateExternalRunsToolOptions {

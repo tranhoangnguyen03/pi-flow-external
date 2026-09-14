@@ -3,10 +3,11 @@ import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { getBackendAgentLabel } from "./display.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
-import type { PermissionTier, SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
+import type { PermissionTier, SubagentAssistantOutput, SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
 
 const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
+const OUTPUT_DISPLAY_PREVIEW_CHARS = 4_000;
 export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
 
 export interface RenderableSubagentNode {
@@ -17,10 +18,12 @@ export interface RenderableSubagentNode {
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt?: number;
+  lastActivityAt?: number;
   endedAt?: number;
   activity?: string[];
   activityCount?: number;
   result?: string;
+  assistantOutput?: SubagentAssistantOutput;
   error?: string;
   timedOut?: boolean;
   usage?: SubagentUsage;
@@ -165,6 +168,9 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number, showAc
       parts.push(usage);
     }
   }
+  if (isActiveSubagentStatus(node.status) && typeof node.lastActivityAt === "number") {
+    parts.push(`activity ${formatDuration(now - node.lastActivityAt)} ago`);
+  }
   const runId = node.runId ?? node.externalRunId;
   if (node.recordingError) {
     parts.push("evidence incomplete");
@@ -269,6 +275,18 @@ export function renderSubagentNode(
 
   const container = new Container();
   container.addChild(rendered);
+  const output = node.result ?? node.assistantOutput?.messages.map((message) => message.text).join("\n\n");
+  if (output) {
+    const preview = output.length > OUTPUT_DISPLAY_PREVIEW_CHARS
+      ? `${output.slice(0, OUTPUT_DISPLAY_PREVIEW_CHARS)}\n… ${output.length - OUTPUT_DISPLAY_PREVIEW_CHARS} more characters`
+      : output;
+    const label = node.status === "done" ? "Final output" : "Interrupted output";
+    container.addChild(new Text(`${indent}  ${theme.bold(label)}\n${preview.split("\n").map((line) => `${indent}  ${line}`).join("\n")}`, 0, 0));
+  }
+  const runId = node.runId ?? node.externalRunId;
+  if (runId) {
+    container.addChild(new Text(`${indent}  ${theme.fg("dim", `Run ${runId} · /external runs for full paged output and diagnostics`)}`, 0, 0));
+  }
   if (node.context) container.addChild(new Text(`${indent}  ${theme.fg("dim", formatParentContext(node.context))}`, 0, 0));
   if (node.recordPath) {
     const events = node.backendEventCount === undefined ? "" : ` · ${node.backendEventCount} backend events`;

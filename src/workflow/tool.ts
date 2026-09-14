@@ -689,8 +689,14 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
   }
 
   if (expanded && details.status !== "running") {
+    if (details.result !== undefined) {
+      const output = typeof details.result === "string" ? details.result : JSON.stringify(details.result, null, 2);
+      const preview = output.length > 4_000 ? `${output.slice(0, 4_000)}\n… ${output.length - 4_000} more characters` : output;
+      container.addChild(new Text(`  ${theme.bold("Final output")}\n${preview.split("\n").map((line) => `  ${line}`).join("\n")}`, 0, 0));
+    }
     if (details.runId) {
       container.addChild(new Text(`  ${theme.fg("dim", `Workflow evidence ${details.runId}`)}`, 0, 0));
+      container.addChild(new Text(`  ${theme.fg("dim", `Run ${details.runId} · /external runs for all children, full paged output, diagnostics, and cancellation`)}`, 0, 0));
     }
     if (details.journalPath) {
       container.addChild(new Text(`  ${theme.fg("dim", `Journal ${details.journalPath}`)}`, 0, 0));

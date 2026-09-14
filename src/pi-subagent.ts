@@ -694,10 +694,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getDefaultHarness: (ctx) => resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness,
       workflowEnabled,
     }));
-    pi.registerTool(createExternalRunsTool({
+    const externalRuns = createExternalRunsTool({
       registry: rootState.registry,
       runsDirectory: runRecordsDirectory,
-    }));
+    });
+    pi.registerTool(externalRuns);
     registerProfileCreator(pi, toolOptions);
     registerExternalCommand(pi, {
       settings: loadedSettings,
@@ -710,6 +711,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       },
       getMaxRunRecords: () => rootState.maxRunRecords,
       startProfileInterview,
+      externalRuns,
     });
     if (workflowEnabled) {
       pi.registerTool(
