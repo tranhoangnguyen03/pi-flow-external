@@ -96,6 +96,31 @@ describe("pi-subagent agent contract", () => {
     disposeSession(session);
   });
 
+  it("settles workflow child evidence when resume validation fails", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "codex-worker.md"), "---\ndescription: Codex worker.\nbackend: codex\n---\n");
+    const { session, model, modelRegistry } = await createSession();
+    const workflow = session.getToolDefinition("workflow") as any;
+    const result = await workflow.execute(
+      "resume-validation",
+      {
+        script: "export const meta = { apiVersion: 1, name: 'resume-validation', description: 'Resume validation' }; return await agent('work', { subagent_type: 'codex-worker', resume: '../bad' });",
+      },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    );
+
+    expect(result.details.agents, JSON.stringify(result.details)).toHaveLength(1);
+    const child = result.details.agents[0];
+    expect(child).toMatchObject({ status: "error", externalRunId: expect.stringMatching(/^run_/), recordPath: expect.any(String) });
+    const summary = JSON.parse(readFileSync(join(child.recordPath, "summary.json"), "utf8"));
+    expect(summary.runId).toBe(child.externalRunId);
+    expect(summary.summary).toMatchObject({ status: "error", backendStarted: false });
+
+    disposeSession(session);
+  });
+
   it("loads as a pi package extension from package metadata", async () => {
     const resourceLoader = new DefaultResourceLoader({
       cwd,

@@ -441,8 +441,10 @@ export async function spawnCodexSubagent(params: {
       detached: process.platform !== "win32",
     });
     child = proc;
-    if (progress) progress.processStartedAt = Date.now();
-    try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+    proc.once("spawn", () => {
+      if (progress) progress.processStartedAt = Date.now();
+      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+    });
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       throw new Error("codex stdin/stdout/stderr pipes were not available");
     }

@@ -237,21 +237,6 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   const effectiveTier = resolveEffectivePermissionTier(requestedTier, params.profile, params.defaultPermission ?? "danger");
   const elevated = requestedTier !== undefined && requestedTier !== effectiveTier;
   const permission = resolvePermission(effectiveTier, params.profile.backend);
-  let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
-  if (params.resumeRunId) {
-    const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
-    if (resolved.error || !resolved.session) {
-      return textResult(`Subagent "${params.description}" (${params.profile.name}) failed: ${resolved.error ?? "resume resolution failed"}`, {
-        description: params.description,
-        subagentType: params.profile.name,
-        backend: params.profile.backend,
-        status: "error",
-        error: resolved.error ?? "resume resolution failed",
-      });
-    }
-    resumeSession = resolved.session;
-  }
-  const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
   const record = params.recordRun === false
     ? undefined
     : params.runRecord ?? createRunRecord({
@@ -266,9 +251,39 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           permission: permission.tier,
           ...(elevated ? { permissionRequested: requestedTier } : {}),
           ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
-          ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
+          ...(params.resumeRunId ? { resumeRequested: params.resumeRunId } : {}),
         },
       });
+  let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
+  if (params.resumeRunId) {
+    const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
+    if (resolved.error || !resolved.session) {
+      const error = resolved.error ?? "resume resolution failed";
+      const result = textResult(`Subagent "${params.description}" (${params.profile.name}) failed: ${error}`, {
+        description: params.description,
+        subagentType: params.profile.name,
+        backend: params.profile.backend,
+        status: "error",
+        error,
+      });
+      if (record) {
+        await record.finish({
+          backend: params.profile.backend,
+          profile: params.profile.name,
+          description: params.description,
+          status: "error",
+          error,
+          queued: true,
+          backendStarted: false,
+          durationMs: Date.now() - startedAt,
+        });
+        attachRunRecordIdentity(result, record);
+      }
+      return result;
+    }
+    resumeSession = resolved.session;
+  }
+  const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
   const onBackendEvent = (event: unknown) => {
     backendEventCount++;
     const hadNestedActivity = nestedActivitySeen;

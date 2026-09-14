@@ -227,6 +227,32 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     disposeSession(session);
   });
 
+  it("does not mark a missing codex executable as process started", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const emptyBin = join(tempDir, "empty-bin");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(emptyBin, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Missing executable test.\nbackend: codex\n---\n");
+    process.env.PATH = emptyBin;
+
+    const { session, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const result = await tool.execute(
+      "missing-codex",
+      { description: "Missing Codex", prompt: "work", role: "worker", harness: "codex" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
+    );
+
+    expect(result.details).toMatchObject({ status: "error", runId: expect.stringMatching(/^run_/) });
+    expect(result.details.progress?.processStartedAt).toBeUndefined();
+    const events = readFileSync(join(result.details.recordPath, "events.ndjson"), "utf8");
+    expect(events).not.toContain('"type":"process_started"');
+
+    disposeSession(session);
+  });
+
   it("forwards every parsed codex stream event", async () => {
     const binDir = join(tempDir, "bin-codex-events");
     mkdirSync(binDir, { recursive: true });
