@@ -29,6 +29,7 @@ import { captureParentContext, parentContextSchema, prepareParentContext } from 
 import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
+import { RunRegistry } from "./core/run-registry.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
@@ -118,6 +119,7 @@ interface DelegationState {
   defaultHarness: ExternalHarness;
   defaultMaxBudgetUsd: number | undefined;
   maxRunRecords: number;
+  registry: RunRegistry;
   progressEnabled: boolean;
   activeRuns: Map<string, ActiveAgentRun>;
   frame: number;
@@ -597,6 +599,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       defaultHarness: loadedSettings.settings.defaultHarness,
       defaultMaxBudgetUsd: loadedSettings.settings.defaultMaxBudgetUsd ?? undefined,
       maxRunRecords: loadedSettings.settings.maxRunRecords,
+      registry: new RunRegistry(),
       progressEnabled: false,
       activeRuns: new Map(),
       frame: 0,
@@ -686,6 +689,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }
     });
+
+    pi.on("session_shutdown", (_event, ctx) =>
+      rootState.registry.shutdownSession(ctx.sessionManager.getSessionId()));
 
     pi.on("before_agent_start", (event, ctx) => {
       const tools = pi.getAllTools();
