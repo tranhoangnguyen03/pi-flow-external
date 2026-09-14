@@ -50,8 +50,8 @@ describe("RunRegistry", () => {
     second.resolve("done");
     await expect(a.result).rejects.toThrow("stopped");
     await expect(b.result).resolves.toBe("done");
-    expect(await a.terminal).toMatchObject({ runId: "run_a", status: "aborted", error: "stopped" });
-    expect(await b.terminal).toMatchObject({ runId: "run_b", status: "done", result: "done" });
+    expect(await a.terminal).toMatchObject({ runId: "run_a", status: "aborted", outcome: "cancelled", error: "stop one" });
+    expect(await b.terminal).toMatchObject({ runId: "run_b", status: "done", outcome: "succeeded", result: "done" });
     expect(registry.cancel("run_b")).toBe("terminal");
   });
 
@@ -135,5 +135,58 @@ describe("RunRegistry", () => {
     expect(registry.get("run_other")?.state).toBe("running");
     registry.cancel("run_other");
     await other.result;
+  });
+
+  it("rejects a launch whose async preflight crossed session shutdown", async () => {
+    const registry = new RunRegistry();
+    const preflight = deferred<void>();
+    const sessionVersion = registry.sessionVersion("session-a");
+    const launch = (async () => {
+      await preflight.promise;
+      return registry.start({
+        runId: "run_late",
+        kind: "agent",
+        sessionId: "session-a",
+        sessionVersion,
+        project: "/repo",
+        run: async () => "too late",
+      });
+    })();
+
+    await registry.shutdownSession("session-a");
+    preflight.resolve();
+    await expect(launch).rejects.toThrow(/session.*closed/i);
+    expect(registry.get("run_late")).toBeUndefined();
+  });
+
+  it("bounds shutdown when child cleanup cannot confirm settlement", async () => {
+    const registry = new RunRegistry(100, 10);
+    registry.start({
+      runId: "run_stuck",
+      kind: "agent",
+      sessionId: "session-a",
+      project: "/repo",
+      run: () => new Promise(() => {}),
+    });
+
+    await expect(registry.shutdownSession("session-a")).resolves.toEqual({ settled: [], pending: ["run_stuck"] });
+    expect(registry.get("run_stuck")).toBeUndefined();
+  });
+
+  it("retains a classified timeout outcome separately from display status", async () => {
+    const registry = new RunRegistry();
+    const run = registry.start({
+      runId: "run_timeout",
+      kind: "agent",
+      sessionId: "session-a",
+      project: "/repo",
+      run: async () => "timed out result",
+      outcome: () => ({ status: "aborted", outcome: "timed_out", error: "deadline exceeded" }),
+    });
+
+    await run.result;
+    const terminal = await run.terminal;
+    expect(terminal).toMatchObject({ status: "aborted", outcome: "timed_out", error: "deadline exceeded" });
+    expect(terminal).not.toHaveProperty("result");
   });
 });

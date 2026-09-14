@@ -106,6 +106,7 @@ export function createWorkflowTool(
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const parentMessages = captureParentContext(ctx.sessionManager);
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
+      const sessionVersion = options.registry.sessionVersion(sessionId);
       const project = ctx.cwd;
       const executionContext = { cwd: project } as ExtensionContext;
       const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
@@ -330,12 +331,18 @@ export function createWorkflowTool(
               runId,
               kind: "agent",
               sessionId,
+              sessionVersion,
               project,
               workflowRunId: identity.runId,
               run,
               failure: (error, childSignal) => ({
                 status: runSignal.aborted || childSignal.aborted ? "aborted" : "error",
-                error: error instanceof Error ? error.message : String(error),
+                outcome: error instanceof ChildRunError
+                  ? error.outcome
+                  : runSignal.aborted || childSignal.aborted ? "cancelled" : "failed",
+                error: childSignal.aborted && childSignal.reason !== undefined
+                  ? childSignal.reason instanceof Error ? childSignal.reason.message : String(childSignal.reason)
+                  : error instanceof Error ? error.message : String(error),
               }),
             }).result;
           },
@@ -444,6 +451,7 @@ export function createWorkflowTool(
         });
 
         snapshot.status = "completed";
+        snapshot.outcome = "succeeded";
         snapshot.agentCount = runResult.agentCount;
         snapshot.result = runResult.result;
         try {
@@ -462,10 +470,12 @@ export function createWorkflowTool(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const aborted = runSignal.aborted || isWorkflowAbortError(error);
+        const outcome: ChildRunOutcome = error instanceof ChildRunError ? error.outcome : aborted ? "cancelled" : "failed";
         snapshot.status = aborted ? "aborted" : "error";
+        snapshot.outcome = outcome;
         snapshot.error = message;
         try {
-          await journalWriter?.fail(message);
+          await journalWriter?.fail(message, outcome);
         } catch {
           // Preserve the original workflow failure; journal write failure is secondary.
         }
@@ -488,13 +498,17 @@ export function createWorkflowTool(
         runId: identity.runId,
         kind: "workflow",
         sessionId,
+        sessionVersion,
         project,
         ...(background ? {} : { signal }),
         run: executeWorkflow,
-        outcome: (result) => ({
+        outcome: (result, workflowSignal) => ({
           status: result.details.status === "completed" ? "done" : result.details.status === "aborted" ? "aborted" : "error",
+          outcome: result.details.outcome ?? (result.details.status === "completed" ? "succeeded" : result.details.status === "aborted" ? "cancelled" : "failed"),
           ...(result.details.result !== undefined ? { result: result.details.result } : {}),
-          ...(result.details.error ? { error: result.details.error } : {}),
+          ...(workflowSignal.aborted && workflowSignal.reason !== undefined
+            ? { error: workflowSignal.reason instanceof Error ? workflowSignal.reason.message : String(workflowSignal.reason) }
+            : result.details.error ? { error: result.details.error } : {}),
         }),
       });
       if (!background) return await registered.result;

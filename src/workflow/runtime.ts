@@ -55,8 +55,19 @@ const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
   workerMaxOldGenerationSizeMb: 512,
   workerMaxYoungGenerationSizeMb: 32,
   workerStackSizeMb: 4,
-  abortGraceMs: 1_000,
+  abortGraceMs: 4_000,
 };
+
+async function settleWithin(promises: Promise<unknown>[], timeoutMs: number): Promise<boolean> {
+  if (promises.length === 0) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    Promise.allSettled(promises).then(() => true),
+    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return settled;
+}
 
 class WorkflowFatalError extends Error {
   readonly workflowFatal = true;
@@ -320,8 +331,8 @@ export async function runWorkflow<T = unknown>(
       abortRuntime(isWorkflowFatalError(error) ? error : new WorkflowFatalError(error.message));
       cleanup();
       void (async () => {
-        await worker.terminate();
-        await Promise.allSettled([...activeAgentTasks]);
+        const drained = await settleWithin([worker.terminate(), ...activeAgentTasks], limits.abortGraceMs);
+        if (!drained) options.onLog?.(`workflow cleanup remains uncertain after ${limits.abortGraceMs}ms`);
         reject(error);
       })();
     };
@@ -348,8 +359,11 @@ export async function runWorkflow<T = unknown>(
       finished = true;
       cleanup();
       void (async () => {
-        await Promise.allSettled([...activeAgentTasks]);
-        await worker.terminate();
+        const drained = await settleWithin([...activeAgentTasks, worker.terminate()], limits.abortGraceMs);
+        if (!drained) {
+          reject(new WorkflowFatalError(`workflow cleanup remains uncertain after ${limits.abortGraceMs}ms`));
+          return;
+        }
         resolve({
           meta,
           result: normalizedResult as T,
@@ -375,9 +389,12 @@ export async function runWorkflow<T = unknown>(
       }
     };
 
-    const onExternalAbort = () => abortWorkflow("workflow aborted");
+    const externalAbortReason = () => options.signal?.reason === undefined
+      ? "workflow aborted"
+      : options.signal.reason instanceof Error ? options.signal.reason.message : String(options.signal.reason);
+    const onExternalAbort = () => abortWorkflow(externalAbortReason());
     if (options.signal?.aborted) {
-      abortWorkflow("workflow aborted");
+      abortWorkflow(externalAbortReason());
     } else {
       options.signal?.addEventListener("abort", onExternalAbort, { once: true });
     }

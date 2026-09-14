@@ -1,5 +1,5 @@
 import type { ParentContextReceipt } from "./core/parent-context.ts";
-import type { WorkflowMetaPhase } from "./workflow/types.ts";
+import type { ChildRunOutcome, WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
 export const EXTERNAL_HARNESSES = ["agy", "claude", "codex"] as const;
@@ -108,6 +108,7 @@ export interface WorkflowAgentSnapshot {
 export interface WorkflowToolDetails {
   name: string;
   status: "running" | "completed" | "error" | "aborted";
+  outcome?: "succeeded" | ChildRunOutcome;
   agentCount: number;
   phases: string[];
   plannedPhases?: WorkflowMetaPhase[];

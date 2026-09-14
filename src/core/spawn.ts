@@ -336,6 +336,16 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         profile: params.profile,
         timeoutMs: timeout.effectiveTimeoutMs(),
       });
+    } else if (params.signal?.aborted && params.signal.reason !== undefined) {
+      const details = result.details as SubagentToolDetails;
+      if (details.status === "aborted") {
+        const reason = params.signal.reason instanceof Error ? params.signal.reason.message : String(params.signal.reason);
+        const previous = details.error;
+        details.error = reason;
+        if (details.progress) details.progress.error = reason;
+        const first = result.content[0];
+        if (first?.type === "text") first.text = previous ? first.text.replace(previous, reason) : `${first.text}: ${reason}`;
+      }
     }
     if (params.context) {
       const details = result.details as SubagentToolDetails;

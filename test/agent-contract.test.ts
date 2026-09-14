@@ -206,6 +206,76 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     disposeSession(session);
   });
 
+  it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-cancel-reason");
+    const startedPath = join(tempDir, "cancel-reason-started");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Cancel worker.\nbackend: codex\n---\n");
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(startedPath)}, 'started\\n');
+setInterval(() => {}, 1000);
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 5_000 });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
+    context.sessionManager.getBranch = () => [];
+    const agent = session.getToolDefinition("Agent") as any;
+    const runs = session.getToolDefinition("external_runs") as any;
+    const launched = await agent.execute(
+      "cancel-reason",
+      { description: "Cancel reason", prompt: "wait", role: "worker", harness: "codex", background: true },
+      undefined,
+      undefined,
+      context,
+    );
+    await vi.waitFor(() => expect(existsSync(startedPath)).toBe(true), { timeout: 5_000 });
+    await runs.execute("cancel", { action: "cancel", runId: launched.details.runId, reason: "superseded by parent" }, undefined, undefined, context);
+    const waited = await runs.execute("wait", { action: "wait", runIds: [launched.details.runId] }, undefined, undefined, context);
+
+    expect(waited.details.outcomes).toEqual([expect.objectContaining({ outcome: "cancelled", error: "superseded by parent" })]);
+    expect(JSON.parse(readFileSync(join(launched.details.recordPath, "summary.json"), "utf8")).summary.error).toBe("superseded by parent");
+
+    const workflow = session.getToolDefinition("workflow") as any;
+    const launchedWorkflow = await workflow.execute(
+      "cancel-workflow-reason",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'cancel-reason', description: 'Cancel reason' }; return await agent('wait', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8").match(/started/g)).toHaveLength(2), { timeout: 5_000 });
+    await runs.execute("cancel-workflow", { action: "cancel", runId: launchedWorkflow.details.runId, reason: "workflow superseded" }, undefined, undefined, context);
+    const waitedWorkflow = await runs.execute("wait-workflow", { action: "wait", runIds: [launchedWorkflow.details.runId] }, undefined, undefined, context);
+
+    expect(waitedWorkflow.details.outcomes).toEqual([expect.objectContaining({ outcome: "cancelled", error: "workflow superseded" })]);
+    expect(readFileSync(launchedWorkflow.details.journalPath, "utf8")).toContain('"error":"workflow superseded","outcome":"cancelled"');
+
+    const timedWorkflow = await workflow.execute(
+      "timeout-workflow",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'timeout', description: 'Timeout' }; return await agent('wait', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const waitedTimeout = await runs.execute("wait-timeout", { action: "wait", runIds: [timedWorkflow.details.runId] }, undefined, undefined, context);
+
+    expect(waitedTimeout.details.outcomes).toEqual([expect.objectContaining({ outcome: "timed_out" })]);
+    expect(readFileSync(timedWorkflow.details.journalPath, "utf8")).toContain('"outcome":"timed_out"');
+    disposeSession(session);
+  }, 15_000);
+
   it("loads as a pi package extension from package metadata", async () => {
     const resourceLoader = new DefaultResourceLoader({
       cwd,

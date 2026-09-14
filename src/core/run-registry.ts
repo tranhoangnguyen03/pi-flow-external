@@ -1,12 +1,14 @@
 export type RegisteredRunKind = "agent" | "workflow";
 export type RegisteredRunState = "running" | "terminal";
 export type RegisteredRunStatus = "done" | "error" | "aborted";
+export type RegisteredRunOutcomeName = "succeeded" | "failed" | "cancelled" | "timed_out";
 
 export interface RegisteredRunOutcome {
   runId: string;
   kind: RegisteredRunKind;
   status: RegisteredRunStatus;
-  settledAt: number;
+  outcome: RegisteredRunOutcomeName;
+  settledAt?: number;
   result?: unknown;
   error?: string;
 }
@@ -39,11 +41,12 @@ export interface StartRegisteredRun<T> {
   runId: string;
   kind: RegisteredRunKind;
   sessionId: string;
+  sessionVersion?: number;
   project: string;
   workflowRunId?: string;
   signal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T> | T;
-  outcome?: (result: T) => Omit<RegisteredRunOutcome, "runId" | "kind" | "settledAt">;
+  outcome?: (result: T, signal: AbortSignal) => Omit<RegisteredRunOutcome, "runId" | "kind" | "settledAt">;
   failure?: (error: unknown, signal: AbortSignal) => Omit<RegisteredRunOutcome, "runId" | "kind" | "settledAt">;
 }
 
@@ -58,14 +61,29 @@ const DEFAULT_COMPLETED_LIMIT = 100;
 export class RunRegistry {
   private readonly entries = new Map<string, InternalEntry>();
   private readonly completed: string[] = [];
+  private readonly sessionVersions = new Map<string, number>();
+  private readonly closedSessions = new Set<string>();
 
-  constructor(private readonly completedLimit = DEFAULT_COMPLETED_LIMIT) {
+  constructor(private readonly completedLimit = DEFAULT_COMPLETED_LIMIT, private readonly shutdownGraceMs = 4_000) {
     if (!Number.isInteger(completedLimit) || completedLimit < 0) {
       throw new Error("completed run limit must be a non-negative integer");
     }
+    if (!Number.isInteger(shutdownGraceMs) || shutdownGraceMs < 0) throw new Error("shutdown grace must be a non-negative integer");
+  }
+
+  sessionVersion(sessionId: string): number {
+    return this.sessionVersions.get(sessionId) ?? 0;
+  }
+
+  openSession(sessionId: string): void {
+    this.sessionVersions.set(sessionId, this.sessionVersion(sessionId) + 1);
+    this.closedSessions.delete(sessionId);
   }
 
   start<T>(params: StartRegisteredRun<T>): RegisteredRunHandle<T> {
+    if (this.closedSessions.has(params.sessionId) || (params.sessionVersion !== undefined && params.sessionVersion !== this.sessionVersion(params.sessionId))) {
+      throw new Error(`Session ${params.sessionId} is closed; run was not started`);
+    }
     if (this.entries.has(params.runId)) {
       throw new Error(`Run is already registered: ${params.runId}`);
     }
@@ -101,26 +119,32 @@ export class RunRegistry {
     }
     const result = execution.then(
       (value) => {
-        const described = params.outcome?.(value);
+        const described = params.outcome?.(value, controller.signal);
+        const status = described?.status ?? "done";
         this.settle(entry, {
           runId: entry.runId,
           kind: entry.kind,
-          status: described?.status ?? "done",
+          status,
+          outcome: described?.outcome ?? (status === "done" ? "succeeded" : status === "aborted" ? "cancelled" : "failed"),
           settledAt: Date.now(),
-          ...(described?.result !== undefined ? { result: described.result } : { result: value }),
+          ...(described ? described.result !== undefined ? { result: described.result } : {} : { result: value }),
           ...(described?.error ? { error: described.error } : {}),
         });
         return value;
       },
       (error) => {
         const described = params.failure?.(error, controller.signal);
+        const status = described?.status ?? (controller.signal.aborted ? "aborted" : "error");
         this.settle(entry, {
           runId: entry.runId,
           kind: entry.kind,
-          status: described?.status ?? (controller.signal.aborted ? "aborted" : "error"),
+          status,
+          outcome: described?.outcome ?? (status === "aborted" ? "cancelled" : "failed"),
           settledAt: Date.now(),
           ...(described?.result !== undefined ? { result: described.result } : {}),
-          error: described?.error ?? (error instanceof Error ? error.message : String(error)),
+          error: described?.error ?? (controller.signal.aborted && controller.signal.reason !== undefined
+            ? controller.signal.reason instanceof Error ? controller.signal.reason.message : String(controller.signal.reason)
+            : error instanceof Error ? error.message : String(error)),
         });
         throw error;
       },
@@ -156,10 +180,21 @@ export class RunRegistry {
     return "requested";
   }
 
-  async shutdownSession(sessionId: string, reason = "session shutdown"): Promise<void> {
+  async shutdownSession(sessionId: string, reason = "session shutdown"): Promise<{ settled: string[]; pending: string[] }> {
+    this.closedSessions.add(sessionId);
+    this.sessionVersions.set(sessionId, this.sessionVersion(sessionId) + 1);
     const owned = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId && entry.state === "running");
     for (const entry of owned) entry.controller.abort(new Error(reason));
-    await Promise.allSettled(owned.map((entry) => entry.result));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(owned.map((entry) => entry.result)),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, this.shutdownGraceMs); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    const settled = owned.filter((entry) => entry.state === "terminal").map((entry) => entry.runId);
+    const pending = owned.filter((entry) => entry.state !== "terminal");
+    for (const entry of pending) if (this.entries.get(entry.runId) === entry) this.entries.delete(entry.runId);
+    return { settled, pending: pending.map((entry) => entry.runId) };
   }
 
   wait(runIds: string[], mode: "any" | "all", signal?: AbortSignal): Promise<RegisteredRunWaitResult> {
@@ -206,6 +241,7 @@ export class RunRegistry {
     entry.resolveTerminal(outcome);
     for (const listener of [...entry.listeners]) listener(outcome);
     entry.listeners.clear();
+    if (this.entries.get(entry.runId) !== entry) return;
     this.completed.push(entry.runId);
     while (this.completed.length > this.completedLimit) {
       const evicted = this.completed.shift();

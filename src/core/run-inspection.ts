@@ -32,6 +32,9 @@ export interface RunRecordListItem {
   runId: string;
   queuedAt?: string;
   status?: string;
+  outcome?: "succeeded" | "failed" | "cancelled" | "timed_out";
+  settledAt?: number;
+  error?: string;
   description?: string;
   backend?: string;
   project?: string;
@@ -272,11 +275,18 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
   const terminal = asRecord(summary.document?.summary);
   const processStarted = Boolean(timeValue(terminal?.processStartedAt) ?? observation?.processStartedAt ?? observation?.outputAvailable);
   const status = asString(terminal?.status) ?? (processStarted ? "running" : "queued");
+  const outcome = terminal
+    ? status === "done" ? "succeeded" : terminal.timedOut === true ? "timed_out" : status === "aborted" ? "cancelled" : "failed"
+    : undefined;
+  const settledAt = documentTime(summary.document?.finishedAt);
   const queuedAt = asString(summary.document?.queuedAt) ?? observation?.queuedAt;
   return {
     runId,
     ...(queuedAt ? { queuedAt } : {}),
     status,
+    ...(outcome ? { outcome } : {}),
+    ...(settledAt !== undefined ? { settledAt } : {}),
+    ...(boundedString(terminal?.error) ? { error: boundedString(terminal?.error) } : {}),
     ...(boundedString(metadata?.description) ? { description: boundedString(metadata?.description) } : {}),
     ...(asString(metadata?.backend) ? { backend: asString(metadata?.backend) } : {}),
     ...(asString(metadata?.project) ? { project: asString(metadata?.project) } : {}),
@@ -285,6 +295,12 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
     outputAvailable: Boolean(canonicalResult(terminal) || assistantItems(terminal).length || observation?.outputAvailable),
     integrity: observation ? observation.integrity : summary.integrity,
   };
+}
+
+function documentTime(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : undefined;
 }
 
 async function readObservation(eventsPath: string, runId: string): Promise<RunObservation> {

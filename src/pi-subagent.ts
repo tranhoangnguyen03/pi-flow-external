@@ -411,6 +411,7 @@ function createAgentTool(
 
       const queuedAt = Date.now();
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
+      const sessionVersion = state.registry.sessionVersion(sessionId);
       const project = ctx.cwd;
       const executionContext = { cwd: project } as ExtensionContext;
       const limiter = state.limiter;
@@ -528,15 +529,19 @@ function createAgentTool(
         runId: runRecord.runId,
         kind: "agent",
         sessionId,
+        sessionVersion,
         project,
         ...(background ? {} : { signal }),
         run: executeRun,
-        outcome: (result) => {
+        outcome: (result, runSignal) => {
           const details = result.details as SubagentToolDetails;
           return {
             status: details.status === "done" ? "done" : details.status === "aborted" ? "aborted" : "error",
+            outcome: details.status === "done" ? "succeeded" : details.timedOut ? "timed_out" : details.status === "aborted" ? "cancelled" : "failed",
             ...(details.result !== undefined ? { result: details.result } : {}),
-            ...(details.error ? { error: details.error } : {}),
+            ...(runSignal.aborted && runSignal.reason !== undefined
+              ? { error: runSignal.reason instanceof Error ? runSignal.reason.message : String(runSignal.reason) }
+              : details.error ? { error: details.error } : {}),
           };
         },
       });
@@ -727,6 +732,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     }
 
     pi.on("session_start", (_event, ctx) => {
+      rootState.registry.openSession(ctx.sessionManager.getSessionId());
       syncMaxConcurrentSubagents();
       usageStatusState.calls.clear();
       usageStatusState.latestCacheHitRate = undefined;
@@ -743,8 +749,13 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
-    pi.on("session_shutdown", (_event, ctx) =>
-      rootState.registry.shutdownSession(ctx.sessionManager.getSessionId()));
+    pi.on("session_shutdown", async (_event, ctx) => {
+      const cleanup = await rootState.registry.shutdownSession(ctx.sessionManager.getSessionId());
+      if (cleanup.pending.length && ctx.hasUI) {
+        const shown = cleanup.pending.slice(0, 10);
+        ctx.ui.notify(`External run cleanup could not be confirmed for ${shown.join(", ")}${cleanup.pending.length > shown.length ? ` and ${cleanup.pending.length - shown.length} more` : ""}; their evidence is interrupted or uncertain.`, "warning");
+      }
+    });
 
     pi.on("before_agent_start", (event, ctx) => {
       const tools = pi.getAllTools();

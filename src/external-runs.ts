@@ -57,14 +57,75 @@ function assertOwnedRecord(item: RunRecordListItem | undefined, sessionId: strin
 function terminalRecord(item: RunRecordListItem): RegisteredRunOutcome | undefined {
   if (item.integrity !== "complete") return undefined;
   const status = item.status === "done" ? "done" : item.status === "aborted" ? "aborted" : "error";
-  return { runId: item.runId, kind: "agent", status, settledAt: Date.now() };
+  return {
+    runId: item.runId,
+    kind: "agent",
+    status,
+    outcome: item.outcome ?? (status === "done" ? "succeeded" : status === "aborted" ? "cancelled" : "failed"),
+    ...(item.settledAt !== undefined ? { settledAt: item.settledAt } : {}),
+    ...(item.error ? { error: item.error } : {}),
+  };
 }
 
 function clip(value: string | undefined): string | undefined {
   return value && value.length > 512 ? `${value.slice(0, 511)}…` : value;
 }
 
-function liveSummary(entry: RegisteredRunEntry): { runId: string; [key: string]: unknown } {
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function liveAgentSummary(entry: RegisteredRunEntry) {
+  const observation = record(entry.observation);
+  const assistantOutput = record(observation?.assistantOutput);
+  return {
+    runId: entry.runId,
+    kind: "agent",
+    live: entry.state === "running",
+    task: { description: clip(typeof observation?.description === "string" ? observation.description : undefined), backend: observation?.backend },
+    state: {
+      status: typeof observation?.status === "string" ? observation.status : entry.outcome?.status ?? "running",
+      outcome: entry.outcome?.outcome,
+      queuedAt: observation?.queuedAt,
+      startedAt: observation?.startedAt,
+      processStartedAt: observation?.processStartedAt,
+      firstActivityAt: observation?.firstActivityAt,
+      lastActivityAt: observation?.lastActivityAt,
+      activityCount: observation?.activityCount,
+      endedAt: observation?.endedAt,
+      error: clip(entry.outcome?.error ?? (typeof observation?.error === "string" ? observation.error : undefined)),
+    },
+    output: {
+      available: entry.outcome?.result !== undefined || Array.isArray(assistantOutput?.messages),
+      status: entry.state === "running" ? "preliminary" : entry.outcome?.outcome === "succeeded" ? "final" : "interrupted",
+    },
+  };
+}
+
+function listedAgent(entry: RegisteredRunEntry) {
+  const observation = record(entry.observation);
+  return {
+    runId: entry.runId,
+    status: typeof observation?.status === "string" ? observation.status : entry.outcome?.status ?? "running",
+    outcome: entry.outcome?.outcome,
+    description: clip(typeof observation?.description === "string" ? observation.description : undefined),
+    outputAvailable: entry.outcome?.result !== undefined || record(observation?.assistantOutput) !== undefined,
+    live: entry.state === "running",
+    ...(entry.outcome?.settledAt !== undefined ? { settledAt: entry.outcome.settledAt } : {}),
+    ...(entry.outcome?.error ? { error: clip(entry.outcome.error) } : {}),
+    ...(entry.workflowRunId ? { workflowRunId: entry.workflowRunId } : {}),
+  };
+}
+
+function historicalAgent(item: RunRecordListItem) {
+  return {
+    ...item,
+    status: item.integrity === "complete" ? item.status : "interrupted_or_uncertain",
+    live: false,
+  };
+}
+
+function liveSummary(entry: RegisteredRunEntry, allChildren = false): { runId: string; [key: string]: unknown } {
   if (entry.kind === "workflow") {
     const observation = entry.observation as WorkflowToolDetails | undefined;
     return {
@@ -74,41 +135,59 @@ function liveSummary(entry: RegisteredRunEntry): { runId: string; [key: string]:
       task: observation ? { name: clip(observation.name), source: observation.source } : undefined,
       state: {
         status: entry.state === "running" ? "running" : entry.outcome?.status,
+        outcome: entry.outcome?.outcome ?? observation?.outcome,
         error: entry.outcome?.error,
         agentCount: observation?.agentCount,
       },
       output: { available: entry.outcome?.result !== undefined, status: entry.state === "running" ? "preliminary" : entry.outcome?.status === "done" ? "final" : "interrupted" },
-      children: observation?.agents.slice(0, 50).map((agent) => ({ runId: agent.externalRunId, label: clip(agent.label), status: agent.status })),
+      children: (allChildren ? observation?.agents : observation?.agents.slice(0, 50))?.map((agent) => ({ runId: agent.externalRunId, label: clip(agent.label), status: agent.status })),
     };
   }
   return { runId: entry.runId, kind: entry.kind, observation: entry.observation, state: entry.state, outcome: entry.outcome };
 }
 
-function journalSummary(journal: LoadedWorkflowJournal) {
+function journalSummary(journal: LoadedWorkflowJournal, allChildren = false) {
   return {
     runId: journal.runId,
     kind: "workflow",
     task: { name: clip(journal.name), source: journal.source },
-    state: { status: journal.status, error: journal.error, agentCount: journal.children.length },
+    state: { status: journal.status, outcome: journal.outcome, error: journal.error, agentCount: journal.children.length },
     output: { available: journal.result !== undefined, status: journal.status === "running" ? "preliminary" : journal.status === "done" ? "final" : "interrupted" },
-    children: journal.children.slice(0, 50).map((child) => ({ runId: child.runId, label: clip(child.label), status: child.failed ? "error" : "done" })),
+    children: (allChildren ? journal.children : journal.children.slice(0, 50)).map((child) => ({ runId: child.runId, label: clip(child.label), status: child.failed ? "error" : "done" })),
   };
 }
 
-function encodeWorkflowCursor(runId: string, view: RunInspectionView, offset: number): string {
-  return Buffer.from(JSON.stringify({ v: 1, kind: "workflow-inspect", runId, view, offset })).toString("base64url");
+function encodeProjectionCursor(runId: string, view: RunInspectionView, offset: number): string {
+  return Buffer.from(JSON.stringify({ v: 1, kind: "projection-inspect", runId, view, offset })).toString("base64url");
 }
 
-function decodeWorkflowCursor(value: string, runId: string, view: RunInspectionView): number {
+function decodeProjectionCursor(value: string, runId: string, view: RunInspectionView): number {
   if (!value || value.length > 4096) throw new Error("Invalid cursor");
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
     const keys = Object.keys(parsed).sort().join(",");
-    if (keys !== "kind,offset,runId,v,view" || parsed.v !== 1 || parsed.kind !== "workflow-inspect" || parsed.runId !== runId || parsed.view !== view || !Number.isSafeInteger(parsed.offset) || (parsed.offset as number) < 0) throw new Error();
+    if (keys !== "kind,offset,runId,v,view" || parsed.v !== 1 || parsed.kind !== "projection-inspect" || parsed.runId !== runId || parsed.view !== view || !Number.isSafeInteger(parsed.offset) || (parsed.offset as number) < 0) throw new Error();
     return parsed.offset as number;
   } catch {
     throw new Error("Invalid cursor");
   }
+}
+
+function isProjectionCursor(value: string | undefined): boolean {
+  if (!value || value.length > 4096) return false;
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"))?.kind === "projection-inspect";
+  } catch {
+    return false;
+  }
+}
+
+function liveAgentOutput(entry: RegisteredRunEntry): string | undefined {
+  if (entry.outcome?.result !== undefined) return typeof entry.outcome.result === "string" ? entry.outcome.result : JSON.stringify(entry.outcome.result);
+  const messages = record(record(entry.observation)?.assistantOutput)?.messages;
+  if (!Array.isArray(messages)) return undefined;
+  const text = messages.flatMap((message) => typeof record(message)?.text === "string" ? [record(message)!.text as string] : []).join("\n");
+  return text || undefined;
 }
 
 function utf8Page(text: string, offset: number, limit: number): { text: string; nextOffset?: number } {
@@ -136,7 +215,8 @@ async function previewOutcome(outcome: RegisteredRunOutcome, runsDirectory: stri
     runId: outcome.runId,
     kind: outcome.kind,
     status: outcome.status,
-    settledAt: outcome.settledAt,
+    outcome: outcome.outcome,
+    ...(outcome.settledAt !== undefined ? { settledAt: outcome.settledAt } : {}),
     ...(outcome.error ? { error: clip(outcome.error) } : {}),
     ...(preview ? { preview: preview.length > 512 ? `${preview.slice(0, 511)}…` : preview } : {}),
     outputRef: { runId: outcome.runId, view: "output" },
@@ -173,10 +253,15 @@ export function createExternalRunsTool(
           : [];
         const current = params.cursor || params.workflowRunId
           ? []
-          : options.registry.list(sessionId, project).filter((entry) => entry.kind === "workflow").map(liveSummary);
+          : options.registry.list(sessionId, project).filter((entry) => entry.kind === "workflow").map((entry) => liveSummary(entry));
         const currentIds = new Set(current.map((entry) => entry.runId));
-        const workflows = [...current, ...historical.filter((journal) => !currentIds.has(journal.runId)).map(journalSummary)];
-        return result(JSON.stringify({ workflows, runs: page.items, nextCursor: page.nextCursor }), { workflows, runs: page.items, nextCursor: page.nextCursor });
+        const workflows = [...current, ...historical.filter((journal) => !currentIds.has(journal.runId)).map((journal) => journalSummary(journal))];
+        const liveAgents = params.cursor ? [] : options.registry.list(sessionId, project)
+          .filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId))
+          .map(listedAgent);
+        const liveIds = new Set(liveAgents.map((entry) => entry.runId));
+        const runs = [...liveAgents, ...page.items.filter((entry) => !liveIds.has(entry.runId)).map(historicalAgent)];
+        return result(JSON.stringify({ workflows, runs, nextCursor: page.nextCursor }), { workflows, runs, nextCursor: page.nextCursor });
       }
 
       if (params.action === "inspect") {
@@ -191,18 +276,35 @@ export function createExternalRunsTool(
         if (historical && historical.project !== project) throw new Error("Run is unknown or unavailable in this session");
         if (entry?.kind === "workflow" || historical) {
           const source = view === "summary"
-            ? entry ? liveSummary(entry) : journalSummary(historical!)
+            ? entry ? liveSummary(entry, true) : journalSummary(historical!, true)
             : view === "output"
               ? { runId: params.runId, result: entry?.outcome?.result ?? historical?.result }
               : { runId: params.runId, status: entry?.outcome?.status ?? historical?.status ?? "running", error: entry?.outcome?.error ?? historical?.error };
           const text = JSON.stringify(source);
-          const offset = params.cursor ? decodeWorkflowCursor(params.cursor, params.runId, view) : 0;
+          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
           const page = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
-          const nextCursor = page.nextOffset === undefined ? undefined : encodeWorkflowCursor(params.runId, view, page.nextOffset);
+          const nextCursor = page.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, page.nextOffset);
           return result(page.text, { runId: params.runId, view, text: page.text, nextCursor });
         }
         const durable = await getRunRecord(runsDirectory, params.runId);
         if (!entry) assertOwnedRecord(durable, sessionId, project);
+        if (view === "summary") {
+          const source = entry ? liveAgentSummary(entry) : historicalAgent(durable!);
+          const text = JSON.stringify(source);
+          const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
+          const portion = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
+          const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset);
+          return result(portion.text, { runId: params.runId, view, text: portion.text, nextCursor });
+        }
+        if (view === "output" && entry?.kind === "agent" && (!params.cursor || isProjectionCursor(params.cursor))) {
+          const text = liveAgentOutput(entry);
+          if (text !== undefined) {
+            const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view) : 0;
+            const portion = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
+            const nextCursor = portion.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, portion.nextOffset);
+            return result(portion.text, { runId: params.runId, view, text: portion.text, outputStatus: entry.state === "running" ? "preliminary" : entry.outcome?.outcome === "succeeded" ? "final" : "interrupted", nextCursor });
+          }
+        }
         const page = await inspectRun({ runsDirectory, runId: params.runId, view, limitBytes: params.limitBytes, cursor: params.cursor });
         const text = page.items.map((item) => item.text).join("\n");
         return result(text || `No ${view} is available for ${params.runId}.`, { ...page });
@@ -249,8 +351,8 @@ export function createExternalRunsTool(
             terminal: {
               runId,
               kind: "workflow" as const,
-              status: historicalWorkflow.status === "done" ? "done" as const : "error" as const,
-              settledAt: Date.now(),
+              status: historicalWorkflow.status === "done" ? "done" as const : historicalWorkflow.outcome === "cancelled" || historicalWorkflow.outcome === "timed_out" ? "aborted" as const : "error" as const,
+              outcome: historicalWorkflow.outcome ?? (historicalWorkflow.status === "done" ? "succeeded" as const : "failed" as const),
               result: historicalWorkflow.result,
               error: historicalWorkflow.error,
             },

@@ -463,6 +463,7 @@ describe("runWorkflow", () => {
     expect(registry.cancel("run_target", "not needed")).toBe("requested");
     releaseSibling();
     await expect(result).resolves.toMatchObject({ result: ["cancelled", "sibling done"] });
+    expect(registry.get("run_target")?.outcome).toMatchObject({ outcome: "cancelled", error: "not needed" });
     expect(registry.get("run_sibling")?.outcome?.status).toBe("done");
   });
 
@@ -492,6 +493,30 @@ describe("runWorkflow", () => {
 
     await expect(failure).rejects.toMatchObject({ name: "ChildRunError", runId: "run_bad" });
     expect(slowDrained).toBe(true);
+  });
+
+  it("bounds fatal cleanup when a child ignores cancellation", async () => {
+    const logs: string[] = [];
+    const failure = runWorkflow(
+      `${META}return await parallel([() => agent('stuck', { label: 'stuck' }), () => agent('bad', { label: 'bad' })]);`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        limits: { abortGraceMs: 20 },
+        onLog: (message) => logs.push(message),
+        runAgent: async (call) => {
+          if (call.label === "bad") throw new ChildRunError({ runId: "run_bad", outcome: "failed", message: "bad child" });
+          return await new Promise(() => {});
+        },
+      },
+    );
+
+    const outcome = await Promise.race([
+      failure.then(() => "resolved", (error) => error),
+      delay(200).then(() => "cleanup timed out"),
+    ]);
+    expect(outcome).toMatchObject({ name: "ChildRunError", runId: "run_bad" });
+    expect(logs).toContain("workflow cleanup remains uncertain after 20ms");
   });
 
   it("propagates abort raised mid-run", async () => {
