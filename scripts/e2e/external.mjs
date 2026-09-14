@@ -124,7 +124,7 @@ async function main() {
   if (!options.keep) cleanupProfilePath = profilePath;
 
   const childPrompt = `Read ${JSON.stringify(targetPath)} and reply with exactly ${options.backend.toUpperCase()}_EXTERNAL_OK:<trimmed file content>. Do not edit files.`;
-  const workflow = `export const meta = { name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} })\n]);\nreturn results;`;
+  const workflow = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(options.backend)} })\n]);\nreturn results;`;
   const rootPrompt = options.workflow
     ? `Call workflow exactly once with this exact script:\n\n${workflow}\n\nReport the returned token lines.`
     : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(options.backend)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;

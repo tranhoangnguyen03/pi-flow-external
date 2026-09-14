@@ -19,7 +19,7 @@ export const workflowToolParameters = Type.Object({
     Type.String({
       description: [
         "Raw JavaScript workflow script (no Markdown fences) for an ad-hoc workflow.",
-        "First statement: export const meta = { name: 'short_name', description: 'non-empty' }.",
+        "First statement: export const meta = { apiVersion: 1, name: 'short_name', description: 'non-empty' }.",
         "Use agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Must call agent() at least once and return a JSON-serializable value. Results are canonicalized to JSON; non-plain objects are rejected.",
         "Provide exactly one of `script`, `name`, or `scriptPath`.",
       ].join(" "),

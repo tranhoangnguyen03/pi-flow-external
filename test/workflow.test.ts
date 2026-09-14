@@ -19,7 +19,7 @@ import { createStructuredOutputTool, type StructuredOutputCapture } from "../src
 import { resolveExternalProfile } from "../src/profiles.ts";
 import type { SubagentProfile } from "../src/types.ts";
 
-const META = "export const meta = { name: 'wf', description: 'a workflow' };\n";
+const META = "export const meta = { apiVersion: 1, name: 'wf', description: 'a workflow' };\n";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,8 +53,18 @@ describe("parseWorkflowScript", () => {
   });
 
   it("requires non-empty name and description", () => {
-    expect(() => parseWorkflowScript("export const meta = { name: 'x' };\n")).toThrow(/description/);
-    expect(() => parseWorkflowScript("export const meta = { description: 'y' };\n")).toThrow(/name/);
+    expect(() => parseWorkflowScript("export const meta = { apiVersion: 1, name: 'x' };\n")).toThrow(/description/);
+    expect(() => parseWorkflowScript("export const meta = { apiVersion: 1, description: 'y' };\n")).toThrow(/name/);
+  });
+
+  it("requires the current workflow API before execution", async () => {
+    expect(() => parseWorkflowScript("export const meta = { name: 'x', description: 'y' };\n")).toThrow(/apiVersion: 1.*no children were launched/i);
+    const runAgent = vi.fn<WorkflowAgentRunner>();
+    await expect(runWorkflow(
+      "export const meta = { apiVersion: 2, name: 'x', description: 'y' };\nreturn await agent('no');",
+      { cwd: "/tmp", limiter: new ConcurrencyLimiter(1), runAgent },
+    )).rejects.toThrow(/apiVersion: 1.*no children were launched/i);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it("rejects non-deterministic time/random APIs", () => {
@@ -689,7 +699,7 @@ describe("saved workflow registry", () => {
   }
 
   function workflowScript(name: string, description = "saved workflow"): string {
-    return `export const meta = { name: '${name}', description: '${description}' };\nreturn await agent('hello');`;
+    return `export const meta = { apiVersion: 1, name: '${name}', description: '${description}' };\nreturn await agent('hello');`;
   }
 
   it("loads global saved workflows from the agent dir", () => {
@@ -762,7 +772,7 @@ describe("saved workflow registry", () => {
       writeFileSync(
         join(dir, `run-${runId}.jsonl`),
         [
-          JSON.stringify({ type: "run_start", runId }),
+          JSON.stringify({ type: "run_start", version: 1, apiVersion: 1, runId }),
           JSON.stringify({ type: "agent_result", index: 1, fingerprint: "a", result: "one" }),
           "{ truncated",
           JSON.stringify({ type: "agent_result", index: 2, fingerprint: "b", result: "two" }),
@@ -772,6 +782,17 @@ describe("saved workflow registry", () => {
       const journal = await loadWorkflowJournal(dir, runId);
 
       expect(journal?.agentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects replay from an incompatible workflow API", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
+    try {
+      const runId = "wf_legacy_test";
+      writeFileSync(join(dir, `run-${runId}.jsonl`), `${JSON.stringify({ type: "run_start", version: 1, runId })}\n`);
+      await expect(loadWorkflowJournal(dir, runId)).rejects.toThrow(/meta\.apiVersion: 1.*no children were launched/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

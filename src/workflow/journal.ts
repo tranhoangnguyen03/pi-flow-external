@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
-import type { WorkflowAgentResultEvent, WorkflowCachedAgentResult } from "./types.ts";
+import { WORKFLOW_API_VERSION, type WorkflowAgentResultEvent, type WorkflowCachedAgentResult } from "./types.ts";
 
 const JOURNAL_VERSION = 1;
 const RUN_ID_PREFIX = "wf_";
@@ -21,6 +21,7 @@ export interface WorkflowSessionContextLike {
 
 export interface WorkflowRunIdentity {
   runId: string;
+  apiVersion: typeof WORKFLOW_API_VERSION;
   scriptHash: string;
   argsHash: string;
 }
@@ -62,7 +63,8 @@ export function createWorkflowRunIdentity(script: string, args: unknown): Workfl
   return {
     scriptHash,
     argsHash,
-    runId: `${RUN_ID_PREFIX}${hashStableValue({ scriptHash, argsHash }).slice(0, 8)}_${randomUUID().replace(/-/g, "")}`,
+    apiVersion: WORKFLOW_API_VERSION,
+    runId: `${RUN_ID_PREFIX}${hashStableValue({ apiVersion: WORKFLOW_API_VERSION, scriptHash, argsHash }).slice(0, 8)}_${randomUUID().replace(/-/g, "")}`,
   };
 }
 
@@ -106,6 +108,11 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
       break;
     }
     if (entry.type === "run_start") {
+      if (entry.version !== JOURNAL_VERSION || entry.apiVersion !== WORKFLOW_API_VERSION) {
+        throw new Error(
+          `Workflow journal ${path} uses an incompatible API contract; recompose with meta.apiVersion: ${WORKFLOW_API_VERSION}. No children were launched`,
+        );
+      }
       seenRunStart = entry.runId === runId;
       continue;
     }
@@ -141,6 +148,7 @@ export async function createWorkflowJournalWriter(params: {
     `${JSON.stringify({
       type: "run_start",
       version: JOURNAL_VERSION,
+      apiVersion: params.identity.apiVersion,
       runId: params.identity.runId,
       name: params.name,
       source: params.source,

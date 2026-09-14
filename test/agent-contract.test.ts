@@ -194,12 +194,12 @@ describe("pi-subagent agent contract", () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "audit.js"),
-      `export const meta = { name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
+      `export const meta = { apiVersion: 1, name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
     );
     mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "workflows", "project.js"),
-      `export const meta = { name: 'project-review', description: 'Project-only review.' };\nreturn await agent('review');`,
+      `export const meta = { apiVersion: 1, name: 'project-review', description: 'Project-only review.' };\nreturn await agent('review');`,
     );
 
     const { session, model, modelRegistry } = await createSession();

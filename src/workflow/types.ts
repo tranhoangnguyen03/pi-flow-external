@@ -8,10 +8,13 @@ export interface WorkflowMetaPhase {
 }
 
 export interface WorkflowMeta {
+  apiVersion: typeof WORKFLOW_API_VERSION;
   name: string;
   description: string;
   phases?: WorkflowMetaPhase[];
 }
+
+export const WORKFLOW_API_VERSION = 1 as const;
 
 /** A single agent() invocation requested by a workflow script. */
 export interface WorkflowAgentCall {
