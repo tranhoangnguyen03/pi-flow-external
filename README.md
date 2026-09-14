@@ -350,7 +350,10 @@ A failed backend can still have complete diagnostic evidence. Treat `incompleteR
 - **Claude rejects `--dangerously-skip-permissions` under root:** reload the current extension version; root runs use Claude's `auto` permission mode.
 - **Nested agent cannot find the repository:** include the repository's absolute path and required context in the prompt.
 - **Child is missing earlier decisions:** share the smallest sufficient parent context (`context: { mode: "recent", turns: N }` or `{ mode: "full" }`), or restate the missing decisions in the prompt.
-- **Run failed with complete records:** inspect the run's `summary.json` and `events.ndjson`; do not retry automatically unless requested.
+- **Workflow rejected before any child launched:** the script is missing or using an unsupported `meta.apiVersion` declaration. Recompose it starting with `export const meta = { apiVersion: 1, name, description }`; nothing ran, so nothing needs cleanup.
+- **Run shows `interrupted_or_uncertain`:** the host exited before the run's termination was confirmed. Treat its evidence as interrupted — partial output may be readable via `/external runs` — but never resume live ownership after restart; start a new run or replay explicitly.
+- **Inspection cursor fails as stale:** the run's content changed while paging (live updates or registry handoff). Restart the inspection from the first page; cursors are single-sequence continuation tokens.
+- **Run failed with complete records:** read its output and diagnostics via `/external runs`, or inspect `summary.json`/`events.ndjson` directly; do not retry automatically unless requested.
 - **Sensitive content appears in evidence:** remove the affected run directory. Local redaction is not a secrecy boundary.
 
 ## Development

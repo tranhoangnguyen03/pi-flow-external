@@ -82,7 +82,7 @@ export function createExternalHelpTool(
   return defineTool({
     name: "external_help",
     label: "External Help",
-    description: "Read-only help on demand for external roles, permission behavior, and workflow usage or discovery.",
+    description: "Read-only help on demand for external roles, permission behavior, and workflow usage (including background runs, external_runs supervision syntax, and replay) or saved-workflow discovery.",
     promptSnippet: EXTERNAL_HELP_PROMPT_SNIPPET,
     parameters: externalHelpParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

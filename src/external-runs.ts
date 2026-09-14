@@ -14,17 +14,46 @@ const WORKFLOW_ID = /^wf_[A-Za-z0-9_-]{1,128}$/;
 const MAX_TARGETS = 100;
 
 const externalRunsParameters = Type.Object({
-  action: StringEnum(["list", "inspect", "wait", "cancel"] as const),
-  runId: Type.Optional(Type.String()),
-  runIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: MAX_TARGETS })),
-  view: Type.Optional(StringEnum(["summary", "output", "diagnostics"] as const)),
-  mode: Type.Optional(StringEnum(["any", "all"] as const)),
-  cursor: Type.Optional(Type.String()),
-  workflowCursor: Type.Optional(Type.String()),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-  limitBytes: Type.Optional(Type.Integer({ minimum: 4, maximum: 65536 })),
-  workflowRunId: Type.Optional(Type.String()),
-  reason: Type.Optional(Type.String({ maxLength: 512 })),
+  action: StringEnum(["list", "inspect", "wait", "cancel"] as const, {
+    description: "list: page runs/workflows; inspect: read one run; wait: block until selected terminal outcomes; cancel: stop one run.",
+  }),
+  runId: Type.Optional(Type.String({
+    description: "Target run ID (run_... agent, wf_... workflow). Required for inspect/cancel/wait of a single run.",
+  })),
+  runIds: Type.Optional(Type.Array(Type.String(), {
+    minItems: 1,
+    maxItems: MAX_TARGETS,
+    description: "Wait target set for mode any|all. Deduplicated; already-terminal targets return immediately.",
+  })),
+  view: Type.Optional(StringEnum(["summary", "output", "diagnostics"] as const, {
+    description: "inspect view: summary (state/freshness/refs, default), output (assistant text, partial or final), diagnostics (tool activity/errors).",
+  })),
+  mode: Type.Optional(StringEnum(["any", "all"] as const, {
+    description: "wait mode: any returns on the first terminal outcome; all waits for every target. Neither cancels pending work; an unsuccessful selected workflow returns early even in all mode.",
+  })),
+  cursor: Type.Optional(Type.String({
+    description: "Opaque continuation cursor from a prior response; pass back verbatim to page. Stale/reused cursors fail with an actionable error.",
+  })),
+  workflowCursor: Type.Optional(Type.String({
+    description: "Opaque cursor for paging workflow-child listings (list action); pass back verbatim.",
+  })),
+  limit: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: 100,
+    description: "Max entries per list/children page.",
+  })),
+  limitBytes: Type.Optional(Type.Integer({
+    minimum: 4,
+    maximum: 65536,
+    description: "Max bytes per output/diagnostics page (inspect); follow nextCursor for the remainder.",
+  })),
+  workflowRunId: Type.Optional(Type.String({
+    description: "list filter: children of this wf_... workflow only.",
+  })),
+  reason: Type.Optional(Type.String({
+    maxLength: 512,
+    description: "Optional cancellation reason recorded with the run evidence.",
+  })),
 });
 
 export type ExternalRunsParams = Static<typeof externalRunsParameters>;
