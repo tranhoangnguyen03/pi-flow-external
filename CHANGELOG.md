@@ -4,6 +4,34 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.0.0-external.0] - 2026-09-14
+
+Child observation and workflow-aware supervision. Full design: `docs/plans/2026-09-14-child-observation-and-supervision-design.md`.
+
+### Breaking
+
+- Workflows must declare `meta.apiVersion: 1`. Unversioned or unsupported scripts are rejected before any child launches, with recomposition guidance; one current contract, no legacy failure mode.
+- `agent()` throws a structured, catchable `ChildRunError` (outcome, run ID, reason, output/diagnostic references) for failed, cancelled, or timed-out children instead of returning `null`. Composition helpers no longer swallow child failures; unhandled errors terminate the workflow and cancel remaining children. Errors escaping user `catch` blocks propagate.
+- Replay is a new explicit attempt with longest unchanged successful-prefix reuse; historical cancellations do not carry forward, and replay evidence from another project or an incompatible API contract is rejected.
+
+### Added
+
+- Background (session-owned) `Agent` and `workflow` execution: runs survive tool-call returns and parent turns; interrupting a wait stops waiting only; closing the session cancels its work. Blocking calls keep interruption-cancels semantics.
+- `external_runs` tool: `list` (session/project scoped), `inspect` (summary/output/diagnostics with bounded pages and opaque cursors), `wait` (one/any/all selected runs; outcome-only, no routine wake-ups; `all` escalates on unhandled workflow failure), `cancel` (scoped child/workflow, requested vs confirmed distinguished).
+- Stable run IDs from queueing through evidence retrieval, including cancelled-while-queued runs.
+- Readable partial and final child output recovered from run evidence across failure, cancellation, and timeout for all three backends, with preliminary/final/interrupted labels.
+- Interactive `/external runs` navigation: run list, every workflow child, paged output/diagnostics, and selected-run cancellation; expanded receipts show bounded canonical output and freshness.
+- Run listings show process-started vs first-activity, activity freshness, and interrupted/uncertain state for crashed or restarted sessions — never falsely `running`.
+- POSIX process-tree termination on cancellation (group SIGTERM→SIGKILL regardless of leader exit) and bounded shutdown draining with honest uncertainty reporting.
+
+### Fixed
+
+- Failed executable launches no longer recorded as `process started`; preallocated run records settle on resume-validation failure; discarded workflow chain rejections (including `undefined`) cannot yield successful completion; agy streamed deltas no longer duplicate the canonical result; live vs durable evidence states are reconciled for inspection; cancelled cleanup siblings remain discoverable in workflow journals.
+
+### Notes
+
+- Windows process-tree termination is covered by mocked `taskkill` tests only. Real-provider field checks are opt-in per `docs/field-testing.md`.
+
 ## [1.10.0-external.1] - 2026-09-12
 
 Automated releases, adapted from [pi-bro](https://github.com/tranhoangnguyen03/pi-bro)'s pipeline.
