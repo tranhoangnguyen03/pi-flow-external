@@ -8,11 +8,13 @@ This package is a fork of pi-flow whose `Agent` and `workflow` tools are reserve
 - **Native Pi subagent:** A subagent exposed by Pi's native subagent system. This fork intentionally does not route it through `Agent`.
 - **Agent call:** A direct external delegation selected by `role` and optional `harness`, or by legacy exact-profile `subagent_type`.
 - **Parent context:** An opt-in frozen text snapshot: `none` (default), `recent` with last N user turns including the current turn, or `full` available post-compaction conversation. It is background for a new external conversation, not a native session clone, system-prompt inheritance, or guaranteed cache reuse. Sharing excludes thinking and pending calls and cannot be combined with child `resume`. Workflow children share one invocation-time snapshot; prior child outputs remain explicit inputs.
-- **Workflow call:** Trusted JavaScript orchestration that may fan out several explicit external `agent()` calls.
+- **Workflow call:** Trusted JavaScript orchestration beginning with `meta.apiVersion: 1` that may fan out several explicit external `agent()` calls. Each child returns a value or throws a catchable `ChildRunError`; escaping child errors fail the workflow and drain siblings.
+- **Background run:** A validated, registered `Agent` or `workflow` invocation that returns a stable handle while work remains owned by the originating session. It is not a daemon or cross-session job.
+- **Run supervision:** `external_runs` list/inspect/wait/cancel over stable IDs. Wait observes selected terminal outcomes without cancelling pending work; output and diagnostics use opaque cursors.
 - **Delegation intent:** The backend, profile, task label, profile purpose, and workspace shown to the user before and during direct execution.
 - **Access disclosure:** A visible statement of effective external CLI access and the external-host boundary; it does not create a sandbox or read-only guarantee.
 - **Evidence ID:** The short terminal reference to a persisted external run.
-- **Expanded receipt:** On-demand record or workflow-journal paths plus bounded evidence metadata.
+- **Expanded receipt:** Bounded canonical output, full run navigation, and advanced record or workflow-journal evidence.
 - **Successful receipt:** A zero-exit run with a recognized backend terminal-success event and a non-empty result.
 - **Complete failure evidence:** The backend failed, but its event log and summary were persisted consistently.
 - **Incomplete record:** Local evidence is missing, malformed, or internally inconsistent; it must not be reported as trustworthy merely because the backend status says `done`.
@@ -27,7 +29,7 @@ The split is global and intentional to avoid tool ambiguity across projects. The
 
 ## User control surface
 
-User operations are namespaced under `/external`: status, Doctor, settings, profiles, profile creation, profile clean-up, workflows, runs, and help. Extension-owned concurrency, timeout, and global default-harness settings live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`; profiles remain authoritative for downstream backend/model/thinking metadata. Project-specific default harnesses are deferred to issue #26.
+User operations are namespaced under `/external`: status, Doctor, settings, profiles, profile creation, profile clean-up, workflows, interactive run navigation, durable run summary/pruning, and help. `/external runs` uses the same registry/readers as `external_runs`, including every cursor-paged workflow child and output/diagnostic page. Extension-owned concurrency, timeout, and global default-harness settings live in `$PI_CODING_AGENT_DIR/pi-flow-external/settings.json`; profiles remain authoritative for downstream backend/model/thinking metadata. A trusted project may override only `defaultHarness`.
 
 ## Design stance
 
@@ -36,6 +38,8 @@ Guardrails exist to keep lanes from bleeding into each other (a reviewer that ed
 Role resolution is mechanical, not model-routed: a profile whose name begins with its declared backend plus `-` exposes the remaining name as its role (`agy-reviewer` -> `reviewer`). The selected role and harness must resolve to that exact profile; unavailable roles report their supported harnesses and never fall back. Nonstandard names remain available only through legacy exact `subagent_type`. The resolved profile stays authoritative for its instructions, model, and permissions.
 
 The always-visible parent guidance is limited to a compact role catalog and essential routing/safety facts. Catalog availability reflects configured profiles, not CLI installation or authentication. `external_help` supplies descriptions, permission details, workflow APIs/examples, and trust-aware saved-workflow discovery only when requested.
+
+Workflow replay is explicit and successful-prefix-only. A persisted script resumed with `resumeFromRunId` reuses the longest unchanged prefix whose fingerprints and outcomes are successful; the first changed or unsuccessful call and its suffix run again. Script recomposition is cheap, but child execution can cost money or repeat side effects. There is no automatic repaired-script replay, completion-order winner selection, or live steering.
 
 Applied to Antigravity (`agy`), that stance is absolute: the harness offers no granular headless permission mode — its default sandbox (`proceed-in-sandbox`) hard-denies even read-only tools like `read_url_content`, and `--dangerously-skip-permissions` is the only unsandboxed mode. So every agy run is unsandboxed, and `readonly`/`edit` on agy profiles are advisory instructions carried by the profile body, never an enforced boundary. We disclose that plainly (`unsandboxed external CLI`) rather than pretend a read-only tier restrains what the harness will actually allow.
 
@@ -46,4 +50,4 @@ A standardized role roster needs one file per role per backend (e.g. `claude-qa`
 
 ## Evidence boundary
 
-Normal external runs write best-effort local records under `~/.pi/agent/pi-flow-external/runs/` unless `PI_FLOW_EXTERNAL_RUNS_DIR` overrides it. The TUI shows short evidence IDs by default and exposes record/journal paths only through expanded output. Redaction is best-effort. Settings retention automatically prunes eligible completed records while preserving active, interrupted, incomplete, and damaged records. Failed/aborted runs are not retried automatically, except one agy retry for infrastructure-classified failures (disclosed via receipt `retries`/`retryOf`).
+Normal external runs write best-effort local records under `~/.pi/agent/pi-flow-external/runs/` unless `PI_FLOW_EXTERNAL_RUNS_DIR` overrides it. The TUI shows short evidence IDs by default and exposes bounded output, full run navigation, and record/journal paths through expanded output. Redaction is best-effort. Settings retention automatically prunes eligible completed records while preserving active, interrupted, incomplete, and damaged records. Failed/aborted runs are not retried automatically, except one agy retry for infrastructure-classified failures (disclosed via receipt `retries`/`retryOf`). Blocking-call interruption cancels owned work; wait interruption does not. Graceful session shutdown requests cancellation with bounded drain. Crash/unconfirmed shutdown leaves unfinished records interrupted or uncertain, with no restart takeover or guaranteed retrospective process termination.

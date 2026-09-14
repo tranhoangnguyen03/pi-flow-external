@@ -6,11 +6,12 @@ External agent delegation for [pi](https://github.com/earendil-works/pi) through
 - [Codex CLI](https://github.com/openai/codex) profiles with `backend: codex`
 - Antigravity profiles with `backend: agy`
 
-The ordinary driver has three tools (`workflow` can be disabled):
+The ordinary driver has four tools (`workflow` can be disabled):
 
 - `Agent` resolves and runs one external role.
 - `workflow` orchestrates multiple external roles with trusted JavaScript.
 - `external_help` returns role details, permission behavior, or workflow guidance on demand.
+- `external_runs` lists, inspects, waits for, and cancels session-owned runs.
 
 `Agent` and `workflow` accept external roles with an optional harness override. Use pi's native subagent system for Pi-backed agents. The `pi_flow_profile_create` finalizer is active only during `/external profile create`.
 
@@ -96,7 +97,9 @@ All user commands use the `/external` namespace:
 | `/external profile create` | Create and smoke-test a profile |
 | `/external profile clean-up` | Archive retired pi-flow default profiles |
 | `/external workflows` | List saved workflows |
-| `/external runs` | Summarize recorded external runs |
+| `/external runs` | Interactively browse current-session runs, every workflow child, paged output/diagnostics, and cancellation |
+| `/external runs summary` | Summarize durable run records |
+| `/external runs --prune` | Prune eligible completed run records |
 | `/external help` | Show the command reference |
 
 `/external doctor` verifies CLI availability, not provider authentication.
@@ -205,18 +208,43 @@ Workspace /path/to/project
 
 The `Context` line appears only when the parent shares conversation content, so extra data leaving for the external harness is visible before the run. Completed rows summarize what was actually shared (`context recent 4/5 turns`).
 
-Completed rows show a short evidence identifier and result preview. Press **Ctrl+O** (the default tool-expansion binding) to reveal the local record path plus structured backend-event count:
+Completed rows show a short evidence identifier and result preview. Press **Ctrl+O** (the default tool-expansion binding) to reveal bounded canonical output, its full run ID, a `/external runs` navigation hint, and advanced local evidence details:
 
 ```text
 ✓ Claude Code(claude-explorer, Map repository architecture) 42s evidence 8f21a004 -> Architecture mapped.
+  Final output
+  Architecture mapped.
+  Run run_... · /external runs for full paged output and diagnostics
   Evidence ~/.pi/agent/pi-flow-external/runs/run_... · 15 backend events
 ```
 
-Workflows show access once at the workflow level, retain done/active/queued/failed counts, and expose child evidence plus the workflow journal when expanded. Raw backend events remain in local records rather than flooding the default terminal view.
+Workflows show access once at the workflow level, retain done/active/queued/failed counts, and expose bounded final output plus the workflow journal when expanded. Hidden child rows remain reachable through `/external runs`. Active rows report last-activity freshness independently of the spinner. Raw backend events remain in local records rather than flooding the default terminal view.
+
+## Background runs and supervision
+
+`Agent` and `workflow` are blocking by default. Add `background: true` to return a stable `run_...` or `wf_...` handle after validation and registration while the originating Pi session continues to own the work:
+
+```ts
+Agent({
+  description: "Long repository audit",
+  prompt: "Audit /absolute/repo read-only.",
+  role: "reviewer",
+  background: true,
+});
+```
+
+Use `external_runs` with these actions:
+
+- `list`: current session/project runs; use `cursor` for run pages and `workflowCursor` for workflow pages. `workflowRunId` filters children of one workflow.
+- `inspect`: `runId`, `view: "summary" | "output" | "diagnostics"`, and optional opaque `cursor`/`limitBytes`. Follow `nextCursor` to avoid truncation.
+- `wait`: one `runId` or selected `runIds`, with `mode: "any" | "all"`. It returns terminal outcomes plus still-pending IDs; an unsuccessful workflow returns early even in `all` mode. It never chooses a winner or cancels pending work.
+- `cancel`: one `runId` and optional reason. Whole-workflow cancellation stops active children; targeted child cancellation remains a catchable workflow outcome. Cancellation does not roll back edits or other side effects.
+
+Interrupting a blocking `Agent`/`workflow` call cancels its work. Interrupting `external_runs wait` stops only that wait. Background work survives its launching tool return and ordinary parent turns, but not the owning session: orderly session shutdown requests cancellation and waits for bounded cleanup. This is not a daemon. After a host crash or unconfirmed shutdown, unfinished evidence is `interrupted_or_uncertain`; restart restores evidence access, never live ownership or guaranteed retrospective process termination. No routine activity wakes the parent, and live steering is not supported.
 
 ## Workflow usage
 
-The `workflow` tool runs trusted JavaScript that calls one or more external roles and returns a JSON-serializable result. Every `agent()` child uses the same `role`/optional `harness` resolution as direct `Agent` calls, with legacy exact `subagent_type` also supported.
+The `workflow` tool runs trusted JavaScript that calls one or more external roles and returns a JSON-serializable result. Its first statement must be the current declaration `export const meta = { apiVersion: 1, name, description }`; missing or unsupported versions fail before any child launches. Every `agent()` child uses the same `role`/optional `harness` resolution as direct `Agent` calls, with legacy exact `subagent_type` also supported.
 
 Saved workflows are discovered on demand through `external_help({ topic: "workflow" })`; project `.pi/workflows` entries are included only when Pi reports the project trusted.
 
@@ -226,7 +254,9 @@ Example request:
 Use the workflow tool to ask role "explorer" on harness "claude" for an architecture map and role "reviewer" on harness "codex" for a risk review, then synthesize their findings.
 ```
 
-Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every child selects from one parent snapshot frozen at workflow invocation; earlier child results must still be passed explicitly. Replay fingerprints include the transferred context, so changes invalidate cached results.
+Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every current-version `agent()` returns its value or throws a catchable `ChildRunError` with `runId`, `outcome` (`failed`, `cancelled`, or `timed_out`), `message`, and output/diagnostic references. Catch an optional failure explicitly; an uncaught child error fails the workflow and drains active siblings. `parallel` and `pipeline` preserve this contract and never convert failure to `null`.
+
+Every child selects from one parent snapshot and effective settings frozen at workflow invocation; earlier child results must still be passed explicitly. `resumeFromRunId` is explicit replay for a persisted `scriptPath`: it reuses only the longest unchanged prefix of successful child calls. The API version, transferred context, prompt, selection, and relevant options participate in fingerprints. The first changed, failed, cancelled, or timed-out call and everything after it executes again. Recomposition is cheap, but rerun children may cost money or repeat side effects; the runtime never retries or replays a repaired script automatically.
 
 ## Permission tiers, budgets, and resume
 
@@ -338,7 +368,9 @@ export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 npm run e2e -- --backend claude
 npm run e2e -- --backend codex
 npm run e2e -- --backend agy
+npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
+npm run e2e -- --backend agy --workflow
 ```
 
 See [`docs/field-testing.md`](docs/field-testing.md) for provider checks and [`docs/releasing.md`](docs/releasing.md) for the release process.

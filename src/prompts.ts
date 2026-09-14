@@ -12,7 +12,7 @@ export const EXTERNAL_HELP_PROMPT_SNIPPET =
   "Show external role details, permission behavior, or workflow guidance on demand.";
 
 export const EXTERNAL_RUNS_PROMPT_SNIPPET =
-  "Inspect or control a known external run; wait only when its terminal outcome is needed.";
+  "List, inspect, wait for, or cancel session-owned external runs; follow cursors for complete output.";
 
 function roleLabel(role: string, harnesses: ExternalHarness[]): string {
   return `${role}${harnesses.length === EXTERNAL_HARNESSES.length ? "" : ` (${harnesses.join(", ")} only)`}`;

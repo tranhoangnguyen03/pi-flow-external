@@ -39,15 +39,29 @@ Defaults:
 
 Override with `--model`, `--thinking`, `--root-model`, or `--root-thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary profile path printed by the runner.
 
-## Workflow receipt
+## Supervised workflow receipt
 
-When workflow runtime, scheduling, or tool integration changes:
+When workflow runtime, scheduling, supervision, or tool integration changes, run the affected backend; run all three before release:
 
 ```bash
+npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
+npm run e2e -- --backend agy --workflow
 ```
 
-This runs two children through one workflow and requires two complete receipts. One backend is enough because direct backend checks validate adapter-specific transport.
+Each command declares `meta.apiVersion: 1`, starts a two-child workflow with `background: true`, waits for the selected workflow through `external_runs`, follows its summary/output cursors, requires two complete child receipts, and verifies the read-only fixture stayed clean. This covers real workflow child handling without duplicating deterministic failure semantics already owned by offline runtime tests.
+
+## Change-triggered interruption and output check
+
+When adapter cancellation, process-tree termination, partial output, or supervision changes, run the affected backend:
+
+```bash
+npm run e2e -- --backend claude --interrupt
+npm run e2e -- --backend codex --interrupt
+npm run e2e -- --backend agy --interrupt
+```
+
+The runner starts a background `Agent`, cancels its stable ID with an explicit reason, waits for its `cancelled` outcome, and asks `external_runs` for every available output and diagnostic page. A very early cancellation may legitimately have diagnostics but no assistant text; the durable receipt must still be `aborted`/`cancelled` with the exact reason. Do not retry a failure automatically. Use `--keep` for one deliberate evidence inspection, then remove the printed run root and temporary profile.
 
 ## Natural-language routing smoke
 
@@ -90,7 +104,8 @@ Before a runtime release:
 
 1. Run `npm run check`.
 2. Run all three direct backend receipts.
-3. Run one workflow receipt.
-4. Run the natural-language routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
-5. Run the nested timeout check only if nested detection or timeout behavior changed.
-6. Remove temporary evidence and profiles.
+3. Run all three supervised workflow receipts.
+4. Run interruption checks for adapters whose cancellation/output path changed.
+5. Run the natural-language routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
+6. Run the nested timeout check only if nested detection or timeout behavior changed.
+7. Remove temporary evidence and profiles.
