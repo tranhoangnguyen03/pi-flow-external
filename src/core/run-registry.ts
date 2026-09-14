@@ -44,6 +44,7 @@ export interface StartRegisteredRun<T> {
   signal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T> | T;
   outcome?: (result: T) => Omit<RegisteredRunOutcome, "runId" | "kind" | "settledAt">;
+  failure?: (error: unknown, signal: AbortSignal) => Omit<RegisteredRunOutcome, "runId" | "kind" | "settledAt">;
 }
 
 export interface RegisteredRunWaitResult {
@@ -112,12 +113,14 @@ export class RunRegistry {
         return value;
       },
       (error) => {
+        const described = params.failure?.(error, controller.signal);
         this.settle(entry, {
           runId: entry.runId,
           kind: entry.kind,
-          status: controller.signal.aborted ? "aborted" : "error",
+          status: described?.status ?? (controller.signal.aborted ? "aborted" : "error"),
           settledAt: Date.now(),
-          error: error instanceof Error ? error.message : String(error),
+          ...(described?.result !== undefined ? { result: described.result } : {}),
+          error: described?.error ?? (error instanceof Error ? error.message : String(error)),
         });
         throw error;
       },

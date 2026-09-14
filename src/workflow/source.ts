@@ -15,6 +15,9 @@ import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedAgentResult, WorkflowMetaPhase } from "./types.ts";
 
 export const workflowToolParameters = Type.Object({
+  background: Type.Optional(Type.Boolean({
+    description: "Return a stable workflow handle after registration while session-owned execution continues. Defaults to false.",
+  })),
   script: Type.Optional(
     Type.String({
       description: [

@@ -153,6 +153,8 @@ export interface RunWorkflowOptions {
   /** Shared global concurrency cap; agent() queues on this. */
   limiter: ConcurrencyLimiter;
   runAgent: WorkflowAgentRunner;
+  /** Own one queued child independently while still composing its signal with the workflow signal. */
+  startAgentRun?: (call: WorkflowAgentCall, run: (signal: AbortSignal) => Promise<unknown>) => Promise<unknown>;
   defaultSubagentType?: string | null;
   /** Resolve role/harness or legacy exact-profile selection before queueing and fingerprinting. */
   resolveSubagentType?: (selection: { role?: string; harness?: string; subagentType?: string }) => string;

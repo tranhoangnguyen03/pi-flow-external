@@ -15,6 +15,7 @@ import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { createRunRecord } from "../core/run-record.ts";
 import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
+import { RunRegistry } from "../core/run-registry.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
@@ -29,6 +30,7 @@ import {
 } from "./structured-output.ts";
 
 export interface CreateWorkflowToolOptions {
+  registry: RunRegistry;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
@@ -103,6 +105,18 @@ export function createWorkflowTool(
     parameters: workflowToolParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const parentMessages = captureParentContext(ctx.sessionManager);
+      const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
+      const project = ctx.cwd;
+      const executionContext = { cwd: project } as ExtensionContext;
+      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
+      const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
+      const limiter = options.getLimiter();
+      const thinkingLevel = options.getThinkingLevel();
+      const timeoutMs = options.getSubagentTimeoutMs();
+      const defaultPermission = options.getDefaultPermission();
+      const defaultHarness = options.getDefaultHarness(ctx);
+      const defaultMaxBudgetUsd = options.getDefaultMaxBudgetUsd();
+      const background = params.background === true;
       const prepared = await prepareWorkflowToolSource(params, ctx);
       if (!prepared.ok) {
         return workflowError(prepared.text, prepared.details);
@@ -122,7 +136,6 @@ export function createWorkflowTool(
         resumeAgentResults,
       } = prepared.value;
 
-      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
       const snapshot: WorkflowToolDetails = {
         name: metaName,
         status: "running",
@@ -139,17 +152,21 @@ export function createWorkflowTool(
         resumeFromRunId,
         cachedAgentCount: 0,
       };
-      const emit = () => onUpdate?.(workflowResult(`Workflow "${metaName}" running.`, cloneSnapshot(snapshot)));
+      const emit = () => {
+        options.registry.update(identity.runId, cloneSnapshot(snapshot));
+        if (!background) onUpdate?.(workflowResult(`Workflow "${metaName}" running.`, cloneSnapshot(snapshot)));
+      };
 
-      let agentSeq = 0;
-      const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
+      const executeWorkflow = async (runSignal: AbortSignal) => {
+        let agentSeq = 0;
+        const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
         const profile = profiles.get(call.subagentType);
         if (!profile) {
           throw new Error(
             `Unknown external subagent_type "${call.subagentType}". Available external agents: ${[...profiles.keys()].join(", ")}. Use the native subagent system for Pi-backed agents.`,
           );
         }
-        const model = resolveProfileModel(profile, ctx);
+        const model = models.get(call.subagentType);
         if (usesPiBackend(profile) && !model) {
           throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
         }
@@ -184,14 +201,14 @@ export function createWorkflowTool(
           context: call.context,
           profile,
           model,
-          thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
-          ctx,
+          thinkingLevel: profile.thinking ?? thinkingLevel,
+          ctx: executionContext,
           signal: agentSignal,
-          timeoutMs: options.getSubagentTimeoutMs(),
+          timeoutMs,
           progressEnabled: true,
           permission: call.permission,
-          defaultPermission: options.getDefaultPermission(),
-          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? options.getDefaultMaxBudgetUsd(),
+          defaultPermission,
+          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
           resumeRunId: call.resumeRunId,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
@@ -211,10 +228,11 @@ export function createWorkflowTool(
               agent.usage = details.progress.usage;
               agent.status = details.progress.status;
               agent.context = details.context;
+              if (call.runRecord) options.registry.update(call.runRecord.runId, details.progress);
               emit();
             }
           },
-          onUsage: (usage) => options.updateStatus(ctx, childId, usage),
+          onUsage: background ? () => undefined : (usage) => options.updateStatus(ctx, childId, usage),
           excludeTools: CHILD_EXCLUDED_TOOLS,
           appendInstructions,
           customTools,
@@ -280,7 +298,7 @@ export function createWorkflowTool(
           return capture.value;
         }
         return resultDetails.result ?? "";
-      };
+        };
 
       // Spinner animation is driven here, by the runtime, not by a UI-render
       // timer: while any agent is running we advance a frame counter and re-emit
@@ -301,15 +319,31 @@ export function createWorkflowTool(
           args: params.args,
           parentMessages,
           parentToolCallId: toolCallId,
-          cwd: ctx.cwd,
-          signal,
-          limiter: options.getLimiter(),
+          cwd: project,
+          signal: runSignal,
+          limiter,
           runAgent,
+          startAgentRun: (call, run) => {
+            const runId = call.runRecord?.runId;
+            if (!runId) throw new Error("workflow child run evidence was not allocated");
+            return options.registry.start({
+              runId,
+              kind: "agent",
+              sessionId,
+              project,
+              workflowRunId: identity.runId,
+              run,
+              failure: (error, childSignal) => ({
+                status: runSignal.aborted || childSignal.aborted ? "aborted" : "error",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            }).result;
+          },
           defaultSubagentType: null,
           resolveSubagentType: (selection) => resolveExternalProfile(
             profiles,
             selection,
-            options.getDefaultHarness(ctx),
+            defaultHarness,
           ).name,
           resumeAgentResults,
           onLog: (message) => {
@@ -330,8 +364,8 @@ export function createWorkflowTool(
               directory: runRecordsDirectory(),
               metadata: {
                 kind: "workflow-child",
-                parentSessionId: ctx.sessionManager?.getSessionId?.(),
-                project: ctx.cwd,
+                parentSessionId: sessionId,
+                project,
                 workflowRunId: identity.runId,
                 description: event.label,
                 prompt: event.prompt,
@@ -427,7 +461,7 @@ export function createWorkflowTool(
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const aborted = Boolean(signal?.aborted) || isWorkflowAbortError(error);
+        const aborted = runSignal.aborted || isWorkflowAbortError(error);
         snapshot.status = aborted ? "aborted" : "error";
         snapshot.error = message;
         try {
@@ -448,6 +482,26 @@ export function createWorkflowTool(
       } finally {
         clearInterval(heartbeat);
       }
+      };
+
+      const registered = options.registry.start({
+        runId: identity.runId,
+        kind: "workflow",
+        sessionId,
+        project,
+        ...(background ? {} : { signal }),
+        run: executeWorkflow,
+        outcome: (result) => ({
+          status: result.details.status === "completed" ? "done" : result.details.status === "aborted" ? "aborted" : "error",
+          ...(result.details.result !== undefined ? { result: result.details.result } : {}),
+          ...(result.details.error ? { error: result.details.error } : {}),
+        }),
+      });
+      if (!background) return await registered.result;
+      return workflowResult(
+        `Workflow "${metaName}" queued as ${identity.runId}. Use external_runs to inspect, wait, or cancel it.`,
+        cloneSnapshot(snapshot),
+      );
     },
     renderCall(args, theme, _context) {
       const name = typeof args.name === "string" && args.name.trim() ? ` ${theme.fg("muted", args.name.trim())}` : "";

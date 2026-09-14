@@ -5,6 +5,7 @@ import { SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
+import { RunRegistry } from "../src/core/run-registry.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import type { WorkflowToolDetails } from "../src/types.ts";
 import {
@@ -415,6 +416,37 @@ describe("runWorkflow", () => {
       },
       "ok2",
     ]);
+  });
+
+  it("treats targeted child cancellation as catchable without cancelling its sibling", async () => {
+    const registry = new RunRegistry();
+    let releaseSibling!: () => void;
+    const sibling = new Promise<string>((resolve) => { releaseSibling = () => resolve("sibling done"); });
+    const result = runWorkflow(
+      `${META}const cancelled = agent('target', { label: 'target' }).catch((error) => error.outcome);
+      const kept = agent('sibling', { label: 'sibling' });
+      return [await cancelled, await kept];`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        runAgent: async (call, signal) => call.label === "sibling"
+          ? sibling
+          : await new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new ChildRunError({ runId: "run_target", outcome: "cancelled", message: "not needed" })), { once: true })),
+        startAgentRun: (call, run) => registry.start({
+          runId: `run_${call.label}`,
+          kind: "agent",
+          sessionId: "session",
+          project: "/tmp",
+          run,
+        }).result,
+      },
+    );
+
+    await vi.waitFor(() => expect(registry.get("run_target")?.state).toBe("running"));
+    expect(registry.cancel("run_target", "not needed")).toBe("requested");
+    releaseSibling();
+    await expect(result).resolves.toMatchObject({ result: ["cancelled", "sibling done"] });
+    expect(registry.get("run_sibling")?.outcome?.status).toBe("done");
   });
 
   it("aborts and drains siblings after an unhandled child failure", async () => {

@@ -60,7 +60,7 @@ describe("pi-subagent agent contract", () => {
     expect(properties).toHaveProperty("role");
     expect(properties).toHaveProperty("harness");
     expect(properties).toHaveProperty("subagent_type");
-    expect(properties).not.toHaveProperty("run_in_background");
+    expect(properties).toHaveProperty("background");
     expect(properties).not.toHaveProperty("model");
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");
@@ -117,6 +117,84 @@ describe("pi-subagent agent contract", () => {
     const summary = JSON.parse(readFileSync(join(child.recordPath, "summary.json"), "utf8"));
     expect(summary.runId).toBe(child.externalRunId);
     expect(summary.summary).toMatchObject({ status: "error", backendStarted: false });
+
+    disposeSession(session);
+  });
+
+  it("launches Agent and workflow work in the background without retaining tool callbacks", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-background");
+    const startedPath = join(tempDir, "background-started");
+    const directRelease = join(tempDir, "release-direct");
+    const workflowRelease = join(tempDir, "release-workflow");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Background worker.\nbackend: codex\n---\n");
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync, existsSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+appendFileSync(${JSON.stringify(startedPath)}, stdin + '\\n');
+const release = stdin.includes('workflow') ? ${JSON.stringify(workflowRelease)} : ${JSON.stringify(directRelease)};
+while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'background-test' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'finished ' + stdin } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession();
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
+    context.sessionManager.getBranch = () => [];
+    const agent = session.getToolDefinition("Agent") as any;
+    const directUpdate = vi.fn();
+    const direct = await agent.execute(
+      "background-agent",
+      { description: "Background agent", prompt: "direct background", role: "worker", harness: "codex", background: true },
+      undefined,
+      directUpdate,
+      context,
+    );
+    expect(direct.details).toMatchObject({ status: "queued", runId: expect.stringMatching(/^run_/) });
+    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8")).toContain("direct background"));
+    expect(existsSync(directRelease)).toBe(false);
+    expect(directUpdate).not.toHaveBeenCalled();
+
+    writeFileSync(directRelease, "go");
+    await vi.waitFor(() => {
+      const summary = JSON.parse(readFileSync(join(direct.details.recordPath, "summary.json"), "utf8"));
+      expect(summary.summary.status).toBe("done");
+    });
+
+    const blocking = await agent.execute(
+      "blocking-agent",
+      { description: "Blocking agent", prompt: "direct blocking", role: "worker", harness: "codex" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(blocking.details).toMatchObject({ status: "done", result: "finished direct blocking" });
+
+    const workflow = session.getToolDefinition("workflow") as any;
+    const workflowUpdate = vi.fn();
+    const backgroundWorkflow = await workflow.execute(
+      "background-workflow",
+      {
+        background: true,
+        script: "export const meta = { apiVersion: 1, name: 'background', description: 'Background workflow' }; return await agent('workflow background', { role: 'worker', harness: 'codex' });",
+      },
+      undefined,
+      workflowUpdate,
+      context,
+    );
+    expect(backgroundWorkflow.details).toMatchObject({ status: "running", runId: expect.stringMatching(/^wf_/) });
+    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8")).toContain("workflow background"));
+    expect(existsSync(workflowRelease)).toBe(false);
+    expect(workflowUpdate).not.toHaveBeenCalled();
+    writeFileSync(workflowRelease, "go");
+    await vi.waitFor(() => expect(readFileSync(backgroundWorkflow.details.journalPath, "utf8")).toContain('"type":"run_complete"'));
 
     disposeSession(session);
   });
