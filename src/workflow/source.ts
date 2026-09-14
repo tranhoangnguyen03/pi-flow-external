@@ -302,6 +302,7 @@ export async function prepareWorkflowToolSource(
         identity,
         name: metaName,
         source: source.source,
+        project: ctx.cwd,
         scriptPath,
         resumeFromRunId,
       });

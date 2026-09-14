@@ -258,6 +258,11 @@ export async function listRunRecords({
   };
 }
 
+export async function getRunRecord(runsDirectory: string, runId: string): Promise<RunRecordListItem | undefined> {
+  assertRunId(runId);
+  return readListItem(runsDirectory, runId);
+}
+
 async function readListItem(runsDirectory: string, runId: string): Promise<RunRecordListItem | undefined> {
   const directory = join(runsDirectory, runId);
   const summary = await readSummary(join(directory, "summary.json"), runId);
@@ -272,7 +277,7 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
     runId,
     ...(queuedAt ? { queuedAt } : {}),
     status,
-    ...(asString(metadata?.description) ? { description: asString(metadata?.description) } : {}),
+    ...(boundedString(metadata?.description) ? { description: boundedString(metadata?.description) } : {}),
     ...(asString(metadata?.backend) ? { backend: asString(metadata?.backend) } : {}),
     ...(asString(metadata?.project) ? { project: asString(metadata?.project) } : {}),
     ...(asString(metadata?.parentSessionId) ? { parentSessionId: asString(metadata?.parentSessionId) } : {}),

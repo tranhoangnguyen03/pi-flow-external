@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
 import { WORKFLOW_API_VERSION, type WorkflowAgentResultEvent, type WorkflowCachedAgentResult } from "./types.ts";
@@ -30,6 +30,13 @@ export interface LoadedWorkflowJournal {
   runId: string;
   path: string;
   agentResults: WorkflowCachedAgentResult[];
+  name?: string;
+  source?: string;
+  project?: string;
+  status: "running" | "done" | "error";
+  result?: unknown;
+  error?: string;
+  children: Array<{ runId?: string; label?: string; failed: boolean; error?: unknown }>;
 }
 
 export interface WorkflowJournalWriter {
@@ -96,7 +103,14 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   }
 
   const agentResults: WorkflowCachedAgentResult[] = [];
+  const children: LoadedWorkflowJournal["children"] = [];
   let seenRunStart = false;
+  let name: string | undefined;
+  let source: string | undefined;
+  let project: string | undefined;
+  let status: LoadedWorkflowJournal["status"] = "running";
+  let result: unknown;
+  let terminalError: string | undefined;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -114,6 +128,19 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
         );
       }
       seenRunStart = entry.runId === runId;
+      name = typeof entry.name === "string" ? entry.name : undefined;
+      source = typeof entry.source === "string" ? entry.source : undefined;
+      project = typeof entry.project === "string" ? entry.project : undefined;
+      continue;
+    }
+    if (entry.type === "run_complete") {
+      status = "done";
+      result = entry.result;
+      continue;
+    }
+    if (entry.type === "run_error") {
+      status = "error";
+      terminalError = typeof entry.error === "string" ? entry.error : "workflow failed";
       continue;
     }
     if (entry.type !== "agent_result") {
@@ -131,12 +158,35 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
       failed: entry.failed === true,
       ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
     };
+    children.push({
+      ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+      ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+      failed: entry.failed === true,
+      ...(entry.error !== undefined ? { error: entry.error } : {}),
+    });
   }
 
   if (!seenRunStart) {
     throw new Error(`Workflow journal ${path} does not match run id ${runId}`);
   }
-  return { runId, path, agentResults };
+  return { runId, path, agentResults, name, source, project, status, result, error: terminalError, children };
+}
+
+export async function listWorkflowJournals(dir: string, project: string, limit = 100): Promise<LoadedWorkflowJournal[]> {
+  let names: string[];
+  try {
+    names = (await readdir(dir)).filter((name) => /^run-wf_[A-Za-z0-9_-]{1,128}\.jsonl$/.test(name)).sort().reverse();
+  } catch (error) {
+    if (isNotFound(error)) return [];
+    throw error;
+  }
+  const journals: LoadedWorkflowJournal[] = [];
+  for (const name of names.slice(0, 200)) {
+    const journal = await loadWorkflowJournal(dir, name.slice(4, -6));
+    if (journal?.project === project) journals.push(journal);
+    if (journals.length >= Math.max(1, Math.min(100, limit))) break;
+  }
+  return journals;
 }
 
 export async function createWorkflowJournalWriter(params: {
@@ -144,6 +194,7 @@ export async function createWorkflowJournalWriter(params: {
   identity: WorkflowRunIdentity;
   name: string;
   source: string;
+  project?: string;
   scriptPath?: string;
   resumeFromRunId?: string;
 }): Promise<WorkflowJournalWriter> {
@@ -158,6 +209,7 @@ export async function createWorkflowJournalWriter(params: {
       runId: params.identity.runId,
       name: params.name,
       source: params.source,
+      project: params.project,
       scriptPath: params.scriptPath,
       resumeFromRunId: params.resumeFromRunId,
       scriptHash: params.identity.scriptHash,

@@ -73,6 +73,7 @@ describe("pi-subagent agent contract", () => {
     expect((help?.parameters as { properties: Record<string, unknown> }).properties).toEqual(
       expect.objectContaining({ topic: expect.anything(), harness: expect.anything() }),
     );
+    expect(session.getAllTools().find((candidate) => candidate.name === "external_runs")).toBeDefined();
 
     disposeSession(session);
   });
@@ -158,7 +159,10 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
       context,
     );
     expect(direct.details).toMatchObject({ status: "queued", runId: expect.stringMatching(/^run_/) });
-    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8")).toContain("direct background"));
+    await vi.waitFor(() => {
+      expect(existsSync(startedPath)).toBe(true);
+      expect(readFileSync(startedPath, "utf8")).toContain("direct background");
+    }, { timeout: 5_000 });
     expect(existsSync(directRelease)).toBe(false);
     expect(directUpdate).not.toHaveBeenCalled();
 
@@ -190,7 +194,10 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
       context,
     );
     expect(backgroundWorkflow.details).toMatchObject({ status: "running", runId: expect.stringMatching(/^wf_/) });
-    await vi.waitFor(() => expect(readFileSync(startedPath, "utf8")).toContain("workflow background"));
+    await vi.waitFor(() => {
+      expect(existsSync(startedPath)).toBe(true);
+      expect(readFileSync(startedPath, "utf8")).toContain("workflow background");
+    }, { timeout: 5_000 });
     expect(existsSync(workflowRelease)).toBe(false);
     expect(workflowUpdate).not.toHaveBeenCalled();
     writeFileSync(workflowRelease, "go");
@@ -240,6 +247,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
     expect(getToolNames(rootContext)).toContain("external_help");
+    expect(getToolNames(rootContext)).toContain("external_runs");
     expect(getToolNames(rootContext)).toContain("workflow");
     expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
 

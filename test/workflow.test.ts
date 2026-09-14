@@ -908,12 +908,13 @@ describe("workflow tool registration", () => {
     createSubagentExtension()(fakeApi(names) as never);
     expect(names).toContain("Agent");
     expect(names).toContain("external_help");
+    expect(names).toContain("external_runs");
     expect(names).toContain("workflow");
   });
 
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent", "external_help", "pi_flow_profile_create"]);
+    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_profile_create"]);
   });
 });

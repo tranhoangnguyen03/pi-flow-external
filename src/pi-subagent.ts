@@ -14,6 +14,7 @@ import {
   buildCoordinatorPrompt,
 } from "./prompts.ts";
 import { createExternalHelpTool } from "./external-help.ts";
+import { createExternalRunsTool } from "./external-runs.ts";
 import {
   filterExternalAgentProfiles,
   formatExternalAgentPolicyError,
@@ -409,7 +410,7 @@ function createAgentTool(
       }
 
       const queuedAt = Date.now();
-      const sessionId = ctx.sessionManager.getSessionId();
+      const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const project = ctx.cwd;
       const executionContext = { cwd: project } as ExtensionContext;
       const limiter = state.limiter;
@@ -687,6 +688,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.registerTool(createExternalHelpTool({
       getDefaultHarness: (ctx) => resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness,
       workflowEnabled,
+    }));
+    pi.registerTool(createExternalRunsTool({
+      registry: rootState.registry,
+      runsDirectory: runRecordsDirectory,
     }));
     registerProfileCreator(pi, toolOptions);
     registerExternalCommand(pi, {
