@@ -7,7 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
+import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
+import { loadHarnessConfigs } from "./harnesses.ts";
 import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
   formatExternalRoleHelp,
@@ -20,15 +21,16 @@ const externalHelpParameters = Type.Object({
   topic: StringEnum(["roles", "permissions", "workflow"] as const, {
     description: "Help topic: role descriptions/configured profile availability, harness permissions, or workflow syntax and saved workflows.",
   }),
-  harness: Type.Optional(StringEnum(EXTERNAL_HARNESSES, {
-    description: "Optional harness filter for roles or permissions. Do not use with topic workflow.",
+  harness: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, or a registered pi-* harness. Do not use with topic workflow.",
   })),
 });
 
 type ExternalHelpParams = Static<typeof externalHelpParameters>;
 
 export interface CreateExternalHelpToolOptions {
-  getDefaultHarness: (ctx: ExtensionContext) => ExternalHarness;
+  getDefaultHarness: (ctx: ExtensionContext) => string;
   workflowEnabled: boolean;
 }
 
@@ -40,17 +42,48 @@ function isProjectTrusted(ctx: ExtensionContext): boolean {
   }
 }
 
-function permissionHelp(harness?: ExternalHarness): string {
-  const help: Record<ExternalHarness, string> = {
-    agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
-    claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
-    codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
-  };
+const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
+  agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
+  claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
+  codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
+  pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project extensions, skills, or MCP tools load into the child. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
+};
+
+/** Resolve a requested, already-validated harness name to its permission-semantics backend. */
+function permissionHelpBackend(harness: string, configuredPiHarnesses: ReadonlySet<string>): ExternalHarness | "pi" {
+  if ((EXTERNAL_HARNESSES as readonly string[]).includes(harness)) return harness as ExternalHarness;
+  // Callers only reach here after validateHarnessFilter, so any name that is
+  // not one of the three external harnesses is guaranteed to be a registered
+  // pi-* harness at this point — never an unrecognized string silently
+  // treated as "pi".
+  return "pi";
+}
+
+function permissionHelp(harness: string | undefined, configuredPiHarnesses: ReadonlySet<string>): string {
+  const backends: (ExternalHarness | "pi")[] = harness
+    ? [permissionHelpBackend(harness, configuredPiHarnesses)]
+    : [...EXTERNAL_HARNESSES, ...(configuredPiHarnesses.size ? (["pi"] as const) : [])];
   return [
-    "External CLIs run on the host; use them only in trusted repositories. Permission precedence is call override, then profile, then the global default; omit the override when unsure.",
-    ...(harness ? [help[harness]] : EXTERNAL_HARNESSES.map((name) => help[name])),
+    "External CLIs and pi-* harnesses run with host access; use them only in trusted repositories. Permission precedence is call override, then profile, then the global default; omit the override when unsure.",
+    ...backends.map((name) => PERMISSION_HELP_BY_BACKEND[name]),
     "Failed or aborted runs are not silently retried. Only agy may retry once for an infrastructure-classified auth, eligibility, or network failure, and the receipt discloses it.",
   ].join("\n\n");
+}
+
+/**
+ * Reject an unknown harness filter up front, listing the live configured
+ * set, rather than letting it silently fall through to "pi" (permissions)
+ * or an empty catalog (roles). "Configured" means what a caller could
+ * actually select today: the three external CLIs plus any registered
+ * pi-* harness — never a raw guess at what might exist.
+ */
+function validateHarnessFilter(harness: string | undefined, configuredPiHarnesses: ReadonlySet<string>): void {
+  if (harness === undefined) return;
+  if ((EXTERNAL_HARNESSES as readonly string[]).includes(harness) || configuredPiHarnesses.has(harness)) return;
+  const configured = [...EXTERNAL_HARNESSES, ...configuredPiHarnesses].sort();
+  throw new Error(
+    `Unknown harness "${harness}". Configured harnesses: ${configured.join(", ") || "none"}.`,
+  );
 }
 
 function workflowHelp(workflowsEnabled: boolean, workflows: ReturnType<typeof listSavedWorkflows>): string {
@@ -78,7 +111,7 @@ ${formatSavedWorkflows(workflows)}`;
 
 export function createExternalHelpTool(
   options: CreateExternalHelpToolOptions,
-): ToolDefinition<typeof externalHelpParameters, { topic: ExternalHelpParams["topic"]; harness?: ExternalHarness }> {
+): ToolDefinition<typeof externalHelpParameters, { topic: ExternalHelpParams["topic"]; harness?: string }> {
   return defineTool({
     name: "external_help",
     label: "External Help",
@@ -90,13 +123,22 @@ export function createExternalHelpTool(
         throw new Error("external_help harness is only valid for roles or permissions.");
       }
       let text: string;
+      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const configuredPiHarnesses = new Set(harnessConfigs.keys());
+      if (params.topic !== "workflow") {
+        validateHarnessFilter(params.harness, configuredPiHarnesses);
+      }
       if (params.topic === "roles") {
-        const profiles = filterExternalAgentProfiles(
-          filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry),
+        const profiles = mergeSynthesizedPiProfiles(
+          filterExternalAgentProfiles(
+            filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry),
+            configuredPiHarnesses,
+          ),
+          harnessConfigs,
         );
         text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), params.harness);
       } else if (params.topic === "permissions") {
-        text = permissionHelp(params.harness);
+        text = permissionHelp(params.harness, configuredPiHarnesses);
       } else {
         text = workflowHelp(options.workflowEnabled, listSavedWorkflows({
           agentDir: getAgentDir(),

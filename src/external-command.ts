@@ -7,7 +7,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
 import { archiveProfiles, findRetiredDefaultProfiles } from "./defaults.ts";
+import { loadHarnessConfigs } from "./harnesses.ts";
 import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
+import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
@@ -58,6 +60,14 @@ function helpText(): string {
   ].join("\n");
 }
 
+function formatHarnessesLine(harnessConfigs: ReadonlyMap<string, import("./harnesses.ts").HarnessConfig>): string {
+  if (harnessConfigs.size === 0) return "Pi harnesses: none configured";
+  const entries = [...harnessConfigs]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking})`);
+  return `Pi harnesses: ${entries.join(", ")}`;
+}
+
 function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
   const effective = options.getRuntimeSettings();
   const settings = options.settings.settings;
@@ -65,7 +75,11 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
   const harnessSource = harness.source === "project"
     ? ` (project: ${harness.projectPath})`
     : " (global)";
-  const warnings = [...options.settings.diagnostics, ...harness.diagnostics];
+  const { harnesses: harnessConfigs, diagnostics: harnessDiagnostics } = loadHarnessConfigs(getAgentDir());
+  const staleDefault = !(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness.harness) && !harnessConfigs.has(harness.harness)
+    ? [`Configured default harness "${harness.harness}" is not currently registered.`]
+    : [];
+  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...harnessDiagnostics, ...staleDefault];
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
@@ -73,6 +87,7 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
     `defaultPermission: ${settings.defaultPermission}`,
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
+    formatHarnessesLine(harnessConfigs),
     `Settings: ${options.settings.path}`,
     `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness only)`,
     ...(warnings.length ? ["Warnings:", ...warnings.map((item) => `- ${item}`)] : []),
@@ -80,10 +95,14 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
   ].join("\n");
 }
 
-async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions): Promise<string> {
-  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()));
-  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))];
-  const settingsErrors = options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting"));
+async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<string> {
+  const { harnesses: harnessConfigs, diagnostics: harnessDiagnostics } = loadHarnessConfigs(getAgentDir());
+  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys()));
+  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi");
+  const settingsErrors = [
+    ...options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting")),
+    ...harnessDiagnostics,
+  ];
   const lines = [
     settingsErrors.length
       ? `✗ Settings: ${settingsErrors.join(" ")}`
@@ -99,14 +118,28 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions): Pr
       ? `✓ ${backend}: ${version || "available"} (authentication unverified)`
       : `✗ ${backend}: unavailable`);
   }
+  // Pi harnesses run in-process, not as a CLI: there is no subprocess to exec.
+  // Confirm the registered model resolves and report configured auth instead.
+  for (const [name, config] of harnessConfigs) {
+    const separator = config.model.indexOf("/");
+    const model = separator === -1 ? undefined : ctx.modelRegistry.find(config.model.slice(0, separator), config.model.slice(separator + 1));
+    if (!model) {
+      lines.push(`✗ ${name}: model "${config.model}" not found in the registry`);
+      continue;
+    }
+    lines.push(ctx.modelRegistry.hasConfiguredAuth(model)
+      ? `✓ ${name}: ${config.model} (auth configured)`
+      : `⚠ ${name}: ${config.model} (no credentials configured)`);
+  }
   return lines.join("\n");
 }
 
 function profilesText(): string {
-  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()));
+  const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys()));
   if (!profiles.size) return "No external profiles. Run /external profile create.";
   return [...profiles.values()].map((profile) =>
-    `${profile.name}: ${profile.backend} · ${profile.model ?? "default model"} · ${profile.thinking ?? "inherited thinking"}`,
+    `${profile.name}: ${profile.harness ?? profile.backend} · ${profile.model ?? "default model"} · ${profile.thinking ?? "inherited thinking"}`,
   ).join("\n");
 }
 
@@ -251,10 +284,10 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
       if (!action) {
-        const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()));
+        const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(loadHarnessConfigs(getAgentDir()).harnesses.keys()));
         ctx.ui.notify(`${profiles.size} external profile(s) · ${workflows(ctx).length} saved workflow(s)\n${settingsText(options, ctx)}`, "info");
       } else if (action === "doctor") {
-        ctx.ui.notify(await doctorText(pi, options), "info");
+        ctx.ui.notify(await doctorText(pi, options, ctx), "info");
       } else if (action === "settings") {
         const warnings = options.settings.diagnostics.length || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).diagnostics.length;
         ctx.ui.notify(settingsText(options, ctx), warnings ? "warning" : "info");

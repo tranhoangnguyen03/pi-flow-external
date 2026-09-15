@@ -35,6 +35,8 @@ type CreateSessionOptions = {
   defaultModelId?: string;
   thinkingLevel?: ThinkingLevel;
   projectTrusted?: boolean;
+  /** Register named pi-* harness configs (writes harnesses.json) pointing at an already-registered faux model. */
+  piHarnesses?: Record<string, { modelId: string; thinking?: ThinkingLevel }>;
 };
 
 export type HarnessState = {
@@ -137,6 +139,18 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(config, null, 2));
   }
 
+  function writeHarnessesJson(piHarnesses: NonNullable<CreateSessionOptions["piHarnesses"]>, models: Array<Model<string>>) {
+    const harnesses: Record<string, { model: string; thinking: string }> = {};
+    for (const [name, config] of Object.entries(piHarnesses)) {
+      const model = models.find((candidate) => candidate.id === config.modelId);
+      if (!model) throw new Error(`piHarnesses references unknown modelId "${config.modelId}"`);
+      harnesses[name] = { model: `${model.provider}/${model.id}`, thinking: config.thinking ?? "off" };
+    }
+    const dir = join(agentDir, "pi-flow-external");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "harnesses.json"), JSON.stringify({ version: 1, harnesses }, null, 2));
+  }
+
   async function createSession(options: CreateSessionOptions = {}) {
     const {
       maxConcurrentSubagents,
@@ -147,6 +161,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       defaultModelId,
       thinkingLevel = "high",
       projectTrusted = false,
+      piHarnesses,
     } = options;
     const registration = registerFauxProvider({ models: modelDefs });
     registrations.push(registration);
@@ -157,6 +172,9 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
     authStorage.setRuntimeApiKey(model.provider, "test-api-key");
     writeModelsJson(models);
+    if (piHarnesses) {
+      writeHarnessesJson(piHarnesses, models);
+    }
     const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
     const settingsManager = SettingsManager.inMemory({});
     if (projectTrusted) {

@@ -1,11 +1,26 @@
 import type { PermissionTier, SubagentBackend, SubagentProfile } from "../types.ts";
 
+/**
+ * Single source of truth for which pi-child SDK builtin tools are active at
+ * each permission tier (design §6's curated tier table). Both the runtime
+ * (src/core/spawn.ts, which derives its actual excludeTools/tools allow-list
+ * from this) and this module's disclosure caveat read from here, so the
+ * caveat text can never drift out of sync with what actually executes.
+ */
+export const PI_TIER_ACTIVE_TOOLS: Readonly<Record<PermissionTier, readonly string[]>> = {
+  readonly: ["read", "grep", "find", "ls"],
+  edit: ["read", "grep", "find", "ls", "edit", "write"],
+  danger: ["read", "bash", "edit", "write"],
+};
+
 export interface PermissionResolution {
   tier: PermissionTier;
   /** True when the backend enforces the tier with a native mechanism. */
   enforced: boolean;
   /** Short human-readable caveat shown in disclosure labels. */
   caveat: string | undefined;
+  /** Backend this resolution was computed for; lets permissionLabel branch on it. */
+  backend?: SubagentBackend;
 }
 
 /**
@@ -49,7 +64,11 @@ export function resolveEffectivePermissionTier(
     // by the profile body, not a harness boundary.
     return "danger";
   }
-  if (profile?.backend === "claude" && isExecutionProfile(profile) && baseTier === "edit") {
+  if ((profile?.backend === "claude" || profile?.backend === "pi") && isExecutionProfile(profile) && baseTier === "edit") {
+    // Same floor as claude, for the same reason: §6's curated pi tool table
+    // strips `bash` at `edit` tier, so an execution-lane pi profile (implementer,
+    // debugger, qa, worker) requested at `edit` would otherwise lose shell
+    // access entirely. Elevate rather than silently handcuff the agent.
     return "danger";
   }
   return baseTier;
@@ -65,6 +84,7 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
       return {
         tier,
         enforced: true,
+        backend,
         // plan/acceptEdits auto-deny Bash headlessly; denials are surfaced.
         caveat: tier === "danger" ? undefined : "Bash auto-denied headlessly",
       };
@@ -72,6 +92,7 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
       return {
         tier,
         enforced: true,
+        backend,
         // --sandbox governs model-generated shell commands, not MCP/plugins/hooks.
         caveat: tier === "danger" ? undefined : "shell commands only",
       };
@@ -84,10 +105,27 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
       return {
         tier,
         enforced: tier === "danger",
+        backend,
         caveat: tier === "danger" ? undefined : "runs unsandboxed; tier advisory only",
       };
+    case "pi":
+      // A curated builtins-only tool surface bounds which tool *names* exist
+      // (see spawn.ts's pi branch); it is a real, truthful tool-level
+      // restriction and not an OS sandbox. It never makes `bash` at `danger`
+      // tier meaningfully less exposed than any other backend's `danger` tier.
+      // The caveat names exactly the tools active *at this tier* (from the
+      // same PI_TIER_ACTIVE_TOOLS table spawn.ts's runtime derives its actual
+      // allow-list from) — never the full builtin universe regardless of
+      // tier, which would misrepresent readonly/edit as having bash/write
+      // available when the tier table excludes them.
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat: tier === "danger" ? undefined : `${PI_TIER_ACTIVE_TOOLS[tier].join("/")} tools only; no project extensions`,
+      };
     default:
-      return { tier, enforced: false, caveat: "advisory, not enforced" };
+      return { tier, enforced: false, backend, caveat: "advisory, not enforced" };
   }
 }
 
@@ -118,7 +156,25 @@ export function buildPermissionArgs(
 
 /** Disclosure label used in delegation cards and receipts. */
 export function permissionLabel(resolution: PermissionResolution): string {
-  const { tier, enforced, caveat } = resolution;
+  const { tier, enforced, caveat, backend } = resolution;
+  if (backend === "pi") {
+    // A pi child is an in-process SDK session, not an external CLI process:
+    // never describe it as "external CLI" (design §9, "Delegation transparency
+    // invariants" in AGENTS.md). "host access" discloses the real boundary —
+    // the curated tool table restricts which tool *names* exist, not what an
+    // admitted bash tool can do.
+    if (tier === "danger") {
+      return "Pi SDK child · host access · curated tools";
+    }
+    const parts = [`Pi SDK child · ${tier} · curated tools`];
+    if (!enforced) {
+      parts.push("advisory, not enforced");
+    }
+    if (caveat && caveat !== "advisory, not enforced") {
+      parts.push(caveat);
+    }
+    return parts.join(" · ");
+  }
   if (tier === "danger") {
     return "unsandboxed external CLI";
   }

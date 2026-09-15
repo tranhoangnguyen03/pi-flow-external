@@ -19,7 +19,8 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, resolveExternalProfile } from "../src/profiles.ts";
+import { externalRoleAvailability, filterExternalAgentProfiles, getSubagentProfiles, isExternalAgentProfile, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../src/profiles.ts";
+import type { HarnessConfig } from "../src/harnesses.ts";
 import type { SubagentProfile } from "../src/types.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
 import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
@@ -287,5 +288,170 @@ describe("role-first profile resolution", () => {
       .toThrow(/do not combine/);
     expect(() => resolveExternalProfile(profiles, { harness: "claude" }, "agy"))
       .toThrow(/role is required when harness is provided/);
+  });
+});
+
+describe("pi harness legitimacy", () => {
+  const bareLocalPi: SubagentProfile = { name: "local-reviewer", backend: "pi", description: "Local reviewer." };
+  const registeredHarnessProfile: SubagentProfile = {
+    name: "pi-deepseek-reviewer",
+    backend: "pi",
+    harness: "pi-deepseek",
+    description: "Reviewer.",
+  };
+
+  it("excludes a bare backend:pi profile with no harness field", () => {
+    expect(isExternalAgentProfile(bareLocalPi)).toBe(false);
+    expect(isExternalAgentProfile(bareLocalPi, new Set(["pi-deepseek"]))).toBe(false);
+  });
+
+  it("excludes backend:pi profile naming an unregistered harness", () => {
+    expect(isExternalAgentProfile(registeredHarnessProfile, new Set(["pi-other"]))).toBe(false);
+    expect(isExternalAgentProfile(registeredHarnessProfile)).toBe(false);
+  });
+
+  it("includes backend:pi profile naming a registered harness", () => {
+    expect(isExternalAgentProfile(registeredHarnessProfile, new Set(["pi-deepseek"]))).toBe(true);
+  });
+
+  it("filterExternalAgentProfiles threads the configured harness set", () => {
+    const profiles = new Map([
+      ["local-reviewer", bareLocalPi],
+      ["pi-deepseek-reviewer", registeredHarnessProfile],
+    ]);
+    expect([...filterExternalAgentProfiles(profiles).keys()]).toEqual([]);
+    expect([...filterExternalAgentProfiles(profiles, new Set(["pi-deepseek"])).keys()]).toEqual(["pi-deepseek-reviewer"]);
+  });
+});
+
+describe("named pi harness resolution", () => {
+  const harnessConfigs = new Map<string, HarnessConfig>([
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+  ]);
+  const configuredHarnessNames = new Set<string>(["agy", "claude", "codex", "pi-deepseek"]);
+
+  it("synthesizes a canonical role profile for a registered pi harness with no on-disk file", () => {
+    const profile = resolveExternalProfile(new Map(), { role: "reviewer", harness: "pi-deepseek" }, "agy", {
+      configuredHarnessNames,
+      harnessConfigs,
+    });
+    expect(profile.name).toBe("pi-deepseek-reviewer");
+    expect(profile.backend).toBe("pi");
+    expect(profile.harness).toBe("pi-deepseek");
+    expect(profile.model).toBe("deepseek/deepseek-chat");
+    expect(profile.thinking).toBe("high");
+    expect(profile.permission).toBe("readonly");
+  });
+
+  it("prefers an on-disk override for body/permission while still inheriting model/thinking from the registry", () => {
+    const onDisk: SubagentProfile = {
+      name: "pi-deepseek-reviewer",
+      backend: "pi",
+      harness: "pi-deepseek",
+      description: "Custom reviewer.",
+      systemPrompt: "Custom body.",
+      permission: "danger",
+    };
+    const profiles = new Map([["pi-deepseek-reviewer", onDisk]]);
+    const profile = resolveExternalProfile(profiles, { role: "reviewer", harness: "pi-deepseek" }, "agy", {
+      configuredHarnessNames,
+      harnessConfigs,
+    });
+    expect(profile.systemPrompt).toBe("Custom body.");
+    expect(profile.permission).toBe("danger");
+    expect(profile.model).toBe("deepseek/deepseek-chat");
+    expect(profile.thinking).toBe("high");
+  });
+
+  it("rejects an on-disk override that pins a conflicting model", () => {
+    const onDisk: SubagentProfile = {
+      name: "pi-deepseek-reviewer",
+      backend: "pi",
+      harness: "pi-deepseek",
+      description: "Custom reviewer.",
+      model: "openai/gpt-5",
+    };
+    const profiles = new Map([["pi-deepseek-reviewer", onDisk]]);
+    expect(() => resolveExternalProfile(profiles, { role: "reviewer", harness: "pi-deepseek" }, "agy", {
+      configuredHarnessNames,
+      harnessConfigs,
+    })).toThrow(/conflicts with "pi-deepseek"'s registered model/);
+  });
+
+  it("does not synthesize a non-canonical role", () => {
+    expect(() => resolveExternalProfile(new Map(), { role: "security-reviewer", harness: "pi-deepseek" }, "agy", {
+      configuredHarnessNames,
+      harnessConfigs,
+    })).toThrow(/Unknown external role/);
+  });
+
+  it("externalRoleAvailability sort order is unchanged with no pi harnesses configured", () => {
+    const profiles = new Map([
+      ["agy-reviewer", { name: "agy-reviewer", backend: "agy", description: "x" } as SubagentProfile],
+      ["codex-reviewer", { name: "codex-reviewer", backend: "codex", description: "x" } as SubagentProfile],
+      ["claude-reviewer", { name: "claude-reviewer", backend: "claude", description: "x" } as SubagentProfile],
+    ]);
+    const availability = externalRoleAvailability(profiles);
+    expect(availability.get("reviewer")).toEqual(["agy", "claude", "codex"]);
+  });
+});
+
+describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", () => {
+  const harnessConfigs = new Map<string, HarnessConfig>([
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+  ]);
+
+  it("inherits model/thinking for an on-disk custom-role file that declares neither (the common branch-3 case)", () => {
+    const custom: SubagentProfile = {
+      name: "pi-deepseek-security-reviewer",
+      backend: "pi",
+      harness: "pi-deepseek",
+      description: "Security review.",
+      systemPrompt: "Review for security defects.",
+    };
+    const merged = mergeSynthesizedPiProfiles(new Map([[custom.name, custom]]), harnessConfigs);
+    const result = merged.get("pi-deepseek-security-reviewer");
+    expect(result?.model).toBe("deepseek/deepseek-chat");
+    expect(result?.thinking).toBe("high");
+  });
+
+  it("leaves a genuinely conflicting on-disk profile unreconciled rather than throwing at merge time", () => {
+    const conflicting: SubagentProfile = {
+      name: "pi-deepseek-security-reviewer",
+      backend: "pi",
+      harness: "pi-deepseek",
+      description: "Security review.",
+      systemPrompt: "Review for security defects.",
+      model: "openai/gpt-5",
+    };
+    // Must not throw: this runs on every turn/workflow for the whole roster,
+    // not just the profile a caller is about to use.
+    const merged = mergeSynthesizedPiProfiles(new Map([[conflicting.name, conflicting]]), harnessConfigs);
+    const result = merged.get("pi-deepseek-security-reviewer");
+    expect(result?.model).toBe("openai/gpt-5");
+    // The conflict is still caught authoritatively the moment this exact
+    // profile is actually selected for execution.
+    expect(() => resolveExternalProfile(merged, { subagentType: "pi-deepseek-security-reviewer" }, "agy", {
+      configuredHarnessNames: new Set(["agy", "claude", "codex", "pi-deepseek"]),
+      harnessConfigs,
+    })).toThrow(/conflicts with "pi-deepseek"'s registered model/);
+  });
+
+  it("leaves non-pi and already-consistent profiles unchanged", () => {
+    const claudeProfile: SubagentProfile = { name: "claude-reviewer", backend: "claude", description: "x" };
+    const consistent: SubagentProfile = {
+      name: "pi-deepseek-security-reviewer",
+      backend: "pi",
+      harness: "pi-deepseek",
+      description: "Security review.",
+      model: "deepseek/deepseek-chat",
+      thinking: "high",
+    };
+    const merged = mergeSynthesizedPiProfiles(new Map([
+      [claudeProfile.name, claudeProfile],
+      [consistent.name, consistent],
+    ]), harnessConfigs);
+    expect(merged.get("claude-reviewer")).toEqual(claudeProfile);
+    expect(merged.get("pi-deepseek-security-reviewer")).toEqual(consistent);
   });
 });

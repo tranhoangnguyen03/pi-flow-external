@@ -18,13 +18,14 @@ import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
   filterExternalAgentProfiles,
-  formatExternalAgentPolicyError,
   getSubagentProfiles,
+  mergeSynthesizedPiProfiles,
   resolveExternalProfile,
 } from "./profiles.ts";
+import { getConfiguredHarnessNames, loadHarnessConfigs } from "./harnesses.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
-import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
+import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import { attachRunRecordIdentity, CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
 import { createRunRecord } from "./core/run-record.ts";
 import { captureParentContext, parentContextSchema, prepareParentContext } from "./core/parent-context.ts";
@@ -39,9 +40,9 @@ import { registerProfileCreator, startProfileInterview } from "./profile-creator
 import { seedDefaultProfiles } from "./defaults.ts";
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveCtxDefaultHarness, resolveExternalSettings, renderDefaultHarness } from "./settings.ts";
+import { EXTERNAL_HARNESSES } from "./types.ts";
 import type {
   PermissionTier,
-  ExternalHarness,
   SubagentBackend,
   SubagentExtensionOptions,
   SubagentProfile,
@@ -71,8 +72,9 @@ const agentToolParameters = Type.Object({
     minLength: 1,
     description: "The built-in or custom external role to use, such as reviewer. Required unless using legacy subagent_type.",
   })),
-  harness: Type.Optional(Type.Union([Type.Literal("agy"), Type.Literal("claude"), Type.Literal("codex")], {
-    description: "Optional external harness override. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
+  harness: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Optional harness override: agy, claude, codex, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
   })),
   subagent_type: Type.Optional(Type.String({
     minLength: 1,
@@ -121,7 +123,7 @@ interface DelegationState {
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
   defaultPermission: PermissionTier;
-  defaultHarness: ExternalHarness;
+  defaultHarness: string;
   defaultMaxBudgetUsd: number | undefined;
   maxRunRecords: number;
   registry: RunRegistry;
@@ -148,7 +150,7 @@ interface CreateAgentToolOptions {
   getSubagentTimeoutMs: () => number;
   getDefaultPermission: () => PermissionTier;
   /** Effective default harness for render paths: cwd only, no trust signal. */
-  getDefaultHarness: (cwd: string) => ExternalHarness;
+  getDefaultHarness: (cwd: string) => string;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
 }
 
@@ -190,7 +192,7 @@ function normalizeSubagentTimeoutMs(value: number | string | boolean | undefined
   return parsed;
 }
 
-function formatSelectionForDisplay(args: Record<string, unknown>, defaultHarness: ExternalHarness): string {
+function formatSelectionForDisplay(args: Record<string, unknown>, defaultHarness: string): string {
   if (typeof args.subagent_type === "string" && args.subagent_type.trim()) return args.subagent_type.trim();
   if (typeof args.role === "string" && args.role.trim()) {
     const harness = typeof args.harness === "string" && args.harness.trim() ? args.harness.trim() : defaultHarness;
@@ -364,15 +366,38 @@ function createAgentTool(
         progressEnabled: state.progressEnabled || shouldEnableProgress(ctx),
       };
       const allProfiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-      const profiles = filterExternalAgentProfiles(allProfiles);
-      const defaultHarness = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx).harness;
+      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
+      // Merge synthesized pi role profiles in, not just filter to on-disk
+      // ones: a legacy exact subagent_type selector only ever looks up the
+      // map directly (resolveExternalProfile's role+harness branch has its
+      // own inline synthesis fallback, but the subagent_type branch does
+      // not), so without this merge a synthesized role like
+      // "pi-deepseek-reviewer" could be reached via role+harness but not via
+      // subagent_type="pi-deepseek-reviewer", which is confusing and
+      // inconsistent for the parent agent driving delegation.
+      const profiles = mergeSynthesizedPiProfiles(
+        filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys())),
+        harnessConfigs,
+      );
+      const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
+      const defaultHarness = requestedDefault.harness;
+      if (!params.harness && !configuredHarnessNames.has(defaultHarness)) {
+        const error = `Default harness "${defaultHarness}" is not registered (deleted from harnesses.json?); pass harness explicitly or recreate it via /external profile create.`;
+        return textResult(error, {
+          description: params.description,
+          subagentType: "unknown",
+          status: "error",
+          error,
+        });
+      }
       let profile: SubagentProfile;
       try {
         profile = resolveExternalProfile(profiles, {
           role: params.role,
           harness: params.harness,
           subagentType: params.subagent_type,
-        }, defaultHarness);
+        }, defaultHarness, { configuredHarnessNames, harnessConfigs });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return textResult(
@@ -387,20 +412,9 @@ function createAgentTool(
       }
       const subagentType = profile.name;
 
-      if (profile.backend === "pi") {
-        const error = formatExternalAgentPolicyError(profile);
-        return textResult(error, {
-          description: params.description,
-          subagentType,
-          backend: profile.backend,
-          status: "error",
-          error,
-        });
-      }
-
       const model = resolveProfileModel(profile, ctx);
       if (usesPiBackend(profile) && !model) {
-        const error = profile.model ? `Profile model not found: ${profile.model}` : "No model is selected";
+        const error = describeMissingModel(profile, ctx.modelRegistry);
         return textResult(`Cannot launch subagent: ${error}.`, {
           description: params.description,
           subagentType,
@@ -414,7 +428,10 @@ function createAgentTool(
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const sessionVersion = state.registry.sessionVersion(sessionId);
       const project = resolve(ctx.cwd);
-      const executionContext = { cwd: project } as ExtensionContext;
+      // modelRegistry must survive into the execution context: the pi backend
+      // resolves its child model/auth through it (spawn.ts's pi branch), the
+      // same already-populated instance the parent used to resolve `profile`.
+      const executionContext = { cwd: project, modelRegistry: ctx.modelRegistry } as ExtensionContext;
       const limiter = state.limiter;
       const timeoutMs = state.subagentTimeoutMs;
       const thinkingLevel = profile.thinking ?? options.getThinkingLevel();
@@ -568,11 +585,21 @@ function createAgentTool(
       if (state.selectionKey !== selectionKey) {
         let profile: SubagentProfile | undefined;
         try {
-          profile = resolveExternalProfile(filterExternalAgentProfiles(getSubagentProfiles(getAgentDir())), {
-            role: typeof args.role === "string" ? args.role : undefined,
-            harness: typeof args.harness === "string" ? args.harness : undefined,
-            subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
-          }, defaultHarness);
+          const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+          const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
+          profile = resolveExternalProfile(
+            mergeSynthesizedPiProfiles(
+              filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys())),
+              harnessConfigs,
+            ),
+            {
+              role: typeof args.role === "string" ? args.role : undefined,
+              harness: typeof args.harness === "string" ? args.harness : undefined,
+              subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
+            },
+            defaultHarness,
+            { configuredHarnessNames, harnessConfigs },
+          );
         } catch {
           profile = undefined;
         }
@@ -769,9 +796,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       // synchronously in execute() before the first await and releases it in the
       // finally. Acquisition is synchronous and release always runs, so the
       // in-flight count stays accurate across turns without a reset.
-      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
+      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const profiles = mergeSynthesizedPiProfiles(
+        filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry), new Set(harnessConfigs.keys())),
+        harnessConfigs,
+      );
       const defaultHarness = resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness;
-      return { systemPrompt: `${event.systemPrompt}\n\n${buildCoordinatorPrompt(profiles, defaultHarness)}` };
+      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()];
+      return { systemPrompt: `${event.systemPrompt}\n\n${buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}` };
     });
   };
 }

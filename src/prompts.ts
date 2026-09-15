@@ -1,5 +1,5 @@
 import type { SavedWorkflow } from "./workflow/registry.ts";
-import { EXTERNAL_HARNESSES, type ExternalHarness, type SubagentProfile } from "./types.ts";
+import { EXTERNAL_HARNESSES, type SubagentProfile } from "./types.ts";
 import { externalProfileRole, externalRoleAvailability } from "./profiles.ts";
 
 export const AGENT_PROMPT_SNIPPET =
@@ -14,21 +14,26 @@ export const EXTERNAL_HELP_PROMPT_SNIPPET =
 export const EXTERNAL_RUNS_PROMPT_SNIPPET =
   "List, inspect, wait for, or cancel session-owned external runs; follow cursors for complete output.";
 
-function roleLabel(role: string, harnesses: ExternalHarness[]): string {
-  return `${role}${harnesses.length === EXTERNAL_HARNESSES.length ? "" : ` (${harnesses.join(", ")} only)`}`;
+// Only elide the "(harness only)" suffix when every configured harness
+// carries the role; a role available on all three CLIs but no pi harness
+// still gets the suffix, so callers see the true availability rather than
+// a stale "no suffix means universal" assumption.
+function roleLabel(role: string, harnesses: string[], configuredHarnesses: readonly string[]): string {
+  return `${role}${harnesses.length === configuredHarnesses.length ? "" : ` (${harnesses.join(", ")} only)`}`;
 }
 
 export function formatExternalRoleCatalog(
   profiles: Map<string, SubagentProfile>,
-  defaultHarness: ExternalHarness,
+  defaultHarness: string,
+  configuredHarnessNames: readonly string[] = EXTERNAL_HARNESSES,
 ): string {
-  const roles = [...externalRoleAvailability(profiles)].map(([role, harnesses]) => roleLabel(role, harnesses));
+  const roles = [...externalRoleAvailability(profiles)].map(([role, harnesses]) => roleLabel(role, harnesses, configuredHarnessNames));
   const exactProfiles = [...profiles.values()]
     .filter((profile) => !externalProfileRole(profile))
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((profile) => `${profile.name} (${profile.backend})`);
+    .map((profile) => `${profile.name} (${profile.harness ?? profile.backend})`);
   return [
-    `Harnesses: ${EXTERNAL_HARNESSES.map((harness) => harness === defaultHarness ? `${harness} (default)` : harness).join(", ")}.`,
+    `Harnesses: ${configuredHarnessNames.map((harness) => harness === defaultHarness ? `${harness} (default)` : harness).join(", ")}.`,
     `Roles: ${roles.join(", ") || "none"}.`,
     ...(exactProfiles.length ? [`Exact-only profiles: ${exactProfiles.join(", ")}.`] : []),
   ].join("\n");
@@ -36,11 +41,11 @@ export function formatExternalRoleCatalog(
 
 export function formatExternalRoleHelp(
   profiles: Map<string, SubagentProfile>,
-  defaultHarness: ExternalHarness,
-  harness?: ExternalHarness,
+  defaultHarness: string,
+  harness?: string,
 ): string {
   const selectedProfiles = [...profiles.values()]
-    .filter((profile) => !harness || profile.backend === harness)
+    .filter((profile) => !harness || (profile.harness ?? profile.backend) === harness)
     .sort((a, b) => a.name.localeCompare(b.name));
   const roles = externalRoleAvailability(new Map(selectedProfiles.map((profile) => [profile.name, profile])));
   const roleLines = [...roles].flatMap(([role, harnesses]) => [
@@ -52,7 +57,7 @@ export function formatExternalRoleHelp(
   ]);
   const exactLines = selectedProfiles
     .filter((profile) => !externalProfileRole(profile))
-    .map((profile) => `- ${profile.name} (${profile.backend}): ${profile.description}`);
+    .map((profile) => `- ${profile.name} (${profile.harness ?? profile.backend}): ${profile.description}`);
   return [
     `External roles${harness ? ` on ${harness}` : ""}. Default harness: ${defaultHarness}.`,
     roleLines.join("\n") || "- none",
@@ -78,10 +83,14 @@ export function formatSavedWorkflows(workflows: SavedWorkflow[], maxItems = 20):
   return `Saved workflows:\n${lines.join("\n")}`;
 }
 
-export function buildCoordinatorPrompt(profiles: Map<string, SubagentProfile>, defaultHarness: ExternalHarness): string {
+export function buildCoordinatorPrompt(
+  profiles: Map<string, SubagentProfile>,
+  defaultHarness: string,
+  configuredHarnessNames: readonly string[] = EXTERNAL_HARNESSES,
+): string {
   return `# External delegation
 
-${formatExternalRoleCatalog(profiles, defaultHarness)}
+${formatExternalRoleCatalog(profiles, defaultHarness, configuredHarnessNames)}
 
 Catalog availability reflects configured profiles, not CLI installation or authentication. External delegation tools use external CLIs only; use native Pi subagents for Pi-backed work. Give each child a clear task, absolute paths, and read-only/edit intent; nested agents may start elsewhere. Share parent context explicitly when a child needs it: context: {mode:"recent", turns:N} for the last N user turns (including the current turn), {mode:"full"} for available post-compaction conversation, or omit it for independent tasks. Prefer the smallest sufficient snapshot; snapshots exclude thinking/system instructions and pending calls, fail on images or over 1 MiB, and may contain sensitive data sent to the external harness. Use resume to follow up on an existing child; never combine it with sharing. This is text transfer, not a native session clone or guaranteed cache reuse. Set background:true only when the parent can proceed before completion; use external_runs to list, inspect, wait for, or cancel the returned run ID. External CLIs have host access, and agy always runs unsandboxed (readonly/edit are advisory). Role selection never falls back. Do not retry failed runs: agy alone may make one disclosed infrastructure retry. Use external_help for role descriptions, permission details, workflow syntax, supervision syntax, and saved workflows.`;
 }

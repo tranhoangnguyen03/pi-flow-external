@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compileProfile } from "./profile-creator.ts";
 import { getSubagentProfiles, isExternalAgentProfile, isValidSubagentName } from "./profiles.ts";
+import { DEFAULT_ROLES } from "./default-roles.ts";
 import type { SubagentBackend, SubagentProfile } from "./types.ts";
 
 /**
@@ -9,40 +10,9 @@ import type { SubagentBackend, SubagentProfile } from "./types.ts";
  * (explorer, planner, implementer, reviewer, qa) plus the generalist worker.
  * Models and thinking are intentionally unpinned so defaults track the CLI's
  * own model and the current Pi thinking level instead of going stale.
+ * Role bodies themselves live in default-roles.ts, the one canonical source
+ * also used to synthesize the same six roles for named Pi harness configs.
  */
-const DEFAULT_ROLES = {
-  explorer: {
-    permission: "readonly",
-    description: "Repository exploration through ${backendLabel}.",
-    body: "Explore the repository read-only. Identify architecture, entry points, tests, configuration, risks, and recommended first-read files. Do not modify files or repository state.",
-  },
-  planner: {
-    permission: "readonly",
-    description: "Implementation planning through ${backendLabel}.",
-    body: "Create a concise implementation plan. Identify affected files, risks, validation steps, and open questions. Do not modify files or repository state.",
-  },
-  implementer: {
-    permission: "danger",
-    description: "Code implementation through ${backendLabel}.",
-    body: "Implement the requested change carefully. Keep changes minimal, preserve existing style, run relevant validation, and report the results. Avoid unrelated edits.",
-  },
-  reviewer: {
-    permission: "readonly",
-    description: "Code review through ${backendLabel}.",
-    body: "Review code for correctness, edge cases, regressions, maintainability, security, accessibility when relevant, and missing tests. Prioritize concrete findings by severity with file references. Do not modify files or repository state.",
-  },
-  qa: {
-    permission: "danger",
-    description: "Requirements-based test authoring through ${backendLabel}.",
-    body: "Write automated tests from the stated requirements, independent of the implementation. Derive cases from the spec first; read implementation only to target the right test layer. Run the tests you write. Do not fix code or implement features. Report requirement-coverage gaps and untestable requirements.",
-  },
-  worker: {
-    permission: "danger",
-    description: "General-purpose work through ${backendLabel}.",
-    body: "Complete the requested task using your best judgment. Do the work well and completely rather than minimally, and use your own approach. Report what you did and anything you deliberately skipped.",
-  },
-} as const satisfies Record<string, { permission: "readonly" | "danger"; description: string; body: string }>;
-
 const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy"];
 const BACKEND_LABELS: Record<string, string> = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity" };
 
@@ -121,10 +91,13 @@ export function retiredDefaultProfileNames(): string[] {
  * Never includes user-owned profiles (owner: user) or native Pi profiles
  * (backend: pi or none): those do not belong to this extension.
  */
-export function findRetiredDefaultProfiles(agentDir: string): SubagentProfile[] {
+export function findRetiredDefaultProfiles(
+  agentDir: string,
+  configuredPiHarnesses?: ReadonlySet<string>,
+): SubagentProfile[] {
   const retired = new Set(retiredDefaultProfileNames());
   return [...getSubagentProfiles(agentDir).values()].filter(
-    (profile) => isExternalAgentProfile(profile) && profile.owner !== "user" && retired.has(profile.name),
+    (profile) => isExternalAgentProfile(profile, configuredPiHarnesses) && profile.owner !== "user" && retired.has(profile.name),
   );
 }
 

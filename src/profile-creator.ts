@@ -9,42 +9,64 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import type { ConcurrencyLimiter } from "./core/concurrency.ts";
+import { resolveProfileModel } from "./core/model.ts";
 import { textResult } from "./core/progress.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
 import {
   filterExternalAgentProfiles,
   getSubagentProfiles,
-  isExternalAgentProfile,
   isValidSubagentName,
   parseSubagentProfileContent,
+  reconcilePiProfileWithHarness,
 } from "./profiles.ts";
+import {
+  getConfiguredHarnessNames,
+  installHarnessConfigWithSmokeTest,
+  isValidHarnessName,
+  isValidThinkingLevel,
+  loadHarnessConfigs,
+  VALID_THINKING_LEVELS,
+} from "./harnesses.ts";
+import { EXTERNAL_HARNESSES } from "./types.ts";
 import type { SubagentProfile, SubagentUsage } from "./types.ts";
 
 const PROFILE_TOOL_NAME = "pi_flow_profile_create";
+const HARNESS_TOOL_NAME = "pi_flow_harness_create";
 const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 
-export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external agent profile through an AI-assisted interview.
+export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external agent profile, or one named Pi harness configuration, through an AI-assisted interview.
 
-Start by asking: "What kind of agent do you want to create, and what should it help you accomplish?"
-Then ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules.
+Start by asking which of three things I want:
+1. A role profile for an existing external CLI harness (claude, codex, or agy).
+2. A new named Pi harness configuration (a "pi-*" name pinning a provider/model and optional thinking level, run in-process rather than as a CLI).
+3. A role profile for an existing registered pi-* harness.
 
-When the intent is clear, recommend a backend: claude, codex, or agy. Briefly explain the recommendation and let me override it. Suggest a lowercase <backend>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them; otherwise omit them.
+For branch 1 or 3: ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. For branch 1, recommend a backend (claude, codex, or agy) and explain briefly; for branch 3, confirm which already-registered pi-* harness this role targets. Suggest a lowercase <harness>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them for branch 1/3 profiles; otherwise omit them — for branch 3, model/thinking are inherited from the named harness and must not be overridden to a different value. When ready, summarize once and call ${PROFILE_TOOL_NAME}.
 
-When the profile is ready, summarize your understanding once. Then call ${PROFILE_TOOL_NAME}. Do not write files yourself and do not run Agent or workflow. The tool will show the exact profile for review, request confirmation, stage it, run the real backend smoke test, and either install it or roll it back.`;
+For branch 2: ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
+
+Do not write files yourself and do not run Agent or workflow in either branch. The tool will show what will be created for review, request confirmation, stage it, run a real backend smoke test, and either install it or roll it back.`;
 
 const profileParameters = Type.Object({
-  name: Type.String({ description: "Lowercase <backend>-<role> profile name, such as claude-security-reviewer; the suffix becomes its role." }),
+  name: Type.String({ description: "Lowercase <harness>-<role> profile name, such as claude-security-reviewer or pi-deepseek-security-reviewer; the suffix becomes its role." }),
   description: Type.String({ description: "Concise profile description shown by external_help and in delegation intent." }),
-  backend: StringEnum(["claude", "codex", "agy"] as const, { description: "External CLI backend." }),
-  model: Type.Optional(Type.String({ description: "Optional backend model override. Omit to use the CLI default." })),
-  thinking: Type.Optional(Type.String({ description: "Optional reasoning-effort override. Omit to use the current Pi level." })),
+  backend: Type.String({ description: "External CLI backend (claude, codex, agy) or a registered named pi-* harness." }),
+  model: Type.Optional(Type.String({ description: "Optional backend model override. Omit to use the CLI default. For a pi-* backend, must match the harness's registered model if given at all." })),
+  thinking: Type.Optional(Type.String({ description: "Optional reasoning-effort override. Omit to use the current Pi level. For a pi-* backend, must match the harness's registered thinking if given at all." })),
   systemPrompt: Type.String({ description: "Complete focused instructions for the external agent profile." }),
 });
 
 type ProfileParameters = Static<typeof profileParameters>;
+
+const harnessParameters = Type.Object({
+  name: Type.String({ description: "Lowercase pi-<label> harness name, such as pi-deepseek." }),
+  model: Type.String({ description: "provider/modelId, resolved live against the Pi model registry, such as deepseek/deepseek-chat." }),
+  thinking: Type.Optional(Type.String({ description: "Optional thinking level: off, minimal, low, medium, high, or xhigh. Defaults to off." })),
+});
+
+type HarnessParameters = Static<typeof harnessParameters>;
 
 interface ProfileCreatorOptions {
   getLimiter: () => ConcurrencyLimiter;
@@ -58,11 +80,19 @@ function optional(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+/** Is `backend` one of claude/codex/agy (a genuine external CLI selector)? */
+function isExternalHarnessBackend(value: string): value is (typeof EXTERNAL_HARNESSES)[number] {
+  return (EXTERNAL_HARNESSES as readonly string[]).includes(value);
+}
+
 function normalizeProfile(input: ProfileParameters): SubagentProfile {
+  const backendInput = input.backend.trim();
+  const isPiHarness = !isExternalHarnessBackend(backendInput);
   return {
     name: input.name.trim(),
     description: input.description.trim(),
-    backend: input.backend,
+    backend: isPiHarness ? "pi" : backendInput,
+    ...(isPiHarness ? { harness: backendInput } : {}),
     model: optional(input.model),
     thinking: optional(input.thinking),
     systemPrompt: input.systemPrompt.trim(),
@@ -76,12 +106,17 @@ export function compileProfile(profile: SubagentProfile): string {
   if (!isValidSubagentName(profile.name)) {
     throw new Error("Profile name must contain only lowercase letters, numbers, and hyphens.");
   }
-  if (!isExternalAgentProfile(profile)) {
-    throw new Error("Profile backend must be claude, codex, or agy.");
+  const isExternalCli = (EXTERNAL_HARNESSES as readonly string[]).includes(profile.backend);
+  const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined;
+  if (!isExternalCli && !isPiHarnessProfile) {
+    throw new Error("Profile backend must be claude, codex, agy, or a registered pi-* harness name.");
   }
-  const backendPrefix = `${profile.backend}-`;
-  if (!profile.name.startsWith(backendPrefix) || profile.name === backendPrefix) {
-    throw new Error(`Profile name must start with ${JSON.stringify(backendPrefix)}.`);
+  if (isPiHarnessProfile && !isValidHarnessName(profile.harness!)) {
+    throw new Error(`Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(profile.harness)}).`);
+  }
+  const selectorPrefix = `${profile.harness ?? profile.backend}-`;
+  if (!profile.name.startsWith(selectorPrefix) || profile.name === selectorPrefix) {
+    throw new Error(`Profile name must start with ${JSON.stringify(selectorPrefix)}.`);
   }
   if (!profile.description.trim()) {
     throw new Error("Profile description is required.");
@@ -93,6 +128,7 @@ export function compileProfile(profile: SubagentProfile): string {
   const frontmatter = [
     `description: ${JSON.stringify(profile.description.trim())}`,
     `backend: ${profile.backend}`,
+    ...(profile.harness ? [`harness: ${JSON.stringify(profile.harness)}`] : []),
     ...(profile.model ? [`model: ${JSON.stringify(profile.model)}`] : []),
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
     ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
@@ -110,8 +146,10 @@ export async function installProfileWithSmokeTest({
   agentDir: string;
   profile: SubagentProfile;
   signal?: AbortSignal;
-  smokeTest: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  smokeTest: (reconciledProfile: SubagentProfile) => Promise<{ ok: true } | { ok: false; error: string }>;
 }): Promise<string> {
+  const { harnesses: harnessConfigs } = loadHarnessConfigs(agentDir);
+  const reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
   const content = compileProfile(profile);
   if (!parseSubagentProfileContent(content, profile.name, { requireBody: true })) {
     throw new Error("Compiled profile failed runtime validation.");
@@ -136,7 +174,7 @@ export async function installProfileWithSmokeTest({
 
   try {
     await writeFile(stagedPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    const smoke = await smokeTest();
+    const smoke = await smokeTest(reconciled);
     if (!smoke.ok) {
       throw new Error(smoke.error);
     }
@@ -148,7 +186,7 @@ export async function installProfileWithSmokeTest({
     await unlink(stagedPath);
     signal?.throwIfAborted();
 
-    const installed = filterExternalAgentProfiles(getSubagentProfiles(agentDir)).get(profile.name);
+    const installed = filterExternalAgentProfiles(getSubagentProfiles(agentDir), getConfiguredHarnessNames(agentDir)).get(profile.name);
     if (!installed) {
       throw new Error("Installed profile was not discovered by the runtime loader.");
     }
@@ -189,9 +227,16 @@ function profileReview(profile: SubagentProfile, path: string): string {
   return `Destination: ${path}\nBackend executable: ${profile.backend}\n\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
 }
 
+function harnessReview(name: string, model: string, thinking: string): string {
+  return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory.`;
+}
+
+// Both creator tools are activated together during the interview: the
+// assistant picks whichever branch (role profile vs. new harness) applies and
+// calls that one tool; finalizing either one deactivates both.
 function setProfileCreatorActive(pi: ExtensionAPI, active: boolean): void {
-  const current = pi.getActiveTools().filter((name) => name !== PROFILE_TOOL_NAME);
-  pi.setActiveTools(active ? [...current, PROFILE_TOOL_NAME] : current);
+  const current = pi.getActiveTools().filter((name) => name !== PROFILE_TOOL_NAME && name !== HARNESS_TOOL_NAME);
+  pi.setActiveTools(active ? [...current, PROFILE_TOOL_NAME, HARNESS_TOOL_NAME] : current);
 }
 
 export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreatorOptions): void {
@@ -203,7 +248,10 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const profile = normalizeProfile(params);
       const finalPath = join(getAgentDir(), "subagents", `${profile.name}.md`);
+      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      let reconciled: SubagentProfile;
       try {
+        reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
         compileProfile(profile);
       } catch (error) {
         return textResult(`Profile validation failed: ${error instanceof Error ? error.message : String(error)}`, {
@@ -244,7 +292,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
           agentDir: getAgentDir(),
           profile,
           signal,
-          smokeTest: async () => {
+          smokeTest: async (reconciledProfile) => {
             let release: () => void;
             try {
               release = await options.getLimiter().acquire(signal);
@@ -257,16 +305,23 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
             let smokeDir: string | undefined;
             try {
               smokeDir = await mkdtemp(join(tmpdir(), "pi-flow-profile-smoke-"));
+              const smokeProfile = profile.backend === "pi" ? (reconciledProfile ?? reconciled) : profile;
               const result = await spawnSubagent({
                 toolCallId: `${toolCallId}-smoke`,
                 description: "Profile smoke test",
                 prompt: smokePrompt(),
                 // Validate backend availability/auth/model without executing the
                 // new profile's instructions or loading project instructions.
-                profile: { ...profile, systemPrompt: undefined },
-                thinkingLevel: profile.backend === "agy"
+                profile: { ...smokeProfile, systemPrompt: undefined },
+                // The pi backend's spawn runtime requires a pre-resolved model
+                // object, unlike claude/codex/agy which resolve their own model
+                // string internally; resolve it here so the smoke test actually
+                // exercises the harness's registered model instead of failing
+                // immediately with "No model is selected".
+                model: smokeProfile.backend === "pi" ? resolveProfileModel(smokeProfile, ctx) : undefined,
+                thinkingLevel: smokeProfile.backend === "agy"
                   ? undefined
-                  : profile.thinking ?? options.getThinkingLevel(),
+                  : smokeProfile.thinking ?? options.getThinkingLevel(),
                 ctx: { ...ctx, cwd: smokeDir },
                 signal,
                 timeoutMs: options.getSubagentTimeoutMs(),
@@ -352,6 +407,150 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
       }
     },
   });
+
+  const harnessTool = defineTool({
+    name: HARNESS_TOOL_NAME,
+    label: "Create named Pi harness",
+    description: "Finalize a new named Pi harness configuration during the /external profile create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
+    parameters: harnessParameters,
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
+      const name = params.name.trim();
+      const model = params.model.trim();
+      const thinking = optional(params.thinking) ?? "off";
+      if (!isValidHarnessName(name)) {
+        const error = `Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(name)}).`;
+        return textResult(error, { description: "Create Pi harness", subagentType: name || "unknown", backend: "pi", status: "error", error });
+      }
+      if (!isValidThinkingLevel(thinking)) {
+        const error = `Unsupported thinking level ${JSON.stringify(thinking)}; expected one of: ${VALID_THINKING_LEVELS.join(", ")}.`;
+        return textResult(error, { description: "Create Pi harness", subagentType: name, backend: "pi", status: "error", error });
+      }
+      const separator = model.indexOf("/");
+      const resolvedModel = separator === -1 ? undefined : ctx.modelRegistry.find(model.slice(0, separator), model.slice(separator + 1));
+      if (!resolvedModel) {
+        const error = `Model "${model}" was not found in the registry (expected "<provider>/<id>").`;
+        return textResult(error, { description: "Create Pi harness", subagentType: name, backend: "pi", status: "error", error });
+      }
+
+      if (!ctx.hasUI) {
+        return textResult("Harness creation requires interactive or RPC UI so the configuration can be reviewed and confirmed.", {
+          description: "Create Pi harness",
+          subagentType: name,
+          backend: "pi",
+          status: "error",
+          error: "Review UI unavailable",
+        });
+      }
+      const confirmed = await ctx.ui.confirm(`Register ${name}?`, harnessReview(name, model, thinking), { signal });
+      if (!confirmed) {
+        return textResult("Harness creation cancelled. No harness was registered.", {
+          description: "Create Pi harness",
+          subagentType: name,
+          backend: "pi",
+          status: "aborted",
+        });
+      }
+
+      try {
+        const createdPath = await installHarnessConfigWithSmokeTest({
+          agentDir: getAgentDir(),
+          name,
+          model,
+          thinking,
+          owner: "user",
+          signal,
+          smokeTest: async () => {
+            let release: () => void;
+            try {
+              release = await options.getLimiter().acquire(signal);
+            } catch (error) {
+              if (signal?.aborted) {
+                throw new DOMException(error instanceof Error ? error.message : String(error), "AbortError");
+              }
+              throw error;
+            }
+            let smokeDir: string | undefined;
+            try {
+              smokeDir = await mkdtemp(join(tmpdir(), "pi-flow-harness-smoke-"));
+              const result = await spawnSubagent({
+                toolCallId: `${toolCallId}-smoke`,
+                description: "Harness smoke test",
+                prompt: smokePrompt(),
+                profile: { name: `${name}-smoke`, description: "Harness smoke test", backend: "pi", harness: name, model, thinking },
+                model: resolvedModel,
+                thinkingLevel: thinking,
+                ctx: { ...ctx, cwd: smokeDir },
+                signal,
+                timeoutMs: options.getSubagentTimeoutMs(),
+                progressEnabled: false,
+                onProgress: undefined,
+                onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
+                excludeTools: CHILD_EXCLUDED_TOOLS,
+                recordRun: false,
+              });
+              const details = result.details as { status?: string; error?: string };
+              if (details.status === "aborted") {
+                throw new DOMException(details.error ?? "Harness smoke test cancelled.", "AbortError");
+              }
+              if (details.status !== "done") {
+                return { ok: false, error: details.error ?? `Smoke test ended with status ${details.status ?? "unknown"}.` };
+              }
+              if (resultText(result) !== SMOKE_TOKEN) {
+                return { ok: false, error: `Smoke test returned an unexpected response instead of ${SMOKE_TOKEN}.` };
+              }
+              return { ok: true };
+            } finally {
+              release();
+              if (smokeDir) {
+                await rm(smokeDir, { recursive: true, force: true });
+              }
+            }
+          },
+        });
+        ctx.ui.notify(`Harness "${name}" is ready: ${createdPath}`, "info");
+        return textResult(`Harness "${name}" passed its smoke test and was registered at ${createdPath}.`, {
+          description: "Create Pi harness",
+          subagentType: name,
+          backend: "pi",
+          status: "done",
+          result: createdPath,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (cancelled) {
+          ctx.ui.notify("Harness creation cancelled. No harness was registered.", "info");
+          return textResult("Harness creation cancelled. No harness was registered.", {
+            description: "Create Pi harness",
+            subagentType: name,
+            backend: "pi",
+            status: "aborted",
+            error: message,
+          });
+        }
+        ctx.ui.notify(`Harness creation failed and was rolled back: ${message}`, "error");
+        return textResult(`Harness creation failed during validation or smoke testing: ${message}\n\nRolled back. No harness was registered.`, {
+          description: "Create Pi harness",
+          subagentType: name,
+          backend: "pi",
+          status: "error",
+          error: message,
+        });
+      }
+    },
+  });
+  const executeHarnessCreator = harnessTool.execute.bind(harnessTool);
+  pi.registerTool({
+    ...harnessTool,
+    async execute(...args) {
+      try {
+        return await executeHarnessCreator(...args);
+      } finally {
+        setProfileCreatorActive(pi, false);
+      }
+    },
+  });
+
   pi.on("session_start", () => setProfileCreatorActive(pi, false));
   pi.on("input", (event) => {
     if (event.source === "extension" && event.text === PROFILE_INTERVIEW_PROMPT) {

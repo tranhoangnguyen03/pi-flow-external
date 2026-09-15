@@ -4,6 +4,26 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.1.0-external.0] - 2026-09-15
+
+Named Pi harness configurations (`pi-*`): a fourth delegation surface running in-process through Pi's own SDK, selectable exactly like `agy`/`claude`/`codex`. Design: `docs/plans/pi-named-configurations-design.md`; plan: `docs/plans/pi-named-configurations-implementation-plan.md`.
+
+### Added
+
+- Named `pi-*` harness configurations: arbitrary labels pinning any `provider/model` resolvable through Pi's model registry (built-in, self-hosted, or OpenAI-compatible) plus an explicit thinking level, registered in `~/.pi/agent/pi-flow-external/harnesses.json`.
+- `Agent({ role, harness: "pi-<label>" })` and workflow `agent()` treat `pi-*` names as first-class harnesses; the six canonical roles (`explorer`/`planner`/`implementer`/`reviewer`/`qa`/`worker`) are synthesized automatically for every registered pi harness with no per-harness files.
+- A `backend: pi` profile is delegation-eligible only when it declares a registered `harness`; the registry stays authoritative for model/thinking (conflicting on-disk overrides fail rather than silently win).
+- Profile creator gains a harness-declaration branch (`pi_flow_harness_create`) and role profiles targeting an existing pi harness, both smoke-tested through the real runtime with atomic staged writes.
+- Pi runtime contract: curated built-in-only child tools (no extensions/skills/themes), synchronous model/auth/thinking preflights, tier→tool allow-lists, execution-role `edit`→`danger` floor, per-child in-memory retry disable (never touching user settings), observed non-retrying terminal-event + non-whitespace completion, thinking-clamp disclosure, and backend-aware permission labels that never call an in-process child an "external CLI".
+- `/external settings`, `/external doctor`, and `external_help` disclose pi harnesses and their model/thinking; stale or deleted `defaultHarness` fails the delegation explicitly rather than silently rerouting to `agy`.
+- Workflow replay fingerprints include the resolved backend/harness/model/thinking/profile body/tools/effective permission plus an SDK-version policy tag; each workflow freezes one complete profile snapshot (synthesized profiles included) for its run.
+
+### Limitations (v1)
+
+- Pi children are built-in tools only; they do not load project/user extensions, skills, prompt templates, themes, or MCP tools. Expansion tracked in issue #43.
+- Custom (non-canonical) pi roles are authored per harness in v1.
+- Pi children cannot be resumed and enforce no hard budget cap; both are disclosed, not approximated.
+
 ## [2.0.0-external.0] - 2026-09-14
 
 Child observation and workflow-aware supervision. Full design: `docs/plans/2026-09-14-child-observation-and-supervision-design.md`.

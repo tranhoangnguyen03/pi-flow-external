@@ -133,6 +133,30 @@ describe("delegation transparency rendering", () => {
     expect(receiptText).toContain("claude_12345678");
   });
 
+  it("discloses a pi-harness delegation as an in-process child, never as an external CLI", () => {
+    mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+    );
+    const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
+    const theme = makeMockTheme() as never;
+
+    const callArgs = {
+      description: "Review a diff",
+      prompt: "Review the diff read-only.",
+      role: "reviewer",
+      harness: "pi-deepseek",
+    };
+    const callContext = { cwd, executionStarted: true, state: {} };
+    const call = tool.renderCall?.(callArgs, theme, callContext);
+    const callText = renderToText(call!);
+    expect(callText).toContain("Delegating");
+    expect(callText).toContain("pi-deepseek-reviewer");
+    expect(callText).toContain("Pi SDK child");
+    expect(callText).not.toContain("external CLI");
+  });
+
   it("states workflow access once and exposes terminal journal evidence on expansion", () => {
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "workflow")!;
     const theme = makeMockTheme() as never;

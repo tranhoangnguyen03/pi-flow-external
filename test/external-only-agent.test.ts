@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "../src/profiles.ts";
+import { getConfiguredHarnessNames } from "../src/harnesses.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("external-only Agent policy", () => {
@@ -49,5 +50,24 @@ describe("external-only Agent policy", () => {
 
     const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
     expect([...profiles.keys()].sort()).toEqual(["agy-planner", "claude-explorer", "codex-reviewer"]);
+  });
+
+  it("includes a registered pi-* harness's on-disk or synthesized role profiles in the external roster", () => {
+    mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+    );
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-reviewer.md"),
+      `---\ndescription: Security review through pi-deepseek.\nbackend: pi\nharness: pi-deepseek\n---\n\nReview for security defects.\n`,
+    );
+
+    const configuredPiHarnesses = getConfiguredHarnessNames(agentDir);
+    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir), configuredPiHarnesses);
+    expect(profiles.has("pi-deepseek-reviewer")).toBe(true);
+    expect(profiles.get("pi-deepseek-reviewer")).toMatchObject({ backend: "pi", harness: "pi-deepseek" });
   });
 });

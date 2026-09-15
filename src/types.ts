@@ -19,6 +19,13 @@ export interface SubagentProfile {
   name: string;
   description: string;
   backend: SubagentBackend;
+  /**
+   * Which configuration to use. For claude/codex/agy this always equals
+   * `backend`. For a pi-backed profile, `backend` is always the literal "pi"
+   * while `harness` names the specific registered `pi-*` configuration
+   * (see src/harnesses.ts) that pins its model and thinking level.
+   */
+  harness?: string;
   model?: string;
   thinking?: ThinkingLevel;
   tools?: string[];
@@ -56,6 +63,12 @@ export interface SubagentExtensionOptions {
 export type FlowExtensionOptions = SubagentExtensionOptions;
 
 export type SubagentRunStatus = "queued" | "running" | "done" | "error" | "aborted";
+
+/** A pi child's requested thinking level was clamped to what its resolved model actually supports. */
+export interface ThinkingClamp {
+  requested: string;
+  effective: string;
+}
 
 export interface SubagentAssistantOutput {
   status: "preliminary" | "final" | "interrupted";
@@ -103,6 +116,8 @@ export interface WorkflowAgentSnapshot {
   sessionId?: string;
   /** Prior run id this run continued, when resuming. */
   resumedFrom?: string;
+  /** Set when a pi child's requested thinking level was clamped by model capability. */
+  thinkingClamped?: ThinkingClamp;
 }
 
 export interface WorkflowToolDetails {
@@ -189,6 +204,8 @@ export interface SubagentProgressNode {
   sessionId?: string;
   /** Prior run id this run continued, when resuming. */
   resumedFrom?: string;
+  /** Set when a pi child's requested thinking level was clamped by model capability. */
+  thinkingClamped?: ThinkingClamp;
 }
 
 export interface SubagentToolDetails {
@@ -237,4 +254,6 @@ export interface SubagentToolDetails {
   sessionId?: string;
   /** Prior run id this run continued, when resuming. */
   resumedFrom?: string;
+  /** Set when a pi child's requested thinking level was clamped by model capability. */
+  thinkingClamped?: ThinkingClamp;
 }
