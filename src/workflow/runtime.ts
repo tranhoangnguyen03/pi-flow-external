@@ -2,6 +2,7 @@ import { prepareParentContext } from "../core/parent-context.ts";
 import { resolve } from "node:path";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
+import { resolveEffectivePermissionTier } from "../core/permissions.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
 import {
   defaultAgentLabel,
@@ -215,7 +216,15 @@ export async function runWorkflow<T = unknown>(
       maxBudgetUsd: opts.maxBudgetUsd,
       resumeRunId: opts.resumeRunId,
     };
-    const fingerprint = fingerprintWorkflowAgentCall(call);
+    const descriptor = options.describeSubagentType?.(subagentType);
+    const effectivePermission = options.getDefaultPermission
+      ? resolveEffectivePermissionTier(
+        call.permission,
+        descriptor ? { name: subagentType, description: "", backend: descriptor.backend, permission: descriptor.permission } : undefined,
+        options.getDefaultPermission(),
+      )
+      : undefined;
+    const fingerprint = fingerprintWorkflowAgentCall(call, descriptor, effectivePermission);
     const cachedResult = state.resumePrefixActive ? resumeAgentResults[index - 1] : undefined;
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
       options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, cached: true, runId: cachedResult.runId });

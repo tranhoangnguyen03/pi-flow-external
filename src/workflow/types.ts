@@ -146,6 +146,24 @@ export interface WorkflowLimits {
   abortGraceMs: number;
 }
 
+/**
+ * The execution-identity-relevant slice of a resolved SubagentProfile, used
+ * to widen the workflow replay fingerprint beyond the profile *name* so that
+ * editing a profile's model/thinking/body/tools/permission/budget (directly,
+ * or via its named pi harness's registered config) invalidates a stale cached
+ * fingerprint instead of silently matching it.
+ */
+export interface WorkflowSubagentDescriptor {
+  backend: import("../types.ts").SubagentBackend;
+  harness?: string;
+  model?: string;
+  thinking?: string;
+  systemPrompt?: string;
+  tools?: string[];
+  permission?: import("../types.ts").PermissionTier;
+  maxBudgetUsd?: number;
+}
+
 export interface RunWorkflowOptions {
   parentMessages?: ParentContextMessages;
   parentToolCallId?: string;
@@ -160,6 +178,17 @@ export interface RunWorkflowOptions {
   defaultSubagentType?: string | null;
   /** Resolve role/harness or legacy exact-profile selection before queueing and fingerprinting. */
   resolveSubagentType?: (selection: { role?: string; harness?: string; subagentType?: string }) => string;
+  /**
+   * Describe a resolved subagentType's execution identity for the replay
+   * fingerprint. Backed by the same frozen per-run profile snapshot
+   * resolveSubagentType/runAgent already use (synthesized pi-* role profiles
+   * included), so a name that resolves for execution always describes here
+   * too — an undefined result means the name is genuinely unresolvable, the
+   * same failure runAgent itself would raise, never "it was synthesized and
+   * nobody told the descriptor."
+   */
+  describeSubagentType?: (name: string) => WorkflowSubagentDescriptor | undefined;
+  getDefaultPermission?: () => import("../types.ts").PermissionTier;
   limits?: Partial<WorkflowLimits>;
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;

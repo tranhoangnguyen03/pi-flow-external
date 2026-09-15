@@ -12,6 +12,8 @@ import {
 } from "../src/profile-creator.ts";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { loadCustomSubagentProfiles, parseSubagentProfileContent } from "../src/profiles.ts";
+import { fauxAssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 const tempDirs: string[] = [];
 
@@ -37,15 +39,15 @@ const profile = {
 
 type CreatorTool = { execute: (...args: any[]) => Promise<any> };
 
-function makeCreatorTool(limiter = new ConcurrencyLimiter(12)): CreatorTool {
-  let tool: CreatorTool | undefined;
+function makeCreatorTools(limiter = new ConcurrencyLimiter(12)): Map<string, CreatorTool & { name: string }> {
+  const tools = new Map<string, CreatorTool & { name: string }>();
   let activeTools: string[] = [];
   const pi = {
     getActiveTools: () => activeTools,
     setActiveTools: (names: string[]) => { activeTools = names; },
     on: vi.fn(),
     registerCommand: vi.fn(),
-    registerTool: (definition: CreatorTool) => { tool = definition; activeTools.push("pi_flow_profile_create"); },
+    registerTool: (definition: CreatorTool & { name: string }) => { tools.set(definition.name, definition); },
   } as unknown as ExtensionAPI;
   registerProfileCreator(pi, {
     getLimiter: () => limiter,
@@ -53,7 +55,15 @@ function makeCreatorTool(limiter = new ConcurrencyLimiter(12)): CreatorTool {
     getThinkingLevel: () => "high",
     updateStatus: () => undefined,
   });
-  return tool!;
+  return tools;
+}
+
+function makeCreatorTool(limiter = new ConcurrencyLimiter(12)): CreatorTool {
+  return makeCreatorTools(limiter).get("pi_flow_profile_create")!;
+}
+
+function makeHarnessCreatorTool(limiter = new ConcurrencyLimiter(12)): CreatorTool {
+  return makeCreatorTools(limiter).get("pi_flow_harness_create")!;
 }
 
 async function withAgentDir<T>(agentDir: string, run: () => Promise<T>): Promise<T> {
@@ -467,5 +477,193 @@ describe("profile creator", () => {
     expect(PROFILE_INTERVIEW_PROMPT).toContain("one question at a time");
     expect(PROFILE_INTERVIEW_PROMPT).toContain("recommend a backend");
     expect(PROFILE_INTERVIEW_PROMPT).toContain("pi_flow_profile_create");
+    expect(PROFILE_INTERVIEW_PROMPT).toContain("pi_flow_harness_create");
+  });
+
+  it("activates both creator tools together, not just the profile one", () => {
+    const tools = makeCreatorTools();
+    expect(tools.has("pi_flow_profile_create")).toBe(true);
+    expect(tools.has("pi_flow_harness_create")).toBe(true);
+  });
+});
+
+describe("role profile targeting an existing pi harness", () => {
+  const piProfile = {
+    name: "pi-deepseek-security-reviewer",
+    description: "Security review through pi-deepseek.",
+    backend: "pi" as const,
+    harness: "pi-deepseek",
+    systemPrompt: "Review for security defects. Do not modify files.",
+    owner: "user",
+  };
+
+  it("compiles with a harness frontmatter line and the harness-prefixed name rule", () => {
+    const content = compileProfile(piProfile);
+    expect(content).toContain(`harness: "pi-deepseek"`);
+    expect(content).toContain(`backend: pi`);
+    const parsed = parseSubagentProfileContent(content, piProfile.name, { requireBody: true });
+    expect(parsed?.harness).toBe("pi-deepseek");
+  });
+
+  it("rejects a name that does not start with the declared harness", () => {
+    expect(() => compileProfile({ ...piProfile, name: "pi-glm-security-reviewer" }))
+      .toThrow('Profile name must start with "pi-deepseek-".');
+  });
+
+  it("rejects an unregistered harness name shape", () => {
+    expect(() => compileProfile({ ...piProfile, harness: "not-pi-prefixed", name: "not-pi-prefixed-security-reviewer" }))
+      .toThrow(/must match pi-/);
+  });
+
+  it("installProfileWithSmokeTest rejects a profile whose harness is not registered", async () => {
+    const agentDir = await makeAgentDir();
+    await expect(installProfileWithSmokeTest({
+      agentDir,
+      profile: piProfile,
+      smokeTest: async () => ({ ok: true }),
+    })).rejects.toThrow(/is not registered/);
+  });
+
+  it("installProfileWithSmokeTest rejects a profile whose model conflicts with the registered harness", async () => {
+    const agentDir = await makeAgentDir();
+    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "off" } } }),
+    );
+    await expect(installProfileWithSmokeTest({
+      agentDir,
+      profile: { ...piProfile, model: "openai/gpt-5" },
+      smokeTest: async () => ({ ok: true }),
+    })).rejects.toThrow(/conflicts with "pi-deepseek"'s registered model/);
+  });
+
+  it("installProfileWithSmokeTest installs a conflict-free profile against a registered harness", async () => {
+    const agentDir = await makeAgentDir();
+    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "off" } } }),
+    );
+    const createdPath = await installProfileWithSmokeTest({
+      agentDir,
+      profile: piProfile,
+      smokeTest: async () => ({ ok: true }),
+    });
+    expect(existsSync(createdPath)).toBe(true);
+    expect(loadCustomSubagentProfiles(agentDir).get(piProfile.name)?.harness).toBe("pi-deepseek");
+  });
+});
+
+describe("pi_flow_harness_create tool", () => {
+  function harnessCtx(overrides: { confirm?: () => Promise<boolean>; findModel?: unknown } = {}) {
+    const model = "findModel" in overrides ? overrides.findModel : { id: "deepseek-chat", provider: "deepseek" };
+    return {
+      hasUI: true,
+      cwd: "/tmp/does-not-matter",
+      modelRegistry: { find: vi.fn(() => model), hasConfiguredAuth: vi.fn(() => true) },
+      ui: { confirm: vi.fn(overrides.confirm ?? (async () => true)), notify: vi.fn() },
+    } as unknown as ExtensionCommandContext;
+  }
+
+  it("rejects an invalid harness name before confirmation or the smoke test", async () => {
+    const agentDir = await makeAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx();
+      const result = await tool.execute("bad-name", { name: "deepseek", model: "deepseek/deepseek-chat" }, undefined, undefined, ctx);
+      expect(result.details.status).toBe("error");
+      expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an unsupported thinking level before confirmation", async () => {
+    const agentDir = await makeAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx();
+      const result = await tool.execute("bad-thinking", { name: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "med" }, undefined, undefined, ctx);
+      expect(result.details.status).toBe("error");
+      expect(result.details.error).toContain("off, minimal, low, medium, high, xhigh");
+      expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a model that does not resolve in the registry before confirmation", async () => {
+    const agentDir = await makeAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx({ findModel: undefined });
+      const result = await tool.execute("bad-model", { name: "pi-deepseek", model: "deepseek/deepseek-chat" }, undefined, undefined, ctx);
+      expect(result.details.status).toBe("error");
+      expect(result.details.error).toContain("not found in the registry");
+      expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  it("writes nothing when the user rejects the confirmation", async () => {
+    const agentDir = await makeAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx({ confirm: async () => false });
+      const result = await tool.execute("declined", { name: "pi-deepseek", model: "deepseek/deepseek-chat" }, undefined, undefined, ctx);
+      expect(result.details.status).toBe("aborted");
+      expect(existsSync(join(agentDir, "pi-flow-external", "harnesses.json"))).toBe(false);
+    });
+  });
+});
+
+describe("creatorTool with registered pi harness", () => {
+  let agentDir = "";
+  let cwd = "";
+  const { createSession } = setupPiSubagentTestHarness((state) => {
+    agentDir = state.agentDir;
+    cwd = state.cwd;
+  });
+
+  it("creatorTool.execute smoke-tests and installs a pi role profile that omits model/thinking", async () => {
+    const { modelRegistry, registration } = await createSession({
+      piHarnesses: {
+        "pi-deepseek": { modelId: "faux-thinker", thinking: "high" },
+      },
+    });
+    registration.setResponses([() => fauxAssistantMessage("PI_FLOW_PROFILE_OK")]);
+
+    const tool = makeCreatorTool();
+    const ctx = {
+      hasUI: true,
+      cwd,
+      modelRegistry,
+      ui: { confirm: vi.fn(async () => true), notify: vi.fn() },
+    } as unknown as ExtensionCommandContext;
+
+    const result = await tool.execute(
+      "create-pi-profile",
+      {
+        name: "pi-deepseek-security-reviewer",
+        backend: "pi-deepseek",
+        description: "Custom security review.",
+        systemPrompt: "Check for security vulnerabilities.",
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result.details.status).toBe("done");
+    const installedPath = join(agentDir, "subagents", "pi-deepseek-security-reviewer.md");
+    expect(existsSync(installedPath)).toBe(true);
+    const content = readFileSync(installedPath, "utf8");
+    // Omission semantics preserved in the markdown file:
+    expect(content).not.toContain("model:");
+    expect(content).not.toContain("thinking:");
+    expect(content).toContain('harness: "pi-deepseek"');
+    expect(content).toContain("backend: pi");
+
+    // Runtime loader discovers it with inherited harness and omitted model/thinking:
+    const loaded = loadCustomSubagentProfiles(agentDir).get("pi-deepseek-security-reviewer");
+    expect(loaded?.harness).toBe("pi-deepseek");
+    expect(loaded?.model).toBeUndefined();
+    expect(loaded?.thinking).toBeUndefined();
   });
 });

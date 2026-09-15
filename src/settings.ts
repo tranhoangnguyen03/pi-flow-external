@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HARNESS_NAME_PATTERN } from "./harnesses.ts";
 import { EXTERNAL_HARNESSES, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
   version: 3,
-  defaultHarness: "agy" as ExternalHarness,
+  defaultHarness: "agy" as string,
   maxConcurrentSubagents: 12,
   subagentTimeoutMs: 2 * 60 * 60 * 1000,
   defaultPermission: "danger" as PermissionTier,
@@ -14,7 +15,8 @@ export const DEFAULT_EXTERNAL_SETTINGS = {
 
 export type ExternalSettings = {
   version: 3;
-  defaultHarness: ExternalHarness;
+  /** One of EXTERNAL_HARNESSES, or a `pi-*` name (shape-validated here; live registry membership is checked at delegation time, not here). */
+  defaultHarness: string;
   maxConcurrentSubagents: number;
   subagentTimeoutMs: number;
   defaultPermission: PermissionTier;
@@ -56,6 +58,18 @@ function isExternalHarness(value: unknown): value is ExternalHarness {
 }
 
 /**
+ * Shape-only validation for a `defaultHarness` selector: one of the three
+ * external CLI harnesses, or a `pi-*` name matching the named-Pi-harness
+ * registry's key pattern. This is pure and synchronous, matching
+ * parseSettings's existing contract; whether a named `pi-*` harness is
+ * actually registered is a live-registry question resolved at delegation
+ * time by the caller, not here.
+ */
+function isValidHarnessSelectorShape(value: unknown): value is string {
+  return isExternalHarness(value) || (typeof value === "string" && HARNESS_NAME_PATTERN.test(value));
+}
+
+/**
  * Migrate-on-read: never reject the whole file. Defaults are filled first and
  * each recognized key (from v1, v2, or v3) overrides when valid; invalid values
  * fall back per-key with a diagnostic. Unknown keys are reported, not fatal.
@@ -76,10 +90,10 @@ function parseSettings(value: unknown): { settings: ExternalSettings; diagnostic
   }
 
   const settings = defaults();
-  if (isExternalHarness(record.defaultHarness)) {
+  if (isValidHarnessSelectorShape(record.defaultHarness)) {
     settings.defaultHarness = record.defaultHarness;
   } else if (record.defaultHarness !== undefined) {
-    diagnostics.push("defaultHarness must be agy, claude, or codex.");
+    diagnostics.push("defaultHarness must be agy, claude, codex, or a registered pi-* harness name.");
   }
   if (Number.isInteger(record.maxConcurrentSubagents) && Number(record.maxConcurrentSubagents) >= 1) {
     settings.maxConcurrentSubagents = record.maxConcurrentSubagents as number;
@@ -165,7 +179,7 @@ export function projectExternalSettingsPath(cwd: string): string {
 }
 
 export interface EffectiveDefaultHarness {
-  harness: ExternalHarness;
+  harness: string;
   source: "project" | "global";
   projectPath?: string;
   diagnostics: string[];
@@ -207,7 +221,7 @@ function parseProjectSettings(cwd: string): {
 }
 
 export function resolveDefaultHarness(
-  global: ExternalHarness,
+  global: string,
   cwd: string,
   projectTrusted: boolean,
 ): EffectiveDefaultHarness {
@@ -228,10 +242,10 @@ export function resolveDefaultHarness(
   if (requested === undefined) {
     return { harness: global, source: "global", projectPath: project.path, diagnostics };
   }
-  if (isExternalHarness(requested)) {
+  if (isValidHarnessSelectorShape(requested)) {
     return { harness: requested, source: "project", projectPath: project.path, diagnostics };
   }
-  diagnostics.push(`Project defaultHarness must be one of: ${EXTERNAL_HARNESSES.join(", ")}. Using the global default.`);
+  diagnostics.push(`Project defaultHarness must be one of: ${EXTERNAL_HARNESSES.join(", ")}, or a registered pi-* harness name. Using the global default.`);
   return { harness: global, source: "global", projectPath: project.path, diagnostics };
 }
 
@@ -239,7 +253,7 @@ let lastResolvedDefaultHarness: { cwd: string; value: EffectiveDefaultHarness } 
 
 /** Resolve with a live extension context and remember it for render paths. */
 export function resolveCtxDefaultHarness(
-  global: ExternalHarness,
+  global: string,
   ctx: { cwd: string; isProjectTrusted?: () => boolean },
 ): EffectiveDefaultHarness {
   let trusted = false;
@@ -258,6 +272,6 @@ export function resolveCtxDefaultHarness(
  * context-resolved value for that cwd (before_agent_start always resolves
  * before the first Agent render) and fall back to the global default.
  */
-export function renderDefaultHarness(global: ExternalHarness, cwd: string): ExternalHarness {
+export function renderDefaultHarness(global: string, cwd: string): string {
   return lastResolvedDefaultHarness?.cwd === cwd ? lastResolvedDefaultHarness.value.harness : global;
 }

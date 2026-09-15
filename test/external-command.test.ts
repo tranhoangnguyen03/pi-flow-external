@@ -12,7 +12,6 @@ describe("/external command", () => {
     process.env.PI_CODING_AGENT_DIR = root;
     mkdirSync(join(root, "subagents"), { recursive: true });
     writeFileSync(join(root, "subagents", "claude-reviewer.md"), "---\ndescription: Review code.\nbackend: claude\n---\nReview read-only.\n");
-    writeFileSync(join(root, "subagents", "claude-debugger.md"), "---\ndescription: Debug.\nbackend: claude\n---\nDebug failures.\n");
     writeFileSync(join(root, "subagents", "scout.md"), "---\ndescription: Native Pi scout.\nbackend: pi\n---\nNative work.\n");
     try {
       let command: { getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null; handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
@@ -71,7 +70,7 @@ describe("/external command", () => {
       });
 
       expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-        "doctor", "settings", "profiles", "profile create", "profile clean-up", "workflows", "runs", "runs summary", "runs --prune", "help",
+        "doctor", "settings", "profiles", "profile create", "workflows", "runs", "runs summary", "runs --prune", "help",
       ]);
 
       const notices: string[] = [];
@@ -134,13 +133,68 @@ describe("/external command", () => {
 
       await command?.handler("profile create", ctx);
       expect(startProfileInterview).toHaveBeenCalledOnce();
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      await command?.handler("profile clean-up", ctx);
-      expect(notices.at(-1)).toContain("claude-debugger");
-      expect(notices.at(-1)).toContain("nothing changed");
-      expect(notices.at(-1)).not.toContain("scout");
-      expect(existsSync(join(root, "subagents", "claude-debugger.md"))).toBe(true);
-      expect(existsSync(join(root, "subagents", "scout.md"))).toBe(true);
+  it("reports registered pi harnesses without spawning a subprocess, and discloses a stale default", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-pi-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(root, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({
+        version: 1,
+        harnesses: {
+          "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" },
+          "pi-unauthed": { model: "deepseek/other-model", thinking: "off" },
+        },
+      }),
+    );
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const exec = vi.fn(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
+      const pi = { exec, registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: {
+          version: 3,
+          defaultHarness: "pi-missing",
+          maxConcurrentSubagents: 12,
+          subagentTimeoutMs: 7200000,
+          defaultPermission: "danger",
+          defaultMaxBudgetUsd: null,
+          maxRunRecords: 200,
+        },
+        diagnostics: [],
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 12, subagentTimeoutMs: 7_200_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: { execute: vi.fn() } as never,
+      });
+
+      const notices: string[] = [];
+      const modelRegistry = {
+        find: (provider: string, id: string) => provider === "deepseek" && id === "deepseek-chat" ? { provider, id } : undefined,
+        hasConfiguredAuth: () => true,
+      };
+      const ctx = { cwd: root, isProjectTrusted: () => false, modelRegistry, ui: { notify: (message: string) => notices.push(message) } };
+
+      await command?.handler("doctor", ctx);
+      expect(exec).not.toHaveBeenCalled();
+      expect(notices.at(-1)).toContain("✓ pi-deepseek: deepseek/deepseek-chat (auth configured)");
+      expect(notices.at(-1)).toContain('✗ pi-unauthed: model "deepseek/other-model" not found in the registry');
+
+      await command?.handler("settings", ctx);
+      expect(notices.at(-1)).toContain("Pi harnesses: pi-deepseek (deepseek/deepseek-chat · high), pi-unauthed (deepseek/other-model · default thinking)");
+      expect(notices.at(-1)).toContain('Configured default harness "pi-missing" is not currently registered.');
     } finally {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

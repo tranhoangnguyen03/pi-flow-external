@@ -39,6 +39,16 @@ Defaults:
 
 Override with `--model`, `--thinking`, `--root-model`, or `--root-thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary profile path printed by the runner.
 
+### Named Pi harness receipt
+
+Run only when the pi runtime contract (§7 of the design), harness registry, or canonical role synthesis changes, and only if you have already registered a real `pi-*` harness in your own `harnesses.json` with real credentials configured:
+
+```bash
+npm run e2e -- --backend pi --harness pi-deepseek
+```
+
+This lane never registers a harness or writes a temporary profile — canonical synthesis already provides the `worker` role for any registered harness — it only delegates to the harness you name and requires the same one complete `done` receipt.
+
 ## Supervised workflow receipt
 
 When workflow runtime, scheduling, supervision, or tool integration changes, run the affected backend; run all three before release:
@@ -47,6 +57,7 @@ When workflow runtime, scheduling, supervision, or tool integration changes, run
 npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
 npm run e2e -- --backend agy --workflow
+npm run e2e -- --backend pi --harness pi-deepseek --workflow
 ```
 
 Each command declares `meta.apiVersion: 1`, starts a two-child workflow with `background: true`, waits for the selected workflow through `external_runs`, inspects its summary/output, requires two complete child receipts, and verifies the read-only fixture stayed clean. Forced multi-page cursor behavior remains covered by deterministic offline tests; this check exercises real workflow child handling without duplicating those semantics.

@@ -221,7 +221,6 @@ describe("tier enforcement resolution", () => {
 describe("effective permission tier resolution", () => {
   it("identifies execution-oriented profiles by name convention and danger permission", () => {
     expect(isExecutionProfile({ name: "claude-implementer", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "claude-debugger", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "claude-qa", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "claude-worker", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "worker", description: "", backend: "claude" })).toBe(true);
@@ -245,12 +244,12 @@ describe("effective permission tier resolution", () => {
     expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("readonly");
     expect(resolveEffectivePermissionTier(undefined, implementer)).toBe("danger");
 
-    const debuggerProfile: SubagentProfile = {
-      name: "claude-debugger",
-      description: "debug",
+    const workerProfile: SubagentProfile = {
+      name: "claude-worker",
+      description: "work",
       backend: "claude",
     };
-    expect(resolveEffectivePermissionTier("edit", debuggerProfile)).toBe("danger");
+    expect(resolveEffectivePermissionTier("edit", workerProfile)).toBe("danger");
   });
 
   it("elevates every agy tier to danger — agy runs unsandboxed", () => {
@@ -282,5 +281,68 @@ describe("effective permission tier resolution", () => {
       permission: "readonly",
     };
     expect(resolveEffectivePermissionTier("edit", claudeExplorer)).toBe("edit");
+  });
+
+  it("elevates pi execution profiles to danger floor when edit tier is requested", () => {
+    const piImplementer: SubagentProfile = {
+      name: "pi-deepseek-implementer",
+      description: "implement",
+      backend: "pi",
+      harness: "pi-deepseek",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", piImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", piImplementer)).toBe("readonly");
+
+    const piReviewer: SubagentProfile = {
+      name: "pi-deepseek-reviewer",
+      description: "review",
+      backend: "pi",
+      harness: "pi-deepseek",
+      permission: "readonly",
+    };
+    expect(resolveEffectivePermissionTier("edit", piReviewer)).toBe("edit");
+  });
+});
+
+describe("pi backend permission disclosure", () => {
+  it("resolves pi as enforced with a curated-tools caveat below danger", () => {
+    const readonly = resolvePermission("readonly", "pi");
+    expect(readonly.enforced).toBe(true);
+    expect(readonly.backend).toBe("pi");
+    expect(readonly.caveat).toContain("tools only");
+
+    const danger = resolvePermission("danger", "pi");
+    expect(danger.caveat).toBeUndefined();
+  });
+
+  it("names exactly the tools active at each pi tier, never overstating it as the full builtin set", () => {
+    // readonly/edit must never claim bash is available (it is excluded at
+    // both tiers); the caveat is the single disclosure surface a parent
+    // agent reads to know what a delegated pi child can actually do, so an
+    // inaccurate caveat is a real trust/UX bug, not cosmetic prose.
+    const readonly = resolvePermission("readonly", "pi");
+    expect(readonly.caveat).toContain("read/grep/find/ls");
+    expect(readonly.caveat).not.toContain("bash");
+    expect(readonly.caveat).not.toContain("write");
+
+    const edit = resolvePermission("edit", "pi");
+    expect(edit.caveat).toContain("read/grep/find/ls/edit/write");
+    expect(edit.caveat).not.toContain("bash");
+
+    // danger carries no caveat (nothing to disclose beyond what any other
+    // backend's danger tier already means: full host access).
+    expect(resolvePermission("danger", "pi").caveat).toBeUndefined();
+  });
+
+  it("never describes a pi child as an external CLI", () => {
+    const dangerLabel = permissionLabel(resolvePermission("danger", "pi"));
+    expect(dangerLabel).not.toContain("external CLI");
+    expect(dangerLabel).toContain("Pi SDK child");
+
+    const readonlyLabel = permissionLabel(resolvePermission("readonly", "pi"));
+    expect(readonlyLabel).not.toContain("external CLI");
+    expect(readonlyLabel).toContain("Pi SDK child");
+    expect(readonlyLabel).toContain("readonly");
   });
 });

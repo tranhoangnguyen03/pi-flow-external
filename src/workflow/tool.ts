@@ -11,18 +11,19 @@ import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
-import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
+import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { createRunRecord } from "../core/run-record.ts";
 import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, resolveExternalProfile } from "../profiles.ts";
+import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
+import { loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import type { ExternalHarness, PermissionTier, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
+import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
-import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner } from "./types.ts";
+import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner, type WorkflowSubagentDescriptor } from "./types.ts";
 import {
   createStructuredOutputTool,
   STRUCTURED_OUTPUT_CONTRACT,
@@ -37,8 +38,21 @@ export interface CreateWorkflowToolOptions {
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
   getDefaultPermission: () => PermissionTier;
-  getDefaultHarness: (ctx: ExtensionContext) => ExternalHarness;
+  getDefaultHarness: (ctx: ExtensionContext) => string;
   getDefaultMaxBudgetUsd: () => number | undefined;
+}
+
+function toDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
+  return {
+    backend: profile.backend,
+    harness: profile.harness,
+    model: profile.model,
+    thinking: profile.thinking,
+    systemPrompt: profile.systemPrompt,
+    tools: profile.tools,
+    permission: profile.permission,
+    maxBudgetUsd: profile.maxBudgetUsd,
+  };
 }
 
 function workflowResult(text: string, details: WorkflowToolDetails) {
@@ -109,8 +123,22 @@ export function createWorkflowTool(
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const sessionVersion = options.registry.sessionVersion(sessionId);
       const project = resolve(ctx.cwd);
-      const executionContext = { cwd: project } as ExtensionContext;
-      const profiles = filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry));
+      // modelRegistry must survive into the execution context: the pi backend
+      // resolves its child model/auth through it (spawn.ts's pi branch), the
+      // same already-populated instance used to resolve models below.
+      const executionContext = { cwd: project, modelRegistry: ctx.modelRegistry } as ExtensionContext;
+      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
+      // Freeze one resolved roster snapshot for the whole run: real on-disk
+      // external profiles plus synthesized pi-* role profiles, merged once,
+      // BEFORE the models map is built. Building `models` from the pre-merge
+      // `profiles` map would leave every synthesized pi role without a model
+      // entry, and runAgent's `usesPiBackend(profile) && !model` check would
+      // then reject a call that resolveSubagentType already accepted.
+      const profiles = mergeSynthesizedPiProfiles(
+        filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry), new Set(harnessConfigs.keys())),
+        harnessConfigs,
+      );
       const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
       const limiter = options.getLimiter();
       const thinkingLevel = options.getThinkingLevel();
@@ -170,7 +198,7 @@ export function createWorkflowTool(
         }
         const model = models.get(call.subagentType);
         if (usesPiBackend(profile) && !model) {
-          throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
+          throw new Error(describeMissingModel(profile, ctx.modelRegistry));
         }
 
         // Structured output: native pi subagents get an injected schema-validated
@@ -348,11 +376,24 @@ export function createWorkflowTool(
             }).result;
           },
           defaultSubagentType: null,
-          resolveSubagentType: (selection) => resolveExternalProfile(
-            profiles,
-            selection,
-            defaultHarness,
-          ).name,
+          resolveSubagentType: (selection) => {
+            if (!selection.harness && !configuredHarnessNames.has(defaultHarness)) {
+              throw new Error(
+                `Default harness "${defaultHarness}" is not registered (deleted from harnesses.json?); pass harness explicitly or recreate it via /external profile create.`,
+              );
+            }
+            return resolveExternalProfile(
+              profiles,
+              selection,
+              defaultHarness,
+              { configuredHarnessNames, harnessConfigs },
+            ).name;
+          },
+          describeSubagentType: (name) => {
+            const profile = profiles.get(name);
+            return profile ? toDescriptor(profile) : undefined;
+          },
+          getDefaultPermission: () => defaultPermission,
           resumeAgentResults,
           onLog: (message) => {
             snapshot.logs.push(message);

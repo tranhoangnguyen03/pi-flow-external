@@ -29,14 +29,16 @@ import type {
   SubagentProgressNode,
   SubagentToolDetails,
   SubagentUsage,
+  ThinkingClamp,
 } from "../types.ts";
-import { resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
+import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { runRecordsDirectory } from "./retention.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 import type { PermissionResolution } from "./permissions.ts";
+import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../harnesses.ts";
 
 
 /**
@@ -202,10 +204,13 @@ function attachRunRecord(
   const elevatedNote = extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier
     ? ` · permission elevated ${extras.requestedTier}→${extras.permission.tier}`
     : "";
+  const clampedNote = details.thinkingClamped
+    ? ` · thinking clamped ${details.thinkingClamped.requested}→${details.thinkingClamped.effective}`
+    : "";
   attachRunRecordIdentity(result, record);
   const first = result.content[0];
   if (first?.type === "text") {
-    first.text = first.text.replace(`[run ${record.runId}]`, `[run ${record.runId}${blocked}${elevatedNote}]`);
+    first.text = first.text.replace(`[run ${record.runId}]`, `[run ${record.runId}${blocked}${elevatedNote}${clampedNote}]`);
   }
   if (details.progress) {
     apply(details.progress);
@@ -390,6 +395,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         ...(details.retries !== undefined ? { retries: details.retries } : {}),
         ...(details.retryOf ? { retryOf: details.retryOf } : {}),
         ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
+        ...(details.thinkingClamped ? { thinkingClamped: details.thinkingClamped } : {}),
       });
       attachRunRecord(
         result,
@@ -536,11 +542,70 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     onUsage,
   } = params;
   const subagentType = profile.name;
+
+  // Thinking preflight: a valid-but-unsupported-by-this-model level is
+  // legitimately clamped by createAgentSession itself (checked after session
+  // creation below); a value outside the SDK's own closed set is not a
+  // capability question, it is a typo or a stale/hand-edited harnesses.json
+  // entry, and must fail loudly here rather than reach the SDK at all.
+  if (thinkingLevel !== undefined && !isValidThinkingLevel(thinkingLevel)) {
+    const error = `Unsupported thinking level "${thinkingLevel}"; expected one of: ${VALID_THINKING_LEVELS.join(", ")}.`;
+    return textResult(`Subagent "${description}" (${subagentType}) failed: ${error}`, {
+      description,
+      subagentType,
+      backend: profile.backend,
+      status: "error",
+      error,
+    });
+  }
+
+  // Auth preflight: hasConfiguredAuth is a fast, synchronous check that does
+  // not refresh OAuth, so a token needing silent refresh could read as
+  // unconfigured — acceptable, since prompt() would then simply fail cleanly
+  // with a provider error instead of misbehaving silently.
+  if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
+    const error = `No credentials configured for provider "${model.provider}".`;
+    return textResult(`Subagent "${description}" (${subagentType}) failed: ${error}`, {
+      description,
+      subagentType,
+      backend: profile.backend,
+      status: "error",
+      error,
+    });
+  }
+
   const excludeTools = params.excludeTools ?? CHILD_EXCLUDED_TOOLS;
   const customTools = params.customTools ?? [];
+  const tier: PermissionTier = params.permission ?? "danger";
+  // Curated builtins-only tier table (design §6), derived from the single
+  // shared PI_TIER_ACTIVE_TOOLS source (src/core/permissions.ts) rather than
+  // a second hand-maintained copy: readonly/edit tiers get a *default*
+  // tools: allow-list when the profile itself sets none, so a readonly pi
+  // child can actually search the repo (read alone cannot) rather than
+  // being technically "read-only" but practically useless. danger keeps the
+  // SDK's own default active tools (read/bash/edit/write) with no explicit
+  // exclusion list needed — grep/find/ls simply aren't part of that default
+  // set, so there is nothing to exclude.
+  // The deny-by-exclusion universe is derived from the union of every tier's
+  // active-tool list (the single shared PI_TIER_ACTIVE_TOOLS source), not a
+  // hand-maintained copy: a builtin added to any tier's allow-list is
+  // automatically part of the universe excluded at the other tiers, so the two
+  // can never drift out of sync.
+  const PI_BUILTIN_TOOL_NAMES = [...new Set(Object.values(PI_TIER_ACTIVE_TOOLS).flat())];
+  const tierDefaultTools: Partial<Record<PermissionTier, readonly string[]>> = {
+    readonly: PI_TIER_ACTIVE_TOOLS.readonly,
+    edit: PI_TIER_ACTIVE_TOOLS.edit,
+  };
+  const tierExtraExcludes: Record<PermissionTier, readonly string[]> = {
+    readonly: PI_BUILTIN_TOOL_NAMES.filter((name) => !PI_TIER_ACTIVE_TOOLS.readonly.includes(name)),
+    edit: PI_BUILTIN_TOOL_NAMES.filter((name) => !PI_TIER_ACTIVE_TOOLS.edit.includes(name)),
+    danger: [],
+  };
+  const effectiveExcludeTools = [...new Set([...excludeTools, ...tierExtraExcludes[tier]])];
   // A pinned tool allow-list must still admit any injected tools (e.g. structured_output).
+  const effectiveDefaultTools = profile.tools ?? tierDefaultTools[tier];
   const toolAllowList =
-    profile.tools !== undefined ? [...profile.tools, ...customTools.map((tool) => tool.name)] : undefined;
+    effectiveDefaultTools !== undefined ? [...effectiveDefaultTools, ...customTools.map((tool) => tool.name)] : undefined;
   const taskPrompt = params.appendInstructions ? `${prompt}\n\n${params.appendInstructions}` : prompt;
   const emitter = createProgressEmitter({
     toolCallId,
@@ -554,6 +619,15 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
 
   const agentDir = getAgentDir();
   const cwd = ctx.cwd;
+  // Real global/project settings (compaction, thinking budgets, theme, etc.)
+  // still flow through unchanged; only retry is overridden, and only in
+  // memory. AgentSession retries transient provider errors on its own
+  // (enabled: true, maxRetries 3 by default) entirely inside session.prompt(),
+  // before this function's own completion check ever runs. Left as-is, every
+  // pi child would silently retry, violating this repo's no-auto-retry
+  // contract (AGENTS.md). applyOverrides() merges into the manager's live,
+  // in-process `settings` view only — it never calls markModified()/save(),
+  // so this can never reach the user's real settings file on disk.
   const settingsManager = SettingsManager.create(cwd, agentDir);
   const appendPrompts = [
     profile.systemPrompt,
@@ -562,55 +636,114 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     cwd,
     agentDir,
     settingsManager,
-    extensionsOverride: (base) => ({
-      ...base,
-      extensions: base.extensions.filter(
-        (extension) => !excludeTools.some((name) => extension.tools.has(name)),
-      ),
-    }),
+    // Curated, builtins-only child (design §6): no project/user extensions,
+    // skills, prompt templates, or themes load into a pi child at all, so the
+    // "builtins only" tool-surface claim is mechanically true rather than a
+    // token gesture — a readonly/edit/danger tier bounds real tool names, not
+    // a subset of an otherwise-unbounded extension surface. CHILD_EXCLUDED_TOOLS
+    // stays in excludeTools below purely as defense-in-depth documentation of
+    // intent: it is provably unreachable once no extensions load at all.
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
     appendSystemPromptOverride: (base) => [...base, ...appendPrompts],
   });
-  await resourceLoader.reload();
 
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    model,
-    thinkingLevel: thinkingLevel as NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"],
-    modelRegistry: ctx.modelRegistry,
-    settingsManager,
-    sessionManager: SessionManager.inMemory(cwd),
-    resourceLoader,
-    excludeTools: [...excludeTools],
-    ...(customTools.length > 0 ? { customTools } : {}),
-    ...(toolAllowList !== undefined ? { tools: toolAllowList } : {}),
-  });
-
+  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  let unsubscribe: (() => void) | undefined;
   let abortHandler: (() => void) | undefined;
-  if (signal) {
-    abortHandler = () => {
-      void session.abort();
-    };
-    if (!signal.aborted) {
-      signal.addEventListener("abort", abortHandler, { once: true });
-    }
-  }
+  let lastAgentEnd: { willRetry?: boolean } | undefined;
+  let thinkingClamped: ThinkingClamp | undefined;
 
-  const unsubscribe = session.subscribe((event) => {
-    if (progress) {
-      updateProgressFromEvent(progress, event);
-      emitter.emitSoon();
+  const disposeAll = () => {
+    emitter.stop();
+    unsubscribe?.();
+    if (signal && abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
     }
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      const usage = getSubagentUsage(session);
-      if (progress) {
-        progress.usage = usage;
-      }
-      onUsage(usage);
-    }
-  });
+    session?.dispose();
+  };
 
   try {
+    if (signal?.aborted) {
+      throw new Error("Subagent aborted before prompt start");
+    }
+    await resourceLoader.reload();
+    // Third abort guard: resourceLoader.reload() does real file I/O (context
+    // files, settings) and can be slow; check again before the heavier session
+    // construction so an abort during reload does not proceed to spawn a
+    // session that would immediately need to be torn down anyway.
+    if (signal?.aborted) {
+      throw new Error("Subagent aborted before prompt start");
+    }
+
+    // Apply the retry override only *after* resourceLoader.reload(): reload()
+    // calls settingsManager.reload() internally, which re-reads from disk and
+    // recomputes the manager's live settings view — an override applied
+    // before this point would be silently discarded before session.prompt()
+    // ever reads it. Still purely in-memory: applyOverrides() never calls
+    // markModified()/save(), so this still never reaches the settings file.
+    settingsManager.applyOverrides({ retry: { enabled: false } });
+
+    ({ session } = await createAgentSession({
+      cwd,
+      agentDir,
+      model,
+      thinkingLevel: thinkingLevel as NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"],
+      modelRegistry: ctx.modelRegistry,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      resourceLoader,
+      excludeTools: [...effectiveExcludeTools],
+      ...(customTools.length > 0 ? { customTools } : {}),
+      ...(toolAllowList !== undefined ? { tools: toolAllowList } : {}),
+    }));
+
+    // Legitimate model-capability clamping (createAgentSession's own
+    // documented contract: "clamped to model capabilities"), disclosed the
+    // same way permission elevation already is. This only ever fires for a
+    // requested level that already passed the six-literal preflight above —
+    // a typo/stale value fails outright there and never reaches this
+    // comparison.
+    if (thinkingLevel !== undefined && session.thinkingLevel !== thinkingLevel) {
+      thinkingClamped = { requested: thinkingLevel, effective: session.thinkingLevel };
+    }
+
+    if (signal) {
+      abortHandler = () => {
+        void session?.abort();
+      };
+      // Register unconditionally: if the signal is already aborted, the abort
+      // event was dispatched before this listener existed and will never fire,
+      // so also call abort() directly. Checking `!signal.aborted` *before*
+      // addEventListener would leave a narrow window where the signal aborts
+      // between the check and the registration and the listener misses it.
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) {
+        void session.abort();
+      }
+    }
+
+    unsubscribe = session.subscribe((event) => {
+      params.onBackendEvent?.(event);
+      const record = asRecord(event);
+      if (record?.type === "agent_end") {
+        lastAgentEnd = record as { willRetry?: boolean };
+      }
+      if (progress) {
+        updateProgressFromEvent(progress, event);
+        emitter.emitSoon();
+      }
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        const usage = getSubagentUsage(session!);
+        if (progress) {
+          progress.usage = usage;
+        }
+        onUsage(usage);
+      }
+    });
+
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
@@ -637,7 +770,26 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
         failure.errorMessage || `Subagent model turn did not complete (stopReason: ${failure.stopReason}).`,
       );
     }
-    const result = extractFinalAssistantText(session.messages) || "(no final text output)";
+    // Terminal success requires an *observed* agent_end whose willRetry is
+    // exactly false — not merely the absence of a true value. A run that
+    // completes without ever having emitted (or forwarded) a terminal
+    // agent_end event is exactly as untrustworthy as one that emitted a
+    // retrying one: both mean this code cannot actually confirm the SDK
+    // considered the turn final, so both must fail rather than fall through
+    // to declaring success by default. This also fails loudly, rather than
+    // silently reporting success, if a future SDK change breaks the
+    // "no retry pending once prompt() resolves" invariant this depends on.
+    if (!lastAgentEnd) {
+      throw new Error("Subagent completed without an observed agent_end event; treating as an unexpected state.");
+    }
+    if (lastAgentEnd.willRetry !== false) {
+      throw new Error(`Subagent turn reported willRetry=${String(lastAgentEnd.willRetry)} at completion; treating as an unexpected state.`);
+    }
+    const rawResult = extractFinalAssistantText(session.messages);
+    if (!rawResult || !rawResult.trim()) {
+      throw new Error("Subagent produced no final assistant text.");
+    }
+    const result = rawResult;
     const output = assistantOutput(extractAssistantMessages(session.messages), "final", result);
     const usage = getSubagentUsage(session);
     onUsage(usage);
@@ -647,6 +799,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       progress.usage = usage;
       progress.assistantOutput = output;
       progress.endedAt = Date.now();
+      if (thinkingClamped) progress.thinkingClamped = thinkingClamped;
     }
     return textResult(`Subagent "${description}" (${subagentType}) completed:\n\n${result}`, {
       description,
@@ -656,13 +809,16 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       result,
       usage,
       assistantOutput: output,
+      ...(thinkingClamped ? { thinkingClamped } : {}),
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = signal?.aborted ? "aborted" : "error";
-    const usage = getSubagentUsage(session);
-    const output = assistantOutput(extractAssistantMessages(session.messages), "interrupted");
+    const usage = session
+      ? getSubagentUsage(session)
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: false };
+    const output = assistantOutput(session ? extractAssistantMessages(session.messages) : [], "interrupted");
     onUsage(usage);
     if (progress) {
       progress.status = status;
@@ -670,6 +826,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       progress.usage = usage;
       progress.assistantOutput = output;
       progress.endedAt = Date.now();
+      if (thinkingClamped) progress.thinkingClamped = thinkingClamped;
     }
     const verb = status === "aborted" ? "aborted" : "failed";
     return textResult(`Subagent "${description}" (${subagentType}) ${verb}: ${message}`, {
@@ -680,14 +837,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       error: message,
       usage,
       assistantOutput: output,
+      ...(thinkingClamped ? { thinkingClamped } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {
-    emitter.stop();
-    unsubscribe?.();
-    if (signal && abortHandler) {
-      signal.removeEventListener("abort", abortHandler);
-    }
-    session.dispose();
+    disposeAll();
   }
 }

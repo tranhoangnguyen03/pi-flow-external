@@ -1,9 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
+import { fauxAssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
@@ -319,6 +321,64 @@ describe("runWorkflow", () => {
       resolveSubagentType,
     });
     expect(override.result).toBe("codex-reviewer");
+  });
+
+  it("widens the fingerprint with the resolved descriptor so a model/thinking/body/tools change invalidates cache", async () => {
+    const script = `${META}return await agent('review', { label: 'review', subagent_type: 'x' });`;
+    const runOnce = async (descriptor: Record<string, unknown>) => {
+      const events: any[] = [];
+      await runWorkflow(script, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(1),
+        runAgent: async () => "result",
+        describeSubagentType: () => descriptor as never,
+        onAgentResult: (event) => { events.push(event); },
+      });
+      return events[0].fingerprint as string;
+    };
+
+    const base = { backend: "pi", harness: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "high", systemPrompt: "do x", tools: ["read"], permission: "readonly", maxBudgetUsd: 1 };
+    const baseFingerprint = await runOnce(base);
+    expect(await runOnce({ ...base })).toBe(baseFingerprint);
+    expect(await runOnce({ ...base, model: "deepseek/other-model" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, thinking: "low" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, systemPrompt: "do y" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, tools: ["read", "grep"] })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, permission: "danger" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, maxBudgetUsd: 2 })).not.toBe(baseFingerprint);
+  });
+
+  it("reflects the resolved effectivePermission (not just the raw request) in the fingerprint", async () => {
+    // Neither the call nor the descriptor names a permission, so the resolved
+    // tier comes entirely from the settings-level default — varying only that
+    // default changes effectivePermission while every directly-hashed field
+    // (call.permission, descriptor.permission) stays identical. If the hash
+    // did not separately include the resolved effectivePermission, these two
+    // fingerprints would incorrectly match.
+    const script = `${META}return await agent('review', { label: 'review', subagent_type: 'x-reviewer' });`;
+    const descriptor = { backend: "pi", harness: "pi-deepseek" };
+    const fingerprintFor = async (defaultPermission: "readonly" | "edit") => {
+      const events: any[] = [];
+      await runWorkflow(script, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(1),
+        runAgent: async () => "result",
+        describeSubagentType: () => descriptor as never,
+        getDefaultPermission: () => defaultPermission,
+        onAgentResult: (event) => { events.push(event); },
+      });
+      return events[0].fingerprint as string;
+    };
+    expect(await fingerprintFor("readonly")).not.toBe(await fingerprintFor("edit"));
+  });
+
+  it("falls back to hashing without descriptor fields when describeSubagentType is not provided", async () => {
+    const script = `${META}return await agent('review', { label: 'review', subagent_type: 'x' });`;
+    await expect(runWorkflow(script, {
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(1),
+      runAgent: async () => "result",
+    })).resolves.toMatchObject({ result: "result" });
   });
 
   it("fails the workflow before launch when role selection is invalid", async () => {
@@ -1040,6 +1100,142 @@ describe("workflow tool registration", () => {
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_profile_create"]);
+    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_profile_create", "pi_flow_harness_create"]);
+  });
+});
+
+describe("createWorkflowTool integration with pi custom profiles", () => {
+  let agentDir = "";
+  let cwd = "";
+  const { createSession } = setupPiSubagentTestHarness((state) => {
+    agentDir = state.agentDir;
+    cwd = state.cwd;
+  });
+
+  function makeWorkflowTool(registry = new RunRegistry()) {
+    return createWorkflowTool({
+      registry,
+      getLimiter: () => new ConcurrencyLimiter(2),
+      getThinkingLevel: () => "high",
+      getSubagentTimeoutMs: () => 60_000,
+      getDefaultPermission: () => "edit",
+      getDefaultHarness: () => "pi-deepseek",
+      getDefaultMaxBudgetUsd: () => undefined,
+      updateStatus: () => {},
+    });
+  }
+
+  it("executes an on-disk pi custom profile omitting model/thinking without poisoning from a conflicting profile", async () => {
+    const { session, modelRegistry, registration } = await createSession({
+      piHarnesses: {
+        "pi-deepseek": { modelId: "faux-thinker", thinking: "high" },
+      },
+    });
+    registration.setResponses([() => fauxAssistantMessage("CUSTOM_PI_WORKFLOW_OK")]);
+
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+
+    // 1. An on-disk custom profile that omits model and thinking (inheriting from harness pi-deepseek)
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-custom.md"),
+      [
+        "---",
+        "description: Custom reviewer",
+        "backend: pi",
+        "harness: pi-deepseek",
+        "---",
+        "You are a custom reviewer.",
+      ].join("\n"),
+    );
+
+    // 2. An on-disk profile with a conflicting model
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-conflicting.md"),
+      [
+        "---",
+        "description: Conflicting reviewer",
+        "backend: pi",
+        "harness: pi-deepseek",
+        "model: openai/gpt-5",
+        "---",
+        "You are conflicting.",
+      ].join("\n"),
+    );
+
+    const tool = makeWorkflowTool();
+    const ctx = {
+      cwd,
+      modelRegistry,
+      sessionManager: session.sessionManager,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+
+    // Run workflow that selects the custom profile omitting model/thinking:
+    const result = await tool.execute(
+      "call-custom-1",
+      {
+        script: `
+          export const meta = { apiVersion: 1, name: "custom-run", description: "runs custom profile" };
+          const resp = await agent("test task", { role: "custom", harness: "pi-deepseek" });
+          return { resp };
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result.details.status).toBe("completed");
+    expect(result.details.result).toEqual({ resp: "CUSTOM_PI_WORKFLOW_OK" });
+  });
+
+  it("fails only when conflicting profile is specifically selected", async () => {
+    const { session, modelRegistry } = await createSession({
+      piHarnesses: {
+        "pi-deepseek": { modelId: "faux-thinker", thinking: "high" },
+      },
+    });
+
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-conflicting.md"),
+      [
+        "---",
+        "description: Conflicting reviewer",
+        "backend: pi",
+        "harness: pi-deepseek",
+        "model: openai/gpt-5",
+        "---",
+        "You are conflicting.",
+      ].join("\n"),
+    );
+
+    const tool = makeWorkflowTool();
+    const ctx = {
+      cwd,
+      modelRegistry,
+      sessionManager: session.sessionManager,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+
+    // Selecting the conflicting profile via subagent_type
+    const result = await tool.execute(
+      "call-conflict-1",
+      {
+        script: `
+          export const meta = { apiVersion: 1, name: "conflict-run", description: "runs conflicting profile" };
+          return await agent("test task", { subagent_type: "pi-deepseek-conflicting" });
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toMatch(/conflicts with "pi-deepseek"'s registered model/);
   });
 });

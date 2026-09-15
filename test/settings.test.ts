@@ -50,6 +50,12 @@ describe("project default-harness override", () => {
     expect(result.diagnostics.join(" ")).toMatch(/not trusted/);
   });
 
+  it("accepts a pi-* harness name shape at the project-override level", () => {
+    const cwd = project();
+    writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "pi-deepseek" }));
+    expect(resolveDefaultHarness("agy", cwd, true)).toMatchObject({ harness: "pi-deepseek", source: "project" });
+  });
+
   it("rejects invalid values and unknown keys with diagnostics, keeping the global default", () => {
     const cwd = project();
     writeProjectSettings(cwd, JSON.stringify({ defaultHarness: "gemini", extra: 1 }));
@@ -117,6 +123,24 @@ describe("external settings", () => {
     });
     // A v1 file is valid input, not a warning.
     expect(migrated.diagnostics).toEqual([]);
+  });
+
+  it("accepts a pi-* harness name at the global settings parse-shape level", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ ...DEFAULT_EXTERNAL_SETTINGS, defaultHarness: "pi-deepseek" }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.defaultHarness).toBe("pi-deepseek");
+    expect(parsed.diagnostics).toEqual([]);
+  });
+
+  it("still rejects a defaultHarness that matches neither a literal nor the pi-* shape", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ ...DEFAULT_EXTERNAL_SETTINGS, defaultHarness: "gemini" }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.defaultHarness).toBe("agy");
+    expect(parsed.diagnostics.join(" ")).toMatch(/defaultHarness must be/);
   });
 
   it("reports malformed JSON without preventing startup", () => {

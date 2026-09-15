@@ -314,14 +314,14 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const argsPath = join(tempDir, "claude-elevate-args.json");
     mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "claude-debugger.md"), `---
-description: Failure debugging through Claude Code.
+    writeFileSync(join(subagentsDir, "claude-worker.md"), `---
+description: General work through Claude Code.
 backend: claude
 model: sonnet
 permission: danger
 ---
 
-Claude debugger prompt.`);
+Claude worker prompt.`);
     const fakeClaudePath = join(binDir, "claude");
     writeFileSync(fakeClaudePath, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -329,7 +329,7 @@ let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }));
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-elevate-session' }));
-console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude debugger done', usage: { input_tokens: 10, output_tokens: 5 } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude worker done', usage: { input_tokens: 10, output_tokens: 5 } }));
 `);
     chmodSync(fakeClaudePath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -339,7 +339,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Debug failing tests",
-        subagent_type: "claude-debugger",
+        subagent_type: "claude-worker",
         permission: "edit",
         prompt: "Investigate why tests fail and run validation.",
       })], { stopReason: "toolUse" }),
@@ -349,7 +349,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
       },
     ]);
 
-    await session.prompt("Delegate to debugger.");
+    await session.prompt("Delegate to worker.");
 
     const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const claudeArgs = claudeRun.args;
