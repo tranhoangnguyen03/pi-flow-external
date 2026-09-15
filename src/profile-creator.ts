@@ -96,8 +96,7 @@ function normalizeProfile(input: ProfileParameters): SubagentProfile {
     model: optional(input.model),
     thinking: optional(input.thinking),
     systemPrompt: input.systemPrompt.trim(),
-    // Profiles authored through this flow belong to the user; the tag keeps
-    // /external profile clean-up from ever archiving them.
+    // Profiles authored through this flow belong to the user.
     owner: "user",
   };
 }

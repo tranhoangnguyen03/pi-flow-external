@@ -1,7 +1,6 @@
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compileProfile } from "./profile-creator.ts";
-import { getSubagentProfiles, isExternalAgentProfile, isValidSubagentName } from "./profiles.ts";
 import { DEFAULT_ROLES } from "./default-roles.ts";
 import type { SubagentBackend, SubagentProfile } from "./types.ts";
 
@@ -70,70 +69,4 @@ export function seedDefaultProfiles(agentDir: string): SeedResult {
   }
   writeFileSync(marker, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
   return { seeded: true, added };
-}
-
-/**
- * Roles this extension shipped in past releases but no longer ships. Append a
- * role here when it is removed from DEFAULT_ROLES so existing installations
- * can archive the leftover files through /external profile clean-up.
- */
-const RETIRED_ROLES: readonly string[] = ["debugger"];
-
-/**
- * Retired default profile names, per backend.
- */
-export function retiredDefaultProfileNames(): string[] {
-  return DEFAULT_BACKENDS.flatMap((backend) => RETIRED_ROLES.map((role) => `${backend}-${role}`));
-}
-
-/**
- * External profiles this extension previously shipped and has retired.
- * Never includes user-owned profiles (owner: user) or native Pi profiles
- * (backend: pi or none): those do not belong to this extension.
- */
-export function findRetiredDefaultProfiles(
-  agentDir: string,
-  configuredPiHarnesses?: ReadonlySet<string>,
-): SubagentProfile[] {
-  const retired = new Set(retiredDefaultProfileNames());
-  return [...getSubagentProfiles(agentDir).values()].filter(
-    (profile) => isExternalAgentProfile(profile, configuredPiHarnesses) && profile.owner !== "user" && retired.has(profile.name),
-  );
-}
-
-export interface ArchiveResult {
-  archived: string[];
-  /** Names skipped because the archive already holds a file of that name. */
-  skipped: string[];
-}
-
-/** Move named profiles to <agentDir>/subagents/archive/. Never deletes. */
-export function archiveProfiles(agentDir: string, names: string[]): ArchiveResult {
-  const dir = join(agentDir, "subagents");
-  const archive = join(dir, "archive");
-  mkdirSync(archive, { recursive: true });
-  // Trust boundary enforced at the mutation point: an owner:user profile is
-  // the user's property and must never be moved, regardless of the caller.
-  const userOwned = new Set(
-    [...getSubagentProfiles(agentDir).values()]
-      .filter((profile) => profile.owner === "user")
-      .map((profile) => profile.name),
-  );
-  const archived: string[] = [];
-  const skipped: string[] = [];
-  for (const name of names) {
-    if (!isValidSubagentName(name) || userOwned.has(name)) {
-      skipped.push(name);
-      continue;
-    }
-    const source = join(dir, `${name}.md`);
-    const destination = join(archive, `${name}.md`);
-    if (!existsSync(source) || existsSync(destination)) {
-      skipped.push(name);
-      continue;
-    }
-    renameSync(source, destination);
-    archived.push(name);
-  }
-  return { archived, skipped };
 }

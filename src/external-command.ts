@@ -6,7 +6,6 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
-import { archiveProfiles, findRetiredDefaultProfiles } from "./defaults.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
 import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
 import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
@@ -19,7 +18,6 @@ const COMMANDS = [
   { value: "settings", description: "Show effective extension settings" },
   { value: "profiles", description: "List configured external agent profiles" },
   { value: "profile create", description: "Create an external profile" },
-  { value: "profile clean-up", description: "Archive retired pi-flow default profiles" },
   { value: "workflows", description: "List saved workflows" },
   { value: "runs", description: "Browse session runs and their complete paged output" },
   { value: "runs summary", description: "Summarize durable receipts" },
@@ -295,29 +293,6 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
         ctx.ui.notify(profilesText(), "info");
       } else if (action === "profile create") {
         await options.startProfileInterview(ctx);
-      } else if (action === "profile clean-up") {
-        const retired = findRetiredDefaultProfiles(getAgentDir());
-        if (!retired.length) {
-          ctx.ui.notify("No retired pi-flow default profiles found. Clean-up only archives defaults this extension shipped and later retired (e.g. the debugger role); native Pi profiles and your own profiles are never touched.", "info");
-          return;
-        }
-        const listing = retired.map((profile) => `${profile.name} (${profile.backend})`).join("\n");
-        if (!ctx.hasUI) {
-          ctx.ui.notify(`Retired pi-flow default profiles found (nothing changed; rerun interactively to archive):\n${listing}`, "info");
-          return;
-        }
-        const confirmed = await ctx.ui.confirm(
-          "Archive retired pi-flow default profiles?",
-          `${listing}\n\nThese were shipped by pi-flow and later retired. Moved to subagents/archive/ — never deleted, and existing archive files are never overwritten. Native Pi profiles and profiles you created yourself are never touched.`,
-          {},
-        );
-        if (!confirmed) {
-          ctx.ui.notify("Clean-up cancelled. No profiles were changed.", "info");
-          return;
-        }
-        const { archived, skipped } = archiveProfiles(getAgentDir(), retired.map((profile) => profile.name));
-        const skippedLine = skipped.length ? ` · skipped: ${skipped.join(", ")}` : "";
-        ctx.ui.notify(`${archived.length ? `Archived: ${archived.join(", ")}` : "Nothing archived"}${skippedLine}`, "info");
       } else if (action === "workflows") {
         const saved = workflows(ctx);
         ctx.ui.notify(saved.length ? saved.map((workflow) => `${workflow.name}: ${workflow.description}`).join("\n") : "No saved workflows.", "info");
@@ -337,7 +312,7 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "help") {
         ctx.ui.notify(helpText(), "info");
       } else {
-        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|profile clean-up|workflows|runs|runs summary|runs --prune|help]", "warning");
+        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|workflows|runs|runs summary|runs --prune|help]", "warning");
       }
     },
   });

@@ -59,7 +59,7 @@ External agents use the effective permission tier and each harness's native mech
 - Antigravity: always `--dangerously-skip-permissions`
 - Named Pi harnesses: a curated `tools:` allow-list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`
 
-Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `debugger`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
+Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
 The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger and all Agy runs, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and shows `external host access` while workflow work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
 
@@ -97,7 +97,6 @@ All user commands use the `/external` namespace:
 | `/external settings` | Show the default harness and effective runtime settings |
 | `/external profiles` | List configured external profiles |
 | `/external profile create` | Create and smoke-test a profile |
-| `/external profile clean-up` | Archive retired pi-flow default profiles |
 | `/external workflows` | List saved workflows |
 | `/external runs` | Interactively browse current-session runs, every workflow child, paged output/diagnostics, and cancellation |
 | `/external runs summary` | Summarize durable run records |
@@ -141,13 +140,11 @@ backend: agy
 model: gemini-3.7-flash-high
 ```
 
-Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is only available to this extension when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below); a bare `backend: pi` profile, or no backend at all, belongs to Pi's native subagent system and is never modified by this extension. `/external profile clean-up` archives only profiles this extension itself shipped and later retired (currently the former `debugger` role) to `~/.pi/agent/subagents/archive/` after confirmation — moved, never deleted.
-
-Profiles created through `/external profile create` are stamped `owner: user`, and clean-up never archives `owner: user` profiles. When writing a profile by hand, add `owner: user` to its frontmatter to protect it from clean-up.
+Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is only available to this extension when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below); a bare `backend: pi` profile, or no backend at all, belongs to Pi's native subagent system and is never modified by this extension.
 
 ### Default profiles
 
-On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend (18 files). The compact agent catalog advertises each role once rather than presenting 18 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster, such as debugger, can be added with `/external profile create`.
+On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend (18 files). The compact agent catalog advertises each role once rather than presenting 18 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster can be added with `/external profile create`.
 
 Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 

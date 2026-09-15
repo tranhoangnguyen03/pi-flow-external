@@ -27,7 +27,7 @@ export interface PermissionResolution {
  * Known execution-oriented roles that require command/Bash execution
  * (running tests, build tools, git inspection, etc.).
  */
-export const EXECUTION_ROLES: readonly string[] = ["implementer", "debugger", "qa", "worker"];
+export const EXECUTION_ROLES: readonly string[] = ["implementer", "qa", "worker"];
 
 /** Minimal profile shape needed to reason about permission tiers. */
 export type PermissionProfileRef = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
@@ -44,7 +44,7 @@ export function isExecutionProfile(profile?: PermissionProfileRef): boolean {
  *
  * Pragmatic execution principle: do not get in the way of external agents
  * doing good work. Claude in headless mode auto-denies all Bash commands at
- * `edit` (acceptEdits); execution profiles (such as implementer, debugger, qa,
+ * `edit` (acceptEdits); execution profiles (such as implementer, qa,
  * worker) require shell access to inspect repositories, run tests, and validate
  * fixes. An override to `edit` on these lanes would handcuff the model into
  * headless permission denials. We elevate to `danger` so the agent has the
@@ -67,7 +67,7 @@ export function resolveEffectivePermissionTier(
   if ((profile?.backend === "claude" || profile?.backend === "pi") && isExecutionProfile(profile) && baseTier === "edit") {
     // Same floor as claude, for the same reason: §6's curated pi tool table
     // strips `bash` at `edit` tier, so an execution-lane pi profile (implementer,
-    // debugger, qa, worker) requested at `edit` would otherwise lose shell
+    // qa, worker) requested at `edit` would otherwise lose shell
     // access entirely. Elevate rather than silently handcuff the agent.
     return "danger";
   }

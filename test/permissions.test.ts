@@ -221,7 +221,6 @@ describe("tier enforcement resolution", () => {
 describe("effective permission tier resolution", () => {
   it("identifies execution-oriented profiles by name convention and danger permission", () => {
     expect(isExecutionProfile({ name: "claude-implementer", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "claude-debugger", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "claude-qa", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "claude-worker", description: "", backend: "claude" })).toBe(true);
     expect(isExecutionProfile({ name: "worker", description: "", backend: "claude" })).toBe(true);
@@ -245,12 +244,12 @@ describe("effective permission tier resolution", () => {
     expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("readonly");
     expect(resolveEffectivePermissionTier(undefined, implementer)).toBe("danger");
 
-    const debuggerProfile: SubagentProfile = {
-      name: "claude-debugger",
-      description: "debug",
+    const workerProfile: SubagentProfile = {
+      name: "claude-worker",
+      description: "work",
       backend: "claude",
     };
-    expect(resolveEffectivePermissionTier("edit", debuggerProfile)).toBe("danger");
+    expect(resolveEffectivePermissionTier("edit", workerProfile)).toBe("danger");
   });
 
   it("elevates every agy tier to danger — agy runs unsandboxed", () => {

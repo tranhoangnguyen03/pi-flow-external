@@ -36,7 +36,7 @@ export interface HarnessConfig {
   model: string;
   /** Always persisted explicitly; "off" when the creation interview collects nothing. */
   thinking: SdkThinkingLevel;
-  /** Ownership tag, stamped by the profile creator; never touched by profile clean-up. */
+  /** Ownership tag, stamped by the profile creator. */
   owner?: string;
 }
 
