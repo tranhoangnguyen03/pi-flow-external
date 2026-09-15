@@ -122,7 +122,7 @@ jobs:
             echo "npm already has $V"
             exit 0
           fi
-          npm publish --access public --provenance --ignore-scripts
+          npm publish --access public --provenance --ignore-scripts --tag latest
 
       - name: GitHub release
         env:
