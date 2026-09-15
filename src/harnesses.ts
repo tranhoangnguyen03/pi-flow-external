@@ -6,11 +6,20 @@ import type { ThinkingLevel as SdkThinkingLevel } from "@earendil-works/pi-agent
 
 /**
  * The pinned SDK exposes its thinking-level union only as a TypeScript type,
- * not a runtime-exported constant array, so this list is hand-maintained here
- * and re-checked against @earendil-works/pi-agent-core's ThinkingLevel type at
- * upgrade time (see docs/plans/pi-named-configurations-design.md §4.2).
+ * not a runtime-exported constant array, so this list is hand-maintained here.
+ * The `as const satisfies` + AssertNever guards below make drift a compile
+ * error rather than a procedural "re-check at upgrade time" reminder: if the
+ * SDK's ThinkingLevel union gains or loses a member, `npm run check` fails
+ * until this list is updated.
  */
-export const VALID_THINKING_LEVELS: readonly SdkThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+export const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const satisfies readonly SdkThinkingLevel[];
+
+type AssertNever<T extends never> = T;
+// Both directions must collapse to never: every SDK level is listed (no missing
+// members) and every listed value is a real SDK level (no extras — also
+// enforced by `satisfies`, but asserted symmetrically for clarity).
+type _MissingThinkingLevels = AssertNever<Exclude<SdkThinkingLevel, (typeof VALID_THINKING_LEVELS)[number]>>;
+type _ExtraThinkingLevels = AssertNever<Exclude<(typeof VALID_THINKING_LEVELS)[number], SdkThinkingLevel>>;
 
 export function isValidThinkingLevel(value: unknown): value is SdkThinkingLevel {
   return typeof value === "string" && (VALID_THINKING_LEVELS as readonly string[]).includes(value);

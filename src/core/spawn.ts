@@ -586,7 +586,12 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
   // SDK's own default active tools (read/bash/edit/write) with no explicit
   // exclusion list needed — grep/find/ls simply aren't part of that default
   // set, so there is nothing to exclude.
-  const PI_BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+  // The deny-by-exclusion universe is derived from the union of every tier's
+  // active-tool list (the single shared PI_TIER_ACTIVE_TOOLS source), not a
+  // hand-maintained copy: a builtin added to any tier's allow-list is
+  // automatically part of the universe excluded at the other tiers, so the two
+  // can never drift out of sync.
+  const PI_BUILTIN_TOOL_NAMES = [...new Set(Object.values(PI_TIER_ACTIVE_TOOLS).flat())];
   const tierDefaultTools: Partial<Record<PermissionTier, readonly string[]>> = {
     readonly: PI_TIER_ACTIVE_TOOLS.readonly,
     edit: PI_TIER_ACTIVE_TOOLS.edit,
@@ -709,8 +714,14 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       abortHandler = () => {
         void session?.abort();
       };
-      if (!signal.aborted) {
-        signal.addEventListener("abort", abortHandler, { once: true });
+      // Register unconditionally: if the signal is already aborted, the abort
+      // event was dispatched before this listener existed and will never fire,
+      // so also call abort() directly. Checking `!signal.aborted` *before*
+      // addEventListener would leave a narrow window where the signal aborts
+      // between the check and the registration and the listener misses it.
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) {
+        void session.abort();
       }
     }
 
