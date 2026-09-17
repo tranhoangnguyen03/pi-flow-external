@@ -4,6 +4,13 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.1.0-external.1] - 2026-09-16
+
+### Fixed
+
+- Coordinator guidance now names all four harnesses (`Agent` description, `buildCoordinatorPrompt` body): registered Pi harnesses are first-class alongside Claude Code/Codex CLI/Antigravity, not "external CLIs only" leftovers of the pre-2.1.0 copy. `test/agent-contract`/`agent-rendering` pin the copy.
+- Parent guidance states the blocking default explicitly (`background:true` is opt-in, use `external_runs` on the returned handle) and how same-harness parallel work actually shares the one `maxConcurrentSubagents` limiter: workflow `parallel([() => agent(...), ...])` or separate background `Agent` calls in one turn; sequential awaits stay serial. Includes a three-`agy` workflow example plus fore/background meta examples in `external_help`. Pinned by a new `test/external-help` regression.
+
 ## [2.1.0-external.0] - 2026-09-15
 
 Named Pi harness configurations (`pi-*`): a fourth delegation surface running in-process through Pi's own SDK, selectable exactly like `agy`/`claude`/`codex`. Design: `docs/plans/pi-named-configurations-design.md`; plan: `docs/plans/pi-named-configurations-implementation-plan.md`.

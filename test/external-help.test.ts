@@ -97,4 +97,16 @@ describe("external_help unknown harness filter", () => {
         .rejects.toThrow(/only valid for roles or permissions/);
     });
   });
+
+  it("states blocking default with explicit background opt-in and same-harness parallelism", async () => {
+    const agentDir = tempAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeTool();
+      const result = await tool.execute("call-6", { topic: "workflow" }, undefined, undefined, fakeCtx(agentDir));
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).toContain("blocking by default");
+      expect(text).toContain("parallel([() => agent(...), ...])");
+      expect(text).toContain("background: true");
+    });
+  });
 });
