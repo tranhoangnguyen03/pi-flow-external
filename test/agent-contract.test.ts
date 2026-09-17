@@ -65,7 +65,7 @@ describe("pi-subagent agent contract", () => {
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");
     expect(properties).not.toHaveProperty("subagentTimeoutMs");
-    expect(tool?.description).toContain("external Claude Code, Codex CLI, or Antigravity");
+    expect(tool?.description).toContain("external Claude Code, Codex CLI, Antigravity");
     expect(tool?.promptGuidelines).toBeUndefined();
 
     const help = session.getAllTools().find((candidate) => candidate.name === "external_help");

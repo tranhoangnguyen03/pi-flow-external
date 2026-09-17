@@ -253,7 +253,7 @@ Workflows show access once at the workflow level, retain done/active/queued/fail
 
 ## Background runs and supervision
 
-`Agent` and `workflow` are blocking by default. Add `background: true` to return a stable `run_...` or `wf_...` handle after validation and registration while the originating Pi session continues to own the work:
+`Agent` and `workflow` are blocking by default — an ordinary call waits for its child and returns the result, run everything this way unless the parent has other work to do first. Add `background: true` only when the parent can productively proceed before completion; it returns a stable `run_...` or `wf_...` handle after validation and registration while the originating Pi session continues to own the work:
 
 ```ts
 Agent({
@@ -275,7 +275,19 @@ Interrupting a blocking `Agent`/`workflow` call cancels its work. Interrupting `
 
 ## Workflow usage
 
-The `workflow` tool runs trusted JavaScript that calls one or more external roles and returns a JSON-serializable result. Its first statement must be the current declaration `export const meta = { apiVersion: 1, name, description }`; missing or unsupported versions fail before any child launches. Every `agent()` child uses the same `role`/optional `harness` resolution as direct `Agent` calls, with legacy exact `subagent_type` also supported.
+The `workflow` tool runs trusted JavaScript that calls one or more external roles and returns a JSON-serializable result. Workflows are for explicit fan-out — and for the case this extension was built to make explicit: running several children on the **same** harness at once. Example:
+
+```js
+export const meta = { apiVersion: 1, name: "triage", description: "Three parallel agy reviewers" };
+const [a, b, c] = await parallel([
+  () => agent("Review slice A read-only: /absolute/repo", { label: "rev-a", role: "reviewer", harness: "agy" }),
+  () => agent("Review slice B read-only: /absolute/repo", { label: "rev-b", role: "reviewer", harness: "agy" }),
+  () => agent("Review slice C read-only: /absolute/repo", { label: "rev-c", role: "reviewer", harness: "agy" }),
+]);
+return { a, b, c };
+```
+
+Sequential `await agent(...)` stays serial by construction; `parallel([...])` is how parallel children share the single `maxConcurrentSubagents` limiter at once. Top-level direct `Agent` calls issued together also run together (`executionMode: "parallel"`, default under one limiter). `external_runs wait` and `external_runs inspect` cover both surfaces. Its first statement must be the current declaration `export const meta = { apiVersion: 1, name, description }`; missing or unsupported versions fail before any child launches. Every `agent()` child uses the same `role`/optional `harness` resolution as direct `Agent` calls, with legacy exact `subagent_type` also supported.
 
 Saved workflows are discovered on demand through `external_help({ topic: "workflow" })`; project `.pi/workflows` entries are included only when Pi reports the project trusted.
 
@@ -285,7 +297,7 @@ Example request:
 Use the workflow tool to ask role "explorer" on harness "claude" for an architecture map and role "reviewer" on harness "codex" for a risk review, then synthesize their findings.
 ```
 
-Direct `Agent` calls and workflow children share the same concurrency and timeout controls. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every current-version `agent()` returns its value or throws a catchable `ChildRunError` with `runId`, `outcome` (`failed`, `cancelled`, or `timed_out`), `message`, and output/diagnostic references. Catch an optional failure explicitly; an uncaught child error fails the workflow and drains active siblings. `parallel` and `pipeline` preserve this contract and never convert failure to `null`.
+Direct `Agent` calls and workflow children share one concurrency limiter (`maxConcurrentSubagents`, default 12) and the same timeout controls. There is no per-harness cap: three `agy` children run together when started together — `parallel([() => agent(..., { harness: "agy" }), ...])` in a workflow, or three `background: true` `Agent` calls in one turn followed by `external_runs wait`. Sequentially `await`ed children stay serial by construction. Direct calls default `executionMode: "parallel"` so top-level `Agent` calls issued together run together. Workflow `agent(prompt, { role, context: { mode: "recent", turns: 5 } })` accepts the same context modes. Every current-version `agent()` returns its value or throws a catchable `ChildRunError` with `runId`, `outcome` (`failed`, `cancelled`, or `timed_out`), `message`, and output/diagnostic references. Catch an optional failure explicitly; an uncaught child error fails the workflow and drains active siblings. `parallel` and `pipeline` preserve this contract and never convert failure to `null`.
 
 Every child selects from one parent snapshot and effective settings frozen at workflow invocation; earlier child results must still be passed explicitly. `resumeFromRunId` is explicit replay for a persisted `scriptPath`: it reuses only the longest unchanged prefix of successful child calls. The API version, transferred context, prompt, selection, and relevant options participate in fingerprints. The first changed, failed, cancelled, or timed-out call and everything after it executes again. Recomposition is cheap, but rerun children may cost money or repeat side effects; the runtime never retries or replays a repaired script automatically.
 

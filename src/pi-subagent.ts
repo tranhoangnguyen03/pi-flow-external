@@ -352,7 +352,7 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Delegate one task to an external Claude Code, Codex CLI, or Antigravity role.",
+    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, or registered Pi harness role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     parameters: agentToolParameters,
     executionMode: "parallel",
