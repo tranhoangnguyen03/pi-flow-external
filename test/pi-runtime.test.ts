@@ -231,7 +231,7 @@ describe("pi runtime completion contract", () => {
     registration.setResponses([
       () => {
         calls++;
-        return fauxAssistantMessage([], { stopReason: "error", errorMessage: "rate limit exceeded (429)" });
+        return fauxAssistantMessage("partial analysis before rate limit", { stopReason: "error", errorMessage: "rate limit exceeded (429)" });
       },
     ]);
     const result = await spawnSubagent(baseParams({
@@ -241,6 +241,11 @@ describe("pi runtime completion contract", () => {
     const details = result.details as SubagentToolDetails;
     expect(details.status).toBe("error");
     expect(details.error).toContain("rate limit exceeded");
+    expect(details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "partial analysis before rate limit" }],
+    });
+    expect(result.content[0].text).toContain("Interrupted output:\npartial analysis before rate limit");
     // If the SDK's own ambient auto-retry had been left enabled, this would
     // have consumed multiple queued responses (one per attempt) instead of
     // exactly one.

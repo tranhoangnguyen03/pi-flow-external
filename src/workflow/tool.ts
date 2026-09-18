@@ -306,12 +306,15 @@ export function createWorkflowTool(
         }
         if (resultDetails.status !== "done") {
           const runId = resultDetails.runId ?? call.runRecord?.runId ?? childId;
+          const partialOutput = resultDetails.assistantOutput?.messages.map((m) => m.text.trim()).filter(Boolean).join("\n\n");
           throw new ChildRunError({
             runId,
             outcome: childOutcome(resultDetails),
             message: resultDetails.error ?? "subagent failed",
             outputRef: { runId, view: "output" },
             diagnosticsRef: { runId, view: "diagnostics" },
+            ...(resultDetails.assistantOutput ? { assistantOutput: resultDetails.assistantOutput } : {}),
+            ...(partialOutput ? { partialOutput } : {}),
           });
         }
         if (externalOutputSchema) {
@@ -528,8 +531,11 @@ export function createWorkflowTool(
             agent.endedAt = Date.now();
           }
         }
+        const partial = error instanceof ChildRunError && error.partialOutput
+          ? `\n\nInterrupted child output (${error.runId}):\n${error.partialOutput.slice(-4_000)}`
+          : "";
         return workflowResult(
-          `Workflow "${metaName}" ${aborted ? "aborted" : "failed"}: ${message}${formatRecentLogs(snapshot.logs)}`,
+          `Workflow "${metaName}" ${aborted ? "aborted" : "failed"}: ${message}${partial}${formatRecentLogs(snapshot.logs)}`,
           cloneSnapshot(snapshot),
         );
       } finally {

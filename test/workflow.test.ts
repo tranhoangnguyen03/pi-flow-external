@@ -480,6 +480,7 @@ describe("runWorkflow", () => {
           message: "nope",
           outputRef: { runId: "run_bad", view: "output" },
           diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+          partialOutput: "partial finding from bad child",
         });
       }
       return call.label;
@@ -490,6 +491,7 @@ describe("runWorkflow", () => {
         async () => { try { return await agent('2', { label: 'bad' }); } catch (error) { return {
           name: error.name, runId: error.runId, outcome: error.outcome,
           outputRef: error.outputRef, diagnosticsRef: error.diagnosticsRef,
+          partialOutput: error.partialOutput,
         }; } },
         () => agent('3', { label: 'ok2' }),
       ]); return values;`,
@@ -503,6 +505,7 @@ describe("runWorkflow", () => {
         outcome: "timed_out",
         outputRef: { runId: "run_bad", view: "output" },
         diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+        partialOutput: "partial finding from bad child",
       },
       "ok2",
     ]);
@@ -1237,5 +1240,41 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toMatch(/conflicts with "pi-deepseek"'s registered model/);
+  });
+
+  it("exposes interrupted child output in the terminal workflow receipt when a child fails", async () => {
+    const { session, modelRegistry, registration } = await createSession({
+      piHarnesses: {
+        "pi-deepseek": { modelId: "faux-thinker", thinking: "high" },
+      },
+    });
+    registration.setResponses([
+      () => fauxAssistantMessage("partial child analysis before fail", { stopReason: "error", errorMessage: "quota exceeded" }),
+    ]);
+
+    const tool = makeWorkflowTool();
+    const ctx = {
+      cwd,
+      modelRegistry,
+      sessionManager: session.sessionManager,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+
+    const result = await tool.execute(
+      "call-fail-output",
+      {
+        script: `
+          export const meta = { apiVersion: 1, name: "fail-run", description: "fails with output" };
+          return await agent("failing task", { role: "worker", harness: "pi-deepseek" });
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result.details.status).toBe("error");
+    expect((result.content[0] as { text: string }).text).toContain("Interrupted child output");
+    expect((result.content[0] as { text: string }).text).toContain("partial child analysis before fail");
   });
 });

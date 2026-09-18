@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   assistantOutput,
   createProgressEmitter,
+  formatInterruptedOutputPreview,
   textResult,
   type AgentToolResult,
 } from "./progress.ts";
@@ -570,7 +571,7 @@ export async function spawnClaudeSubagent(params: {
     if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
-    const output = assistantOutput(assistantMessages, "interrupted");
+    const output = assistantOutput(assistantMessages, "interrupted", resultText);
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
@@ -580,7 +581,8 @@ export async function spawnClaudeSubagent(params: {
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${params.description}" (${subagentType}) ${verb}: ${message}`, {
+    const preview = formatInterruptedOutputPreview(output);
+    return textResult(`Subagent "${params.description}" (${subagentType}) ${verb}: ${message}${preview}`, {
       description: params.description,
       subagentType,
       backend: params.profile.backend,

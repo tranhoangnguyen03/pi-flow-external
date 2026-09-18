@@ -51,6 +51,12 @@ export function assistantOutput(
   return output.length ? { status, messages: output } : undefined;
 }
 
+export function formatInterruptedOutputPreview(output: SubagentAssistantOutput | undefined): string {
+  if (!output?.messages?.length) return "";
+  const text = output.messages.map((m) => m.text.trim()).filter(Boolean).join("\n\n");
+  return text ? `\n\nInterrupted output:\n${text.slice(-4_000)}` : "";
+}
+
 export function extractAssistantMessages(messages: readonly unknown[]): Array<{ id?: string; text: string }> {
   return messages.flatMap((value) => {
     const message = value as { id?: unknown; role?: unknown; content?: unknown };
@@ -88,7 +94,7 @@ function getFirstTextLine(text: string): string {
   return text.split("\n").find((line) => line.trim()) ?? text;
 }
 
-function extractTextContent(content: unknown): string {
+export function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }

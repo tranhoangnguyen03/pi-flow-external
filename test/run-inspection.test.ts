@@ -113,6 +113,22 @@ describe("run evidence inspection", () => {
     expect(recovered).toBe(text);
   });
 
+  it("recovers interrupted assistant output from summary when a run fails or is aborted", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    await record.finish({
+      status: "error",
+      error: "process crashed",
+      assistantOutput: { status: "interrupted", messages: [{ id: "m1", text: "partial work before crash" }] },
+      backend: "pi",
+      description: "Interrupted task",
+    });
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output" });
+    expect(page.outputStatus).toBe("interrupted");
+    expect(page.items).toEqual([{ id: "m1", text: "partial work before crash" }]);
+  });
+
   it("rejects malformed and cross-target cursors", async () => {
     const root = await temporaryRoot();
     const first = createRunRecord({ directory: root });
