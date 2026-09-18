@@ -326,6 +326,7 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
       messages: [{ text: "plausible but unverified" }],
     });
     expect(result.details.error).toContain("without a terminal JSON event");
+    expect(result.content[0].text).toContain("Interrupted output:\nplausible but unverified");
   });
 
   it("kills a codex child if abort lands after process spawn", async () => {

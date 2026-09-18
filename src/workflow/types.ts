@@ -1,6 +1,7 @@
 import type { ParentContextMessages, ParentContextReceipt } from "../core/parent-context.ts";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import type { RunRecord } from "../core/run-record.ts";
+import type { SubagentAssistantOutput } from "../types.ts";
 
 export type ChildRunOutcome = "failed" | "cancelled" | "timed_out";
 
@@ -15,6 +16,8 @@ export interface SerializedChildRunError {
   message: string;
   outputRef?: ChildRunReference;
   diagnosticsRef?: ChildRunReference;
+  assistantOutput?: SubagentAssistantOutput;
+  partialOutput?: string;
 }
 
 export class ChildRunError extends Error {
@@ -22,6 +25,8 @@ export class ChildRunError extends Error {
   readonly outcome: ChildRunOutcome;
   readonly outputRef?: ChildRunReference;
   readonly diagnosticsRef?: ChildRunReference;
+  readonly assistantOutput?: SubagentAssistantOutput;
+  readonly partialOutput?: string;
 
   constructor(error: SerializedChildRunError) {
     super(error.message);
@@ -30,6 +35,8 @@ export class ChildRunError extends Error {
     this.outcome = error.outcome;
     this.outputRef = error.outputRef;
     this.diagnosticsRef = error.diagnosticsRef;
+    this.assistantOutput = error.assistantOutput;
+    this.partialOutput = error.partialOutput;
   }
 }
 
@@ -40,6 +47,8 @@ export function childRunErrorData(error: ChildRunError): SerializedChildRunError
     message: error.message,
     ...(error.outputRef ? { outputRef: error.outputRef } : {}),
     ...(error.diagnosticsRef ? { diagnosticsRef: error.diagnosticsRef } : {}),
+    ...(error.assistantOutput ? { assistantOutput: error.assistantOutput } : {}),
+    ...(error.partialOutput ? { partialOutput: error.partialOutput } : {}),
   };
 }
 

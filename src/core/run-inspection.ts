@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { agyActivityFromEvent } from "./agy.ts";
 import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
+import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
 const DEFAULT_PAGE_BYTES = 32 * 1024;
@@ -117,7 +118,7 @@ export async function inspectRun({
   }
 
   if (decoded?.kind === "inspect" && decoded.source === "summary") throw new Error("Cursor source does not match inspection view");
-  if (view === "output" && summary.document && terminalStatus === "done") {
+  if (view === "output" && summary.document && (terminalStatus === "done" || assistantItems(terminal).length > 0)) {
     if (decoded?.kind === "inspect" && decoded.source === "events") throw staleCursorError();
     const observation = await readObservation(eventsPath, runId);
     const items = terminalOutputItems(terminal);
@@ -347,7 +348,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   };
 }
 
-function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy"; id?: string; text: string }) | undefined {
+function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi"; id?: string; text: string }) | undefined {
   if (event.type !== "backend_event") return undefined;
   const envelope = asRecord(event.data);
   const backendEvent = asRecord(envelope?.event);
@@ -367,6 +368,14 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const text = (update?.step_type === "agent_response" || update?.step_type === "assistant") ? asString(update.text_delta) : undefined;
     const id = asString(update?.step_id);
     return text ? { kind: "agy", ...(id ? { id } : {}), text } : undefined;
+  }
+  if (envelope?.backend === "pi" && backendEvent.type === "message_end") {
+    const message = asRecord(backendEvent.message);
+    if (message?.role === "assistant") {
+      const text = extractTextContent(message.content);
+      const id = asString(message.id);
+      return text ? { kind: "pi", ...(id ? { id } : {}), text } : undefined;
+    }
   }
   return undefined;
 }

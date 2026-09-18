@@ -471,6 +471,7 @@ console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' 
       messages: [{ text: "plausible but unverified" }],
     });
     expect(result.details.error).toContain("did not affirm success");
+    expect(result.content[0].text).toContain("Interrupted output:\nplausible but unverified");
   });
 
   it("kills a claude child if abort lands after process spawn", async () => {

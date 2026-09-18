@@ -4,7 +4,14 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
-## [2.1.0-external.1] - 2026-09-16
+## [2.1.0-external.2] - 2026-09-18
+
+### Fixed
+
+- Preserved and exposed available partial assistant output on failure, cancellation, and timeout across all backend adapters (`codex`, `claude`, `agy`, and in-process `pi`). Unsuccessful terminal receipts retain the failure status and error diagnostic while appending a bounded `Interrupted output:` preview.
+- Recovered interrupted assistant output in run evidence inspection (`external_runs(action: "inspect", view: "output")`) from completed non-done summary documents, including Pi SDK child runs.
+- `ChildRunError` preserves `partialOutput` and `assistantOutput` for workflow scripts to inspect, and uncaught child errors surface the interrupted output preview in workflow failure receipts.
+- Hardened CI release workflow polling loop against npm registry replication latency (increased timeout to 150s).
 
 ### Fixed
 

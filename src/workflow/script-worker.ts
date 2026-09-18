@@ -63,6 +63,8 @@ class ChildRunError extends Error {
     this.outcome = error.outcome;
     this.outputRef = error.outputRef;
     this.diagnosticsRef = error.diagnosticsRef;
+    this.assistantOutput = error.assistantOutput;
+    this.partialOutput = error.partialOutput;
   }
 }
 
@@ -116,6 +118,8 @@ function postError(error) {
         message: error.message,
         ...(error.outputRef ? { outputRef: error.outputRef } : {}),
         ...(error.diagnosticsRef ? { diagnosticsRef: error.diagnosticsRef } : {}),
+        ...(error.assistantOutput ? { assistantOutput: error.assistantOutput } : {}),
+        ...(error.partialOutput ? { partialOutput: error.partialOutput } : {}),
       } } : {}),
     });
   } finally {

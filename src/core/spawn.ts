@@ -13,6 +13,7 @@ import {
   extractFinalAssistantText,
   extractAssistantMessages,
   assistantOutput,
+  formatInterruptedOutputPreview,
   getFinalAssistantFailure,
   getSubagentUsage,
   textResult,
@@ -223,8 +224,7 @@ function rewriteTimeoutResult(
 ): AgentToolResult {
   const details = markSubagentTimedOut(result.details as SubagentToolDetails, params.timeoutMs);
   const message = details.error;
-  const partial = details.assistantOutput?.messages.at(-1)?.text;
-  const preview = partial ? `\n\nInterrupted output:\n${partial.slice(-4_000)}` : "";
+  const preview = formatInterruptedOutputPreview(details.assistantOutput);
   return textResult(`Subagent "${params.description}" (${params.profile.name}) aborted: ${message}${preview}`, {
     ...details,
     description: params.description,
@@ -345,11 +345,13 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       const details = result.details as SubagentToolDetails;
       if (details.status === "aborted") {
         const reason = params.signal.reason instanceof Error ? params.signal.reason.message : String(params.signal.reason);
-        const previous = details.error;
         details.error = reason;
         if (details.progress) details.progress.error = reason;
         const first = result.content[0];
-        if (first?.type === "text") first.text = previous ? first.text.replace(previous, reason) : `${first.text}: ${reason}`;
+        if (first?.type === "text") {
+          const preview = formatInterruptedOutputPreview(details.assistantOutput);
+          first.text = `Subagent "${params.description}" (${params.profile.name}) aborted: ${reason}${preview}`;
+        }
       }
     }
     if (params.context) {
@@ -829,7 +831,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       if (thinkingClamped) progress.thinkingClamped = thinkingClamped;
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${description}" (${subagentType}) ${verb}: ${message}`, {
+    const preview = formatInterruptedOutputPreview(output);
+    return textResult(`Subagent "${description}" (${subagentType}) ${verb}: ${message}${preview}`, {
       description,
       subagentType,
       backend: profile.backend,

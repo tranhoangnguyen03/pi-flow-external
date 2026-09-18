@@ -328,6 +328,11 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("without a terminal result event");
+    expect(result.details.assistantOutput).toEqual({
+      status: "interrupted",
+      messages: [{ text: "not terminal" }],
+    });
+    expect(result.content[0].text).toContain("Interrupted output:\nnot terminal");
   });
 
   it("retries an agy infrastructure failure once and reports the retry", async () => {

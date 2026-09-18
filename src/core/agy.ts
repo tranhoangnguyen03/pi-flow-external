@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assistantOutput, createProgressEmitter, textResult, type AgentToolResult } from "./progress.ts";
+import { assistantOutput, createProgressEmitter, formatInterruptedOutputPreview, textResult, type AgentToolResult } from "./progress.ts";
 import {
   createBoundedBuffer,
   MAX_STDERR_CHARS,
@@ -486,7 +486,8 @@ export async function spawnAgySubagent(params: {
     if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
-    const output = assistantOutput(assistantMessages, "interrupted");
+    const candidate = terminalResult ? textFromAgyResult(terminalResult)?.trim() : undefined;
+    const output = assistantOutput(assistantMessages, "interrupted", candidate);
     params.onUsage(latestUsage);
     if (progress) {
       progress.status = status;
@@ -495,7 +496,8 @@ export async function spawnAgySubagent(params: {
       progress.assistantOutput = output;
       progress.endedAt = Date.now();
     }
-    return textResult(`Subagent "${params.description}" (${subagentType}) ${status === "aborted" ? "aborted" : "failed"}: ${message}`, {
+    const preview = formatInterruptedOutputPreview(output);
+    return textResult(`Subagent "${params.description}" (${subagentType}) ${status === "aborted" ? "aborted" : "failed"}: ${message}${preview}`, {
       description: params.description,
       subagentType,
       backend: params.profile.backend,
