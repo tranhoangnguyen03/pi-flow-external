@@ -373,7 +373,7 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const message = asRecord(backendEvent.message);
     if (message?.role === "assistant") {
       const text = extractTextContent(message.content);
-      const id = asString(message.id);
+      const id = asString(message.id) ?? asString(message.responseId);
       return text ? { kind: "pi", ...(id ? { id } : {}), text } : undefined;
     }
   }

@@ -480,6 +480,7 @@ describe("runWorkflow", () => {
           message: "nope",
           outputRef: { runId: "run_bad", view: "output" },
           diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+          assistantOutput: { status: "interrupted", messages: [{ text: "partial finding from bad child" }] },
           partialOutput: "partial finding from bad child",
         });
       }
@@ -491,6 +492,7 @@ describe("runWorkflow", () => {
         async () => { try { return await agent('2', { label: 'bad' }); } catch (error) { return {
           name: error.name, runId: error.runId, outcome: error.outcome,
           outputRef: error.outputRef, diagnosticsRef: error.diagnosticsRef,
+          assistantOutput: error.assistantOutput,
           partialOutput: error.partialOutput,
         }; } },
         () => agent('3', { label: 'ok2' }),
@@ -505,6 +507,7 @@ describe("runWorkflow", () => {
         outcome: "timed_out",
         outputRef: { runId: "run_bad", view: "output" },
         diagnosticsRef: { runId: "run_bad", view: "diagnostics" },
+        assistantOutput: { status: "interrupted", messages: [{ text: "partial finding from bad child" }] },
         partialOutput: "partial finding from bad child",
       },
       "ok2",

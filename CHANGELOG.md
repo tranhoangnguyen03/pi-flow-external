@@ -4,6 +4,15 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.1.0-external.3] - 2026-09-18
+
+### Fixed
+
+- Prevented Claude `is_error: true` result diagnostic from being mislabeled as assistant output on terminal error.
+- Supported Pi `responseId` in `inspectRun` event-stream projection and added regression coverage for live Pi event inspection.
+- Handled surrogate-pair boundaries when slicing the interrupted output tail and shared the `OUTPUT_PREVIEW_CHARS` constant across spawn and workflow receipts.
+- Pinned spawn-level timeout rewrite behavior and workflow script `assistantOutput` error propagation in automated tests.
+
 ## [2.1.0-external.2] - 2026-09-18
 
 ### Fixed
@@ -12,6 +21,8 @@ All notable changes to pi-flow external are documented here.
 - Recovered interrupted assistant output in run evidence inspection (`external_runs(action: "inspect", view: "output")`) from completed non-done summary documents, including Pi SDK child runs.
 - `ChildRunError` preserves `partialOutput` and `assistantOutput` for workflow scripts to inspect, and uncaught child errors surface the interrupted output preview in workflow failure receipts.
 - Hardened CI release workflow polling loop against npm registry replication latency (increased timeout to 150s).
+
+## [2.1.0-external.1] - 2026-09-16
 
 ### Fixed
 

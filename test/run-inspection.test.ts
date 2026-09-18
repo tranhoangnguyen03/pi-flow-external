@@ -129,6 +129,22 @@ describe("run evidence inspection", () => {
     expect(page.items).toEqual([{ id: "m1", text: "partial work before crash" }]);
   });
 
+  it("extracts pi assistant messages from streamed events during inspection", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    await record.event("backend_event", {
+      backend: "pi",
+      event: {
+        type: "message_end",
+        message: { role: "assistant", responseId: "resp_pi", content: [{ type: "text", text: "streamed pi response" }] },
+      },
+    });
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output" });
+    expect(page.outputStatus).toBe("preliminary");
+    expect(page.items).toEqual([{ id: "resp_pi", text: "streamed pi response" }]);
+  });
+
   it("rejects malformed and cross-target cursors", async () => {
     const root = await temporaryRoot();
     const first = createRunRecord({ directory: root });

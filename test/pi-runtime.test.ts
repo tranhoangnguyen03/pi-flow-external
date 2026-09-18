@@ -252,6 +252,25 @@ describe("pi runtime completion contract", () => {
     expect(calls).toBe(1);
   });
 
+  it("rewrites a timed-out run to aborted and preserves timeout status", async () => {
+    const { model, modelRegistry, registration } = await createSession();
+    registration.setResponses([
+      () => new Promise((resolve) => {
+        setTimeout(() => resolve(fauxAssistantMessage("late text")), 200);
+      }),
+    ]);
+    const result = await spawnSubagent(baseParams({
+      model,
+      timeoutMs: 20,
+      ctx: { cwd, modelRegistry } as ExtensionContext,
+    }));
+    const details = result.details as SubagentToolDetails;
+    expect(details.status).toBe("aborted");
+    expect(details.timedOut).toBe(true);
+    expect(details.error).toContain("timed out after 20ms");
+    expect((result.content[0] as { text: string }).text).toContain("aborted: Subagent timed out after 20ms");
+  });
+
   it("overrides retry.enabled in memory while preserving real global settings and never touching disk", async () => {
     const { model, modelRegistry, registration } = await createSession();
     // A real, non-default global setting the pi child must still inherit.
