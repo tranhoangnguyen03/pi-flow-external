@@ -168,6 +168,13 @@ describe("pi-subagent claude backend", () => {
     expect(extractClaudeFinalText({
       type: "result",
       subtype: "success",
+      is_error: true,
+      api_error_status: 401,
+      result: "Failed to authenticate. API Error: 401 Invalid bearer token",
+    })).toBeUndefined();
+    expect(extractClaudeFinalText({
+      type: "result",
+      subtype: "success",
       result: "plain result",
     })).toBe("plain result");
     expect(extractClaudeFinalText({

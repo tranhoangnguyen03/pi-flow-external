@@ -51,10 +51,17 @@ export function assistantOutput(
   return output.length ? { status, messages: output } : undefined;
 }
 
+export const OUTPUT_PREVIEW_CHARS = 4_000;
+
 export function formatInterruptedOutputPreview(output: SubagentAssistantOutput | undefined): string {
   if (!output?.messages?.length) return "";
   const text = output.messages.map((m) => m.text.trim()).filter(Boolean).join("\n\n");
-  return text ? `\n\nInterrupted output:\n${text.slice(-4_000)}` : "";
+  if (!text) return "";
+  let slice = text.slice(-OUTPUT_PREVIEW_CHARS);
+  if (slice.length > 0 && slice.charCodeAt(0) >= 0xdc00 && slice.charCodeAt(0) <= 0xdfff) {
+    slice = slice.slice(1);
+  }
+  return `\n\nInterrupted output:\n${slice}`;
 }
 
 export function extractAssistantMessages(messages: readonly unknown[]): Array<{ id?: string; text: string }> {

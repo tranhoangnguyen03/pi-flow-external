@@ -17,6 +17,7 @@ import { createRunRecord } from "../core/run-record.ts";
 import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
+import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
 import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
 import { loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
@@ -532,7 +533,7 @@ export function createWorkflowTool(
           }
         }
         const partial = error instanceof ChildRunError && error.partialOutput
-          ? `\n\nInterrupted child output (${error.runId}):\n${error.partialOutput.slice(-4_000)}`
+          ? `\n\nInterrupted child output (${error.runId}):\n${error.partialOutput.slice(-OUTPUT_PREVIEW_CHARS)}`
           : "";
         return workflowResult(
           `Workflow "${metaName}" ${aborted ? "aborted" : "failed"}: ${message}${partial}${formatRecentLogs(snapshot.logs)}`,

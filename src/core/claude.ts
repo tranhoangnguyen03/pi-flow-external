@@ -243,6 +243,9 @@ function structuredTextFromClaudeValue(value: unknown): string | undefined {
 
 export function extractClaudeFinalText(event: Record<string, unknown>): string | undefined {
   if (event.type === "result") {
+    if (event.is_error === true) {
+      return undefined;
+    }
     return (
       structuredTextFromClaudeValue(event.structured_output) ??
       (typeof event.result === "string" ? event.result : undefined)
