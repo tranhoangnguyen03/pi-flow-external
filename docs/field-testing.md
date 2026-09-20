@@ -105,6 +105,17 @@ Local fixture tests own selection, boundary, and failure behavior; this check on
 
 Do not run damaged-record and expected-failure provider scenarios manually. Their behavior is deterministic and belongs in the local fixture tests.
 
+## Change-triggered background-run observability check
+
+Run only when batch inspection, the `final` view, timing projection, or `/external runs` browsing changes. In one fresh Pi session against a read-only fixture:
+
+1. Launch two independent `Agent({ ..., background: true })` calls back to back (do not wait on either), then do one unrelated piece of parent work (e.g. read a file) before checking on them — this exercises the actually-recommended usage shape (separate launches, other work in between), not a tight launch-then-immediately-inspect loop.
+2. Call `external_runs({ action: "inspect", runIds: [<first>, <second>] })` once and confirm both come back as one bounded batch of `summary` projections (queued/running/terminal, `outputRef`/`diagnosticsRef` per entry) without waiting for either to finish.
+3. After both children are confirmed terminal (`external_runs wait` or a later `inspect`), call `external_runs({ action: "inspect", runId: <runId>, view: "final" })` for a completed run and confirm it returns only the verified canonical answer; for a run cancelled mid-flight (or inspected before it settles), confirm the tool response reports `finalAvailable: false` with a deliberately empty, bounded projection (`items: []`, `integrity: "incomplete"`) rather than a fabricated success — this empty shape is correct at the tool layer, not a bug. The human-readable explanation ("No verified final answer is available yet for `<runId>`.") is a separate, UI-only notice that `/external runs` shows when Final is selected on an unsettled run; the tool response itself stays narration-free by design.
+4. Run `/external runs`, open the list, and manually select `Refresh`: confirm it re-reads the first page and resets any list cursor without navigating into a run or waiting/polling. Select a still-running row and confirm its queue/elapsed timing and final-availability marker are present and update only when you refresh again (never on a timer).
+
+Local fixture tests already cover batch pagination/cursor/byte-limit edge cases, the `final` view's success/unavailable/legitimate-null shapes, and `Refresh`'s cursor-reset behavior deterministically; this check only proves the real backend/registry timing (queued→running, activity age, terminal settlement) matches what those fixtures assume.
+
 ## Change-triggered project default-harness check
 
 Run only when project default-harness resolution changes. In a fresh Pi session against a trusted read-only fixture containing `.pi/pi-flow-external/settings.json` with `"defaultHarness": "claude"`, verify `/external settings` reports `defaultHarness: claude (project: ...)`, delegate one read-only task with `role` only (no `harness`) and verify the receipt names a `claude-*` profile, then confirm an explicit `harness: "codex"` call still routes to codex. Repeat once in the same fixture with trust removed and confirm the override is ignored with a warning.
@@ -119,4 +130,5 @@ Before a runtime release:
 4. Run interruption checks for adapters whose cancellation/output path changed.
 5. Run the natural-language routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
 6. Run the nested timeout check only if nested detection or timeout behavior changed.
-7. Remove temporary evidence and profiles.
+7. Run the background-run observability check only if batch inspection, the `final` view, timing projection, or `/external runs` browsing changed.
+8. Remove temporary evidence and profiles.

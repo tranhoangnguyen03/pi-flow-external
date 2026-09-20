@@ -340,6 +340,7 @@ export async function spawnClaudeSubagent(params: {
   permission?: PermissionTier;
   maxBudgetUsd?: number;
   resumeSessionId?: string;
+  executionStartedAt?: number;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
@@ -350,6 +351,7 @@ export async function spawnClaudeSubagent(params: {
     backend: params.profile.backend,
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
+    executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
   let latestRawUsage = emptyTokenUsage();

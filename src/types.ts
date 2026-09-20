@@ -172,6 +172,8 @@ export interface SubagentProgressNode {
   result?: string;
   error?: string;
   assistantOutput?: SubagentAssistantOutput;
+  /** Execution-start boundary: immediately after the shared concurrency limiter granted this run a slot. */
+  executionStartedAt?: number;
   processStartedAt?: number;
   firstActivityAt?: number;
   lastActivityAt?: number;

@@ -266,12 +266,38 @@ Agent({
 
 Use `external_runs` with these actions:
 
-- `list`: current session/project runs; use `cursor` for run pages and `workflowCursor` for workflow pages. `workflowRunId` filters children of one workflow.
-- `inspect`: `runId`, `view: "summary" | "output" | "diagnostics"`, and optional opaque `cursor`/`limitBytes`. Follow `nextCursor` to avoid truncation.
+- `list`: current session/project runs; use `cursor` for run pages and `workflowCursor` for workflow pages. `workflowRunId` filters children of one workflow. Rows carry a `timing` projection (`queueDelayMs`, `elapsedMs`, `activityAgeMs` when live, `processDurationMs`) plus `outputAvailable`/`finalAvailable`.
+- `inspect`: single `runId` with `view: "summary" | "output" | "diagnostics" | "final"`, and optional opaque `cursor`/`limitBytes` (max 64 KiB, same cap for every view). Follow `nextCursor` to avoid truncation. `summary` includes the same `timing` projection as `list`, plus `output.finalAvailable`. `final` returns only the verified canonical terminal answer — empty with `finalAvailable: false` until a successful terminal boundary exists; it never promotes partial/narration text. `output` stays the combined stream (assistant messages plus canonical result) and is unchanged.
+- `inspect` with `runIds` instead of `runId` (up to 20, deduplicated, order preserved): a single bounded batch of `summary`-only projections — one cheap request to see whether several selected background children are queued, running, or terminal, each with `outputRef`/`diagnosticsRef` for follow-up detail. Ownership of every requested ID is validated before any page is returned. Reuses the same `limitBytes` cap as single-run inspection; pages contain whole target entries and continue through `nextCursor`, without invalidation from ordinary live progress. If one compact entry cannot fit, an actionable error asks you to increase `limitBytes` or inspect that run individually; no target is silently dropped. `runId` and `runIds` are mutually exclusive, and batch `view` must stay `summary`.
 - `wait`: one `runId` or selected `runIds`, with `mode: "any" | "all"`. It returns terminal outcomes plus still-pending IDs; an unsuccessful workflow returns early even in `all` mode. It never chooses a winner or cancels pending work.
 - `cancel`: one `runId` and optional reason. Whole-workflow cancellation stops active children; targeted child cancellation remains a catchable workflow outcome. Cancellation does not roll back edits or other side effects.
 
 Interrupting a blocking `Agent`/`workflow` call cancels its work. Interrupting `external_runs wait` stops only that wait. Background work survives its launching tool return and ordinary parent turns, but not the owning session: orderly session shutdown requests cancellation and waits for bounded cleanup. This is not a daemon. After a host crash or unconfirmed shutdown, unfinished evidence is `interrupted_or_uncertain`; restart restores evidence access, never live ownership or guaranteed retrospective process termination. No routine activity wakes the parent, and live steering is not supported.
+
+A parent's own `sleep`/wait duration (or its process lifetime) is not a measurement of, and does not bound, how long a delegated command actually takes to run — a background child keeps running under the session's ownership regardless of what the parent does next. A realistic collection shape:
+
+```ts
+// Launch two independent background runs.
+const one = Agent({ description: "Audit auth module", prompt: "Audit /absolute/repo/auth read-only.", role: "reviewer", background: true }); // -> run_...
+const two = Agent({ description: "Audit billing module", prompt: "Audit /absolute/repo/billing read-only.", role: "reviewer", background: true }); // -> run_...
+
+// Optional: give both a head start before doing anything else. This sleep
+// bounds nothing about the children's own runtime — it is just the parent
+// choosing when to next check in, not a deadline or a proxy for command time.
+// sleep(30_000)
+
+// Do unrelated parent work here (read files, answer the user, plan next steps)
+// while both children continue running under the session, not the parent turn.
+
+// Check on both at once, without waiting for either to finish:
+// external_runs({ action: "inspect", runIds: [one.runId, two.runId] })
+
+// Leave them running and come back later in the conversation (or after
+// further parent work) to collect final output once each is actually done:
+// external_runs({ action: "inspect", runId: one.runId, view: "final" })
+```
+
+A task that sounds like a 30-second command can legitimately take substantially longer end-to-end once queueing and backend overhead are included — inspect and wait, do not assume.
 
 ## Workflow usage
 

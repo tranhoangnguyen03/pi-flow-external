@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { registerExternalCommand } from "../src/external-command.ts";
+import { createExternalRunsTool } from "../src/external-runs.ts";
+import { createRunRecord } from "../src/core/run-record.ts";
+import { RunRegistry } from "../src/core/run-registry.ts";
+import { createWorkflowJournalWriter, createWorkflowRunIdentity, getSessionWorkflowDir } from "../src/workflow/journal.ts";
 import type { LoadedExternalSettings } from "../src/settings.ts";
 
 describe("/external command", () => {
@@ -199,6 +203,341 @@ describe("/external command", () => {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shows timing/output-availability row detail and Refresh resets pagination to page one without navigating into a run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-refresh-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        diagnostics: [],
+      };
+      let listCalls = 0;
+      const externalRuns = {
+        execute: vi.fn(async (_id: string, params: any) => {
+          listCalls++;
+          return {
+            content: [{ type: "text", text: "list" }],
+            details: {
+              workflows: [],
+              runs: [
+                {
+                  runId: "run_1",
+                  description: "Audit repo",
+                  status: "done",
+                  outputAvailable: true,
+                  finalAvailable: true,
+                  timing: { elapsedMs: 42_300 },
+                  live: false,
+                },
+                {
+                  runId: "run_queued_live",
+                  description: "Still queued, registry-confirmed live",
+                  status: "queued",
+                  outputAvailable: false,
+                  finalAvailable: false,
+                  timing: { queuedAt: new Date(Date.now() - 5_000).toISOString() },
+                  live: true,
+                },
+                {
+                  runId: "run_queued_orphan",
+                  description: "Queued-looking durable row with no live registry entry",
+                  status: "queued",
+                  outputAvailable: false,
+                  finalAvailable: false,
+                  timing: { queuedAt: new Date(Date.now() - 5_000).toISOString() },
+                  live: false,
+                },
+              ],
+              // Only the first call reports a further page, so a bug that
+              // fails to reset the cursor on Refresh would surface as a
+              // "Next run page" choice still present on the second call.
+              nextCursor: listCalls === 1 ? "run-next" : undefined,
+            },
+          };
+        }),
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: externalRuns as never,
+      });
+
+      let selectCalls = 0;
+      const ctx = {
+        cwd: root,
+        isProjectTrusted: () => false,
+        hasUI: true,
+        ui: {
+          notify: vi.fn(),
+          select: vi.fn(async (_title: string, choices: string[]) => {
+            selectCalls++;
+            if (selectCalls === 1) {
+              expect(choices[0]).toContain("run_1");
+              expect(choices[0]).toContain("Audit repo");
+              expect(choices[0]).toContain("done");
+              expect(choices[0]).toContain("elapsed");
+              expect(choices[0]).toContain("final ready");
+              // A registry-confirmed-live queued row shows a current queue
+              // age computed from queuedAt (no queueDelayMs exists yet since
+              // execution has not started); an orphaned durable row with the
+              // same "queued" status but no live registry entry (live: false)
+              // must never get a fabricated, ever-growing age.
+              const liveQueuedRow = choices.find((choice) => choice.includes("run_queued_live"));
+              expect(liveQueuedRow).toMatch(/queued \d/);
+              const orphanQueuedRow = choices.find((choice) => choice.includes("run_queued_orphan"));
+              expect(orphanQueuedRow).toBeDefined();
+              expect(orphanQueuedRow).not.toMatch(/queued \d/);
+              expect(choices).toContain("Next run page");
+              expect(choices).toContain("Refresh");
+              return "Refresh";
+            }
+            expect(choices).not.toContain("Next run page");
+            return "Back";
+          }),
+        },
+      };
+      await command?.handler("runs", ctx as never);
+      expect(listCalls).toBe(2);
+      expect(externalRuns.execute).toHaveBeenNthCalledWith(1, expect.any(String), { action: "list", limit: 50 }, undefined, undefined, ctx);
+      expect(externalRuns.execute).toHaveBeenNthCalledWith(2, expect.any(String), { action: "list", limit: 50 }, undefined, undefined, ctx);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefixes the run-detail summary editor with a human-readable timing/output-availability header above the raw JSON", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-summary-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        diagnostics: [],
+      };
+      const summaryJson = JSON.stringify({
+        runId: "run_1",
+        state: { status: "done" },
+        timing: { queueDelayMs: 500, elapsedMs: 42_300 },
+        output: { available: true, finalAvailable: true },
+      });
+      const externalRuns = {
+        execute: vi.fn(async (_id: string, params: any) => {
+          if (params.action === "list") {
+            return { content: [{ type: "text", text: "list" }], details: { workflows: [], runs: [{ runId: "run_1", status: "done" }] } };
+          }
+          return { content: [{ type: "text", text: summaryJson }], details: {} };
+        }),
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: externalRuns as never,
+      });
+
+      const editor = vi.fn(async (_title: string, _content: string) => "");
+      let rootCalls = 0;
+      let runDetailCalls = 0;
+      const ctx = {
+        cwd: root,
+        isProjectTrusted: () => false,
+        hasUI: true,
+        ui: {
+          notify: vi.fn(),
+          editor,
+          select: vi.fn(async (title: string, choices: string[]) => {
+            if (title === "External runs") return rootCalls++ === 0 ? choices.find((choice) => choice.startsWith("Run run_1")) : "Back";
+            if (title === "Run run_1") return runDetailCalls++ === 0 ? "Summary" : "Back";
+            return "Back";
+          }),
+        },
+      };
+      await command?.handler("runs", ctx as never);
+      expect(runDetailCalls).toBeGreaterThanOrEqual(2);
+      expect(editor).toHaveBeenCalledWith("summary run_1", expect.stringContaining("status: done"));
+      const [, content] = editor.mock.calls[0]!;
+      expect(content).toContain("queue delay 500ms");
+      expect(content).toContain("elapsed 42s");
+      expect(content).toContain("final answer available");
+      expect(JSON.parse(content.slice(content.indexOf("\n\n") + 2))).toEqual(JSON.parse(summaryJson));
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("routes the run-detail Final choice to inspect view: final, distinct from Output/Diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-final-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        diagnostics: [],
+      };
+      const externalRuns = {
+        execute: vi.fn(async (_id: string, params: any) => {
+          if (params.action === "list") {
+            return { content: [{ type: "text", text: "list" }], details: { workflows: [], runs: [{ runId: "run_1", status: "done" }] } };
+          }
+          if (params.action === "inspect" && params.view === "final") {
+            return { content: [{ type: "text", text: "canonical final answer" }], details: { finalAvailable: true } };
+          }
+          return { content: [{ type: "text", text: JSON.stringify({ runId: "run_1", state: { status: "done" } }) }], details: {} };
+        }),
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: externalRuns as never,
+      });
+
+      const editor = vi.fn(async (_title: string, _content: string) => "");
+      let rootCalls = 0;
+      let runDetailCalls = 0;
+      const ctx = {
+        cwd: root,
+        isProjectTrusted: () => false,
+        hasUI: true,
+        ui: {
+          notify: vi.fn(),
+          editor,
+          select: vi.fn(async (title: string, choices: string[]) => {
+            if (title === "External runs") return rootCalls++ === 0 ? choices.find((choice) => choice.startsWith("Run run_1")) : "Back";
+            if (title === "Run run_1") {
+              expect(choices).toContain("Final");
+              return runDetailCalls++ === 0 ? "Final" : "Back";
+            }
+            if (title === "final run_1") return "Back";
+            return "Back";
+          }),
+        },
+      };
+      await command?.handler("runs", ctx as never);
+      expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "run_1", view: "final" }), undefined, undefined, ctx);
+      expect(editor).toHaveBeenCalledWith("final run_1", "canonical final answer");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shows an informative notice (never a blank/raw editor) when Final is unavailable for a real agent or workflow run, while a legitimate null workflow result still opens as available", async () => {
+    const runsDirectory = mkdtempSync(join(tmpdir(), "pi-flow-command-final-real-"));
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(runsDirectory, "pi-flow-external", "settings.json"),
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        diagnostics: [],
+      };
+      // Real registry/tool — this is a command-route regression through
+      // registerExternalCommand, not a stubbed externalRuns.execute.
+      const registry = new RunRegistry();
+      const externalRuns = createExternalRunsTool({ registry, runsDirectory: () => runsDirectory });
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 4, subagentTimeoutMs: 60_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: externalRuns as never,
+      });
+
+      const ctx = {
+        cwd: "/project",
+        isProjectTrusted: () => false,
+        hasUI: true,
+        sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-a" },
+        ui: {
+          notify: vi.fn(),
+          editor: vi.fn(async () => ""),
+          select: vi.fn(),
+        },
+      };
+
+      // Real evidence: a failed agent run (final unavailable).
+      const failedAgent = createRunRecord({
+        directory: runsDirectory,
+        metadata: { parentSessionId: "session-a", project: "/project", description: "Failed agent" },
+      });
+      await failedAgent.finish({ status: "error", error: "boom" });
+
+      // Real evidence: a failed workflow journal (final unavailable) and one
+      // with a legitimate `null` result (final available).
+      const workflowDir = getSessionWorkflowDir(ctx)!;
+      const failedWorkflowIdentity = createWorkflowRunIdentity("failed workflow script", null);
+      const failedWorkflowJournal = await createWorkflowJournalWriter({ dir: workflowDir, identity: failedWorkflowIdentity, name: "failed-workflow", source: "inline", project: "/project" });
+      await failedWorkflowJournal.fail("boom", "failed");
+
+      const nullWorkflowIdentity = createWorkflowRunIdentity("null workflow script", null);
+      const nullWorkflowJournal = await createWorkflowJournalWriter({ dir: workflowDir, identity: nullWorkflowIdentity, name: "null-workflow", source: "inline", project: "/project" });
+      await nullWorkflowJournal.complete(null);
+
+      async function selectFinalFor(runId: string) {
+        let rootChosen = false;
+        let detailCalls = 0;
+        (ctx.ui.select as ReturnType<typeof vi.fn>).mockReset();
+        (ctx.ui.select as ReturnType<typeof vi.fn>).mockImplementation(async (title: string, choices: string[]) => {
+          if (title === "External runs") {
+            if (rootChosen) return "Back";
+            rootChosen = true;
+            return choices.find((choice) => choice.includes(runId)) ?? "Back";
+          }
+          if (title === `Run ${runId}`) {
+            detailCalls++;
+            if (detailCalls === 1) {
+              expect(choices).toContain("Final");
+              return "Final";
+            }
+            return "Back";
+          }
+          return "Back";
+        });
+        (ctx.ui.notify as ReturnType<typeof vi.fn>).mockClear();
+        (ctx.ui.editor as ReturnType<typeof vi.fn>).mockClear();
+        await command?.handler("runs", ctx as never);
+      }
+
+      await selectFinalFor(failedAgent.runId);
+      expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/no verified final answer.*available/i), "info");
+      expect(ctx.ui.editor).not.toHaveBeenCalled();
+
+      await selectFinalFor(failedWorkflowIdentity.runId);
+      expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/no verified final answer.*available/i), "info");
+      expect(ctx.ui.editor).not.toHaveBeenCalled();
+
+      // A legitimate settled `null` workflow result stays distinctly
+      // "available": it opens in the editor with the real JSON (never
+      // conflated with the unavailable notice above).
+      await selectFinalFor(nullWorkflowIdentity.runId);
+      expect(ctx.ui.notify).not.toHaveBeenCalled();
+      expect(ctx.ui.editor).toHaveBeenCalledWith(`final ${nullWorkflowIdentity.runId}`, expect.stringContaining('"result":null'));
+      expect(ctx.ui.editor).toHaveBeenCalledWith(`final ${nullWorkflowIdentity.runId}`, expect.stringContaining('"finalAvailable":true'));
+    } finally {
+      rmSync(runsDirectory, { recursive: true, force: true });
     }
   });
 });

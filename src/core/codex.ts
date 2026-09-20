@@ -311,6 +311,7 @@ export async function spawnCodexSubagent(params: {
   outputSchema?: unknown;
   permission?: PermissionTier;
   resumeSessionId?: string;
+  executionStartedAt?: number;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
@@ -321,6 +322,7 @@ export async function spawnCodexSubagent(params: {
     backend: params.profile.backend,
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
+    executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
   let latestUsage = emptyUsage(params.profile.model);

@@ -499,6 +499,8 @@ function createAgentTool(
 
         run.progress.status = "running";
         run.progress.startedAt = Date.now();
+        run.progress.executionStartedAt = run.progress.startedAt;
+        void runRecord.event("execution_started");
         state.registry.update(runRecord.runId, run.progress);
         if (!background) broadcastActiveRunUpdates(state);
 
@@ -519,6 +521,7 @@ function createAgentTool(
           defaultPermission,
           maxBudgetUsd,
           resumeRunId: params.resume,
+          executionStartedAt: run.progress.executionStartedAt,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
             if (details.progress) run.progress = details.progress;

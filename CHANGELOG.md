@@ -4,6 +4,22 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.2.0-external.0] - 2026-09-20
+
+### Added
+
+- `external_runs` `inspect` now accepts a bounded `runIds` batch (up to 20, deduplicated, order preserved) returning one consistent normalized summary entry per target — live, durable, agent, or workflow — without waiting for completion.
+- Added a verified `view: "final"` projection that returns only a backend's own canonical terminal answer, separate from combined narration/output; unavailable is a bounded, narration-free empty page (`finalAvailable: false`), never a synthesized sentence.
+- Derived explicit queue/elapsed/activity timing (`queueDelayMs`, `elapsedMs`, `activityAgeMs`, `processDurationMs`) from existing evidence, computed only where the underlying timestamps genuinely exist; a registry-confirmed-live run is required before now-relative durations are computed, so an orphaned/crashed durable record is never misreported as actively running.
+- `/external runs` list rows now show status, queue/elapsed duration, live activity age, and output/final availability, plus a manual `Refresh` choice that re-reads the current page and resets stale cursors.
+
+### Fixed
+
+- Recorded an explicit `execution_started` evidence boundary (direct `Agent` calls and workflow `agent()` calls) so durable status classification and timing no longer depend solely on `processStartedAt`, which never exists for in-process Pi children.
+- A workflow child's own registry entry now transitions `queued` → `running` explicitly at limiter-acquisition time, instead of only incidentally once its backend's first progress event fires.
+- Settled `outcome.status` now wins over a possibly-stale ambient `observation.status` once a run has terminated.
+- An unresolvable `wf_...` ID now rejects consistently as unknown/unavailable across `inspect`, `cancel`, `wait`, and batch `inspect`, instead of falling through to the agent-only durable reader.
+
 ## [2.1.0-external.3] - 2026-09-18
 
 ### Fixed

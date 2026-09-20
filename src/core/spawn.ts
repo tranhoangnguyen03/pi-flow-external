@@ -90,6 +90,14 @@ export interface SpawnSubagentParams {
   resumeRunId?: string;
   /** Evidence identity allocated by the caller before waiting for a concurrency slot. */
   runRecord?: RunRecord;
+  /**
+   * Execution-start boundary (epoch ms), captured by the caller immediately after
+   * the shared concurrency limiter granted this run a slot. Callers always acquire
+   * the limiter themselves before calling spawnSubagent (see the class doc comment
+   * above); this field only carries that already-captured timestamp through so it
+   * reaches the terminal summary and the live progress snapshot.
+   */
+  executionStartedAt?: number;
 }
 
 interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
@@ -372,6 +380,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         timedOut: details.timedOut === true,
         result: details.result,
         assistantOutput: details.assistantOutput,
+        executionStartedAt: details.progress?.executionStartedAt,
         processStartedAt: details.progress?.processStartedAt,
         firstActivityAt: details.progress?.firstActivityAt,
         lastActivityAt: details.progress?.lastActivityAt,
@@ -425,6 +434,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       description: params.description,
       status: "error",
       error: error instanceof Error ? error.message : String(error),
+      executionStartedAt: params.executionStartedAt,
       durationMs: Date.now() - startedAt,
       backendEventCount,
       nestedActivitySeen,
@@ -456,6 +466,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       outputSchema: params.outputSchema,
       permission: params.permission,
       resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
     });
   }
   if (params.profile.backend === "agy") {
@@ -477,6 +488,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       outputSchema: params.outputSchema,
       permission: params.permission,
       resumeConversationId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
       // ponytail: 2x base because extendOnce() may legitimately double the
       // outer deadline; the outer AbortSignal remains the real authority.
       timeoutMs: params.timeoutMs * 2,
@@ -519,6 +531,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       permission: params.permission,
       maxBudgetUsd: params.maxBudgetUsd,
       resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
     });
   }
   if (!params.model) {
@@ -616,6 +629,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     backend: profile.backend,
     enabled: progressEnabled,
     onProgress,
+    executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
 

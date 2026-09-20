@@ -191,10 +191,21 @@ async function readSummary(options: ExternalCommandOptions, runId: string, ctx: 
   return object(JSON.parse(text));
 }
 
-async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics", ctx: ExtensionCommandContext): Promise<void> {
+async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics" | "final", ctx: ExtensionCommandContext): Promise<void> {
   let cursor: string | undefined;
   do {
     const page = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
+    // The tool's `final` projection is deliberately a clean, narration-free
+    // canonical-answer surface: unavailable is a bounded EMPTY page with
+    // finalAvailable:false (true for both an agent run and a workflow — see
+    // src/external-runs.ts), not a synthesized sentence in the response
+    // text. Turning that into a human-readable notice belongs here, at the
+    // UI boundary, for both run kinds alike — otherwise this would open an
+    // editor with nothing informative in it.
+    if (view === "final" && page.details.finalAvailable !== true) {
+      ctx.ui.notify(`No verified final answer is available yet for ${runId}.`, "info");
+      return;
+    }
     await ctx.ui.editor(`${view} ${runId}`, pageText(page));
     const next = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
     if (!next || await ctx.ui.select(`${view} ${runId}`, ["Next page", "Back"]) !== "Next page") return;
@@ -202,17 +213,46 @@ async function showPages(options: ExternalCommandOptions, runId: string, view: "
   } while (cursor);
 }
 
+/** ~s/m/h duration label for a millisecond value, or undefined when absent/invalid. Human-readable only — never a second timing source. */
+function formatDurationMs(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  if (value < 1_000) return `${Math.round(value)}ms`;
+  const seconds = value / 1_000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${minutes.toFixed(1)}m`;
+  return `${(minutes / 60).toFixed(1)}h`;
+}
+
+/** One-line, human-readable timing/output-availability header shown above the raw summary JSON, so a user does not need to interpret raw timestamps to tell whether a verified final answer exists yet. */
+function formatSummaryHeader(summary: JsonObject): string {
+  const state = object(summary.state);
+  const status = String(state.status ?? summary.status ?? "unknown");
+  const timing = object(summary.timing ?? state.timing);
+  const output = object(summary.output);
+  const finalAvailable = output.finalAvailable === true || summary.finalAvailable === true;
+  const outputAvailable = output.available === true || summary.outputAvailable === true;
+  const parts = [
+    `status: ${status}`,
+    typeof timing.queueDelayMs === "number" ? `queue delay ${formatDurationMs(timing.queueDelayMs)}` : undefined,
+    typeof timing.elapsedMs === "number" ? `elapsed ${formatDurationMs(timing.elapsedMs)}` : undefined,
+    typeof timing.activityAgeMs === "number" ? `last activity ${formatDurationMs(timing.activityAgeMs)} ago` : undefined,
+    finalAvailable ? "final answer available" : outputAvailable ? "output available (no verified final answer yet)" : "no output yet",
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(" · ");
+}
+
 async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<void> {
   const summary = await readSummary(options, runId, ctx);
   const children = Array.isArray(summary.children) ? summary.children.map(object).filter((child) => typeof child.runId === "string") : [];
   const state = object(summary.state);
   const childChoices = children.map((child) => `Child ${String(child.runId)}${child.label ? ` · ${String(child.label)}` : ""}`);
-  const actions = ["Summary", "Output", "Diagnostics", ...childChoices, ...(state.status === "running" || state.status === "queued" ? ["Cancel run"] : []), "Back"];
+  const actions = ["Summary", "Output", "Final", "Diagnostics", ...childChoices, ...(state.status === "running" || state.status === "queued" ? ["Cancel run"] : []), "Back"];
   while (true) {
     const choice = await ctx.ui.select(`Run ${runId}`, actions);
     if (!choice || choice === "Back") return;
-    if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, JSON.stringify(summary, null, 2));
-    else if (choice === "Output" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "diagnostics", ctx);
+    if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, `${formatSummaryHeader(summary)}\n\n${JSON.stringify(summary, null, 2)}`);
+    else if (choice === "Output" || choice === "Final" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "final" | "diagnostics", ctx);
     else if (choice === "Cancel run") {
       if (await ctx.ui.confirm("Cancel external run?", `${runId}\n\nStopping execution does not roll back side effects.`)) {
         const result = await runAction(options, { action: "cancel", runId, reason: "cancelled from /external runs" }, ctx);
@@ -224,6 +264,48 @@ async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: 
       if (child) await navigateRun(options, String(child.runId), ctx);
     }
   }
+}
+
+/** One list-row label: kind, ID, short description, status, queue/elapsed duration, live activity age, and output/final availability — best-effort per field, since live (listedAgent/liveSummary), historical (historicalAgent/journalSummary), and workflow shapes each carry a different subset. */
+function formatRunRow(kind: "Run" | "Workflow", item: JsonObject): string {
+  const state = object(item.state);
+  const status = String(state.status ?? item.status ?? "unknown");
+  const task = object(item.task);
+  const description = typeof item.description === "string" && item.description
+    ? item.description
+    : typeof task.description === "string" && task.description
+      ? task.description
+      : typeof task.name === "string" && task.name
+        ? task.name
+        : undefined;
+  const timing = object(item.timing);
+  // A still-queued row has no queueDelayMs yet (it only exists once execution
+  // starts), so without this a genuinely queued row would show no duration at
+  // all. Compute a live "how long has it been queued" age directly from the
+  // existing queuedAt timestamp at render time — no new timer, no new
+  // evidence field — and only for an entry the registry itself confirms is
+  // still live (`item.live === true`, set by listedAgent/historicalAgent):
+  // an orphaned durable row with a stale "queued"-looking status but no live
+  // registry entry must never get a fabricated, ever-growing age.
+  const queuedAtMs = typeof timing.queuedAt === "string" ? Date.parse(timing.queuedAt) : NaN;
+  const queueAgeMs = item.live === true && status === "queued" && Number.isFinite(queuedAtMs)
+    ? Math.max(0, Date.now() - queuedAtMs)
+    : undefined;
+  const timingLabel = typeof timing.elapsedMs === "number"
+    ? `elapsed ${formatDurationMs(timing.elapsedMs)}`
+    : queueAgeMs !== undefined
+      ? `queued ${formatDurationMs(queueAgeMs)}`
+      : typeof timing.queueDelayMs === "number"
+        ? `queued ${formatDurationMs(timing.queueDelayMs)}`
+        : undefined;
+  const activityAge = typeof timing.activityAgeMs === "number" ? `active ${formatDurationMs(timing.activityAgeMs)} ago` : undefined;
+  const output = object(item.output);
+  const outputAvailable = item.outputAvailable === true || output.available === true;
+  const finalAvailable = item.finalAvailable === true || output.finalAvailable === true;
+  const outputLabel = finalAvailable ? "final ready" : outputAvailable ? "output available" : undefined;
+  return [`${kind} ${String(item.runId)}`, description, status, timingLabel, activityAge, outputLabel]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
 }
 
 async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<void> {
@@ -241,10 +323,10 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
     }, ctx);
     const details = object(page.details);
     const entries = [
-      ...(pageKind !== "runs" && Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow", item: object(item) })) : []),
-      ...(pageKind !== "workflows" && Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run", item: object(item) })) : []),
+      ...(pageKind !== "runs" && Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow" as const, item: object(item) })) : []),
+      ...(pageKind !== "workflows" && Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run" as const, item: object(item) })) : []),
     ].filter(({ item }) => typeof item.runId === "string");
-    const choices = entries.map(({ kind, item }) => `${kind} ${String(item.runId)} · ${String(object(item.state).status ?? item.status ?? "unknown")}`);
+    const choices = entries.map(({ kind, item }) => formatRunRow(kind, item));
     if (pageKind !== "workflows") nextRunCursor = typeof details.nextCursor === "string" ? details.nextCursor : undefined;
     if (pageKind !== "runs") nextWorkflowCursor = typeof details.nextWorkflowCursor === "string" ? details.nextWorkflowCursor : undefined;
     if (nextWorkflowCursor) choices.push("Next workflow page");
@@ -253,9 +335,18 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
       ctx.ui.notify("No external runs are available in this session and project.", "info");
       return;
     }
-    choices.push("Back");
+    // Manual only: never polls, waits, or changes execution. Re-reads from the
+    // current page's start and resets stale list cursors, without navigating
+    // into and back out of a run.
+    choices.push("Refresh", "Back");
     const choice = await ctx.ui.select("External runs", choices);
     if (!choice || choice === "Back") return;
+    if (choice === "Refresh") {
+      cursor = undefined;
+      workflowCursor = undefined;
+      pageKind = "all";
+      continue;
+    }
     if (choice === "Next workflow page") {
       workflowCursor = nextWorkflowCursor;
       pageKind = "workflows";

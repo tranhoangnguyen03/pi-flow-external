@@ -266,6 +266,7 @@ export async function spawnAgySubagent(params: {
   permission?: PermissionTier;
   resumeConversationId?: string;
   timeoutMs?: number;
+  executionStartedAt?: number;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
   const promptParts = [params.profile.systemPrompt, params.prompt, params.appendInstructions].filter(Boolean);
@@ -278,6 +279,7 @@ export async function spawnAgySubagent(params: {
     backend: params.profile.backend,
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
+    executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);

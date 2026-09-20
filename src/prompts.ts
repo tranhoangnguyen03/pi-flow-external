@@ -12,7 +12,7 @@ export const EXTERNAL_HELP_PROMPT_SNIPPET =
   "Show external role details, permission behavior, or workflow guidance on demand.";
 
 export const EXTERNAL_RUNS_PROMPT_SNIPPET =
-  "List, inspect, wait for, or cancel session-owned external runs; follow cursors for complete output.";
+  "List, inspect (single or batch summary via runIds, up to 20), wait for, or cancel session-owned external runs; follow cursors for complete output. view: final returns only a verified terminal answer, empty until one exists.";
 
 // Only elide the "(harness only)" suffix when every configured harness
 // carries the role; a role available on all three CLIs but no pi harness

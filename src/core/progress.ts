@@ -186,6 +186,8 @@ export interface ProgressEmitterOptions {
   backend?: SubagentBackend;
   enabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
+  /** Execution-start boundary captured by the caller right after the shared concurrency limiter granted a slot. */
+  executionStartedAt?: number;
 }
 
 export interface ProgressEmitter {
@@ -214,6 +216,9 @@ export interface ProgressEmitter {
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
   const { toolCallId, description, subagentType, backend, enabled, onProgress } = options;
   const progress = createProgressNode(toolCallId, description, subagentType, "running", backend);
+  if (options.executionStartedAt !== undefined) {
+    progress.executionStartedAt = options.executionStartedAt;
+  }
   const live = Boolean(enabled && onProgress);
 
   let lastProgressEmit = 0;

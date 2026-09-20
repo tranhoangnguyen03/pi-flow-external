@@ -206,6 +206,56 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     disposeSession(session);
   });
 
+  it("keeps queuedAt and executionStartedAt visible in live timing after the backend's own progress node replaces the queued one", async () => {
+    const subagentsDir = join(agentDir, "subagents");
+    const binDir = join(tempDir, "bin-live-timing");
+    const startedPath = join(tempDir, "live-timing-started");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Live timing worker.\nbackend: codex\n---\n");
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(startedPath)}, 'started\\n');
+setInterval(() => {}, 1000);
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 5_000 });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
+    context.sessionManager.getBranch = () => [];
+    const agent = session.getToolDefinition("Agent") as any;
+    const runs = session.getToolDefinition("external_runs") as any;
+    const launched = await agent.execute(
+      "live-timing",
+      { description: "Live timing", prompt: "wait", role: "worker", harness: "codex", background: true },
+      undefined,
+      undefined,
+      context,
+    );
+    await vi.waitFor(() => expect(existsSync(startedPath)).toBe(true), { timeout: 5_000 });
+
+    // By now the codex child process has spawned: spawnCodexSubagent's own
+    // fresh progress node (created via createProgressEmitter, independent of
+    // the outer "queued" node executeRun created) has already replaced
+    // run.progress via pi-subagent.ts's onProgress callback. queuedAt must
+    // survive that replacement (backfilled from the run record, per
+    // spawn.ts's own onProgress wrapper) and executionStartedAt must survive
+    // it too (threaded through via createProgressEmitter's own option), or
+    // queueDelayMs could never be computed for a live run.
+    const inspected = await runs.execute("inspect", { action: "inspect", runId: launched.details.runId, view: "summary" }, undefined, undefined, context);
+    const projection = JSON.parse(inspected.content[0].text);
+    expect(projection.state.status).toBe("running");
+    expect(projection.timing.queuedAt).toEqual(expect.any(String));
+    expect(projection.timing.executionStartedAt).toEqual(expect.any(String));
+    expect(projection.timing.queueDelayMs).toEqual(expect.any(Number));
+
+    await runs.execute("cancel", { action: "cancel", runId: launched.details.runId, reason: "test cleanup" }, undefined, undefined, context);
+    await runs.execute("wait", { action: "wait", runIds: [launched.details.runId] }, undefined, undefined, context);
+    disposeSession(session);
+  });
+
   it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-cancel-reason");
