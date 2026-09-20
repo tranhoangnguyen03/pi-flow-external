@@ -170,3 +170,122 @@ settled/unsettled `Final` distinction on a run that succeeds.
   release steps were made during this pass. One small, authorized doc-only
   wording correction was made to `docs/field-testing.md`'s background-run
   observability check step 3 (see check 2 above).
+
+## Pass 2 — Agy and named Pi harness direct + workflow (2026-09-20)
+
+**Scope of this pass:** the two remaining release-gate lanes explicitly
+authorized for this session — `--backend agy` (direct + workflow) and one
+registered named Pi harness (direct + workflow). **Codex was explicitly
+waived by the user for this pass and not exercised at all**: no `codex`
+binary invocation (not even `--version`), no `--backend codex` run, and no
+Codex-branded root model. No nested agents performed any live-provider
+check in this pass. No commits, merges, tags, or release steps were made.
+
+### Root-model and harness discovery (sanitized — no credentials shown)
+
+`docs/field-testing.md`'s documented root-model default
+(`openai-codex/gpt-5.6-sol`) is a Codex model and was excluded per the
+user's instruction. Discovery was done with `pi auth check --model/--provider
+... --json` (readiness only, no `--credentials` flag, so no secret material
+was ever printed) plus minimal, low-cost `pi --model ... -p "reply with OK"`
+sanity calls:
+
+| Provider | Auth status | Notes |
+|---|---|---|
+| `anthropic` (direct) | `not_ready` / `credentials_not_configured` | not usable |
+| `google` (direct) | `not_ready` / `credentials_not_configured` | not usable |
+| `radius` | `ready` (oauth) | model catalog resolves, but the account returned `402 Payment Required: $0.00 available` on an actual call — authenticated but unfunded, not usable |
+| `deepseek` (direct) | `ready` (api_key) | `402 Insufficient Balance` on an actual call — authenticated but unfunded, not usable |
+| `cerebras` | `ready` (api_key) | real `OK` reply on sanity call — funded and used |
+| `zai` | `ready` (api_key) | real `OK` reply on sanity call — funded and used, but later hit a real `429 Usage limit reached for 5 hour` mid-run (see below) |
+| `9-router` (backs the registered `pi-*` harnesses) | `ready` (api_key) | see per-harness results below — not uniformly usable |
+
+Named Pi harness registry (`~/.pi/agent/pi-flow-external/harnesses.json`,
+read-only, model/thinking pins only, no credentials in this file):
+`pi-astra` → `9-router/big-brain` (thinking `off`), `pi-deepseek` →
+`9-router/deepseek-flash-latest` (thinking `xhigh`), `pi-glm` →
+`9-router/glm-5.3` (thinking `high`). No new harness or profile was created;
+only the runner's own temporary `claude-*`/`agy-*` profiles were written and
+removed, exactly as `scripts/e2e/external.mjs` already does for non-pi
+backends.
+
+**`pi-deepseek` (the harness suggested as a first choice) was not usable
+this pass**, for a real provider-side reason unrelated to this repo's code:
+a direct sanity call against `9-router/deepseek-flash-latest` failed with
+`503 ... SUBSCRIPTION_PENDING_CONFIRMATION` — the account's pricing for that
+specific model changed and requires manual confirmation in the 9-router
+dashboard before further use. This was not retried and no workaround was
+applied. **`pi-glm`** was attempted next and reached the harness in the real
+runner (`--backend pi --harness pi-glm`), but the direct check's receipt
+came back `status: "error"` with `429 Usage limit reached for 5 hour. Your
+limit will reset at 2026-09-21 02:55:25` — the same reset timestamp `zai`'s
+own 429 reported a few commands earlier, consistent with `9-router`'s
+`glm-5.3` route and the direct `zai` account sharing underlying provider
+capacity. Per the essential-test-mandate no-auto-retry rule, this was not
+retried; the pass switched to the third registered harness, **`pi-astra`**
+(`9-router/big-brain`), which passed a sanity call and both real checks
+below.
+
+**Root model used:** `agy` direct check ran with `--root-model
+zai/glm-5.3-flash` (passed). The `agy --workflow` check under the same root
+model then hit `zai`'s real `429` mid-run (visible in the raw event stream:
+`willRetry:true` twice, then `auto_retry_end success:false` — Pi's own SDK
+retry, not an additional retry by this pass); that run's failure was
+recorded and not retried. The remaining three checks (`agy --workflow`
+retry, both `pi --harness pi-astra` checks) instead used **`--root-model
+cerebras/gpt-oss-120b`** (funded, non-Codex, confirmed via sanity call).
+`--agent-dir "$HOME/.pi/agent"` was passed explicitly in the same shell
+invocation as every `npm run e2e` command, per the isolated-agent-dir
+caveat already recorded in Pass 1's environment notes above.
+
+### Results
+
+1. **`npm run e2e -- --backend agy --root-model zai/glm-5.3-flash`: PASS.**
+   Receipt `status: "done"`, result
+   `AGY_EXTERNAL_OK:gemini-3.7-flash-high-high:...` matched the fixture
+   marker exactly, `permission: {tier: "danger", enforced: true}`, fixture
+   verified clean (`git status --short` empty) after the run.
+2. **`npm run e2e -- --backend agy --root-model zai/glm-5.3-flash --workflow`:
+   FAIL (not retried).** Root `pi` process exited 1; the real event stream
+   showed `zai`'s `429 Usage limit reached for 5 hour` on the root model
+   itself, exhausted after Pi's own internal retry attempts. Zero receipts
+   were written (the workflow never reached a child dispatch). Artifacts
+   were captured, then removed.
+3. **`npm run e2e -- --backend agy --root-model cerebras/gpt-oss-120b
+   --workflow`: PASS.** Both `workflow-child` receipts `status: "done"`,
+   both returning the exact `AGY_EXTERNAL_OK:...` marker under
+   `permission: {tier: "danger", enforced: true}`; root transcript contained
+   `WORKFLOW_SUPERVISION_OK`; fixture verified clean after the run.
+4. **`npm run e2e -- --backend pi --harness pi-glm --root-model
+   cerebras/gpt-oss-120b`: FAIL (not retried; harness switched, see above).**
+5. **`npm run e2e -- --backend pi --harness pi-astra --root-model
+   cerebras/gpt-oss-120b`: PASS.** Receipt `status: "done"`, result
+   `PI_EXTERNAL_OK:pi-astra:pi-astra`, `profile: "pi-astra-worker"`, `model:
+   "9-router/big-brain"`, `permission: {tier: "danger", enforced: true}`,
+   fixture verified clean.
+6. **`npm run e2e -- --backend pi --harness pi-astra --root-model
+   cerebras/gpt-oss-120b --workflow`: PASS.** Both child receipts
+   `status: "done"` with the exact `PI_EXTERNAL_OK:pi-astra:...` marker and
+   the same enforced `danger` permission tier; fixture verified clean.
+
+This satisfies the release-gate intent of "Agy direct + workflow" and "one
+registered named Pi harness direct + workflow", using `pi-astra` in place of
+the originally-suggested `pi-deepseek`, which was blocked by a real,
+unrelated provider-account billing state, not a code defect.
+
+### Cleanup performed (Pass 2)
+
+- Every temporary `agy-zz-e2e-*.md` profile written into the real
+  `~/.pi/agent/subagents/` directory was removed after evidence extraction
+  from each `--keep` run (confirmed empty via a final directory listing).
+- Every `--keep`ed temporary run root under the OS temp directory
+  (`pi-flow-external-e2e-<timestamp>`) was removed after its receipt(s) were
+  read; none were left behind from this pass.
+- `git status --short` on the repo confirmed no source, test, or shipped
+  file changed during this pass — only this doc and the PR body were
+  touched, after all live checks completed.
+- No `codex` binary was ever invoked in this pass, and no automatic retry
+  was performed on any failed or aborted provider/root-model run; each
+  failure above was diagnosed from its real receipt or event stream, then
+  routed to a different, already-funded model/harness rather than repeating
+  the same call.
