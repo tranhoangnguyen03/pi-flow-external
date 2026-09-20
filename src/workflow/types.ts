@@ -88,6 +88,8 @@ export interface WorkflowAgentCall {
   resumeRunId?: string;
   /** Evidence allocated before the call waits for a global concurrency slot. */
   runRecord?: RunRecord;
+  /** Execution-start boundary (epoch ms), set immediately after this call's concurrency slot is granted. */
+  executionStartedAt?: number;
 }
 
 export interface WorkflowCachedAgentResult {
@@ -203,7 +205,7 @@ export interface RunWorkflowOptions {
   onPhase?: (title: string) => void;
   resumeAgentResults?: WorkflowCachedAgentResult[];
   onAgentQueued?: (event: WorkflowAgentQueuedEvent) => unknown;
-  onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean; runId?: string }) => void;
+  onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean; runId?: string; executionStartedAt?: number }) => void;
   onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean; error?: SerializedChildRunError }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;
 }

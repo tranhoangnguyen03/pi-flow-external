@@ -47,6 +47,116 @@ describe("external_runs", () => {
     expect(inspected.content[0].text).toContain("answ");
     expect(inspected.details).toMatchObject({ runId: owned.runId, view: "output", nextCursor: expect.any(String) });
     await expect(execute({ action: "inspect", runId: "../summary.json", view: "summary" })).rejects.toThrow(/run id/i);
+
+    const finalView = await execute({ action: "inspect", runId: owned.runId, view: "final" });
+    expect(finalView.details).toMatchObject({ finalAvailable: true, items: [{ text: "answer" }] });
+  });
+
+  it("inspects explicit selected runs in one bounded batch without waiting, validating all IDs up front", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const first = await completedRecord(runsDirectory, { description: "First" });
+    const second = await completedRecord(runsDirectory, { description: "Second" });
+    let finishThird!: (value: string) => void;
+    registry.start({
+      runId: "run_live_third",
+      kind: "agent",
+      sessionId: "session-a",
+      project: "/project",
+      run: () => new Promise((resolve) => { finishThird = resolve; }),
+    });
+
+    const batch = await execute({ action: "inspect", runIds: [first.runId, second.runId, "run_live_third"] });
+    expect(batch.details.entries.map((entry: any) => entry.runId)).toEqual([first.runId, second.runId, "run_live_third"]);
+    // Consistent nested shape across live/durable agent entries alike:
+    // task/state/timing/output, never historicalAgent's raw flat fields.
+    expect(batch.details.entries[0]).toMatchObject({
+      runId: first.runId,
+      kind: "agent",
+      live: false,
+      task: { description: "First" },
+      state: { status: "done" },
+      timing: { finishedAt: expect.any(String) },
+      output: { available: true, finalAvailable: true },
+      outputRef: { runId: first.runId, view: "output" },
+      diagnosticsRef: { runId: first.runId, view: "diagnostics" },
+    });
+    expect(batch.details.entries[2]).toMatchObject({ runId: "run_live_third", kind: "agent", live: true });
+    expect(batch.details.nextCursor).toBeUndefined();
+
+    // runId and runIds are mutually exclusive.
+    await expect(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] })).rejects.toThrow(/either runId or runIds/i);
+    // Batch inspect stays summary-only.
+    await expect(execute({ action: "inspect", runIds: [first.runId], view: "output" })).rejects.toThrow(/summary/i);
+    // Ownership is validated for every target before any page returns.
+    await expect(execute({ action: "inspect", runIds: [first.runId, "run_unowned"] })).rejects.toThrow(/unknown|unavailable/i);
+    await expect(execute({ action: "inspect", runIds: [] })).rejects.toThrow(/1-20/);
+    await expect(execute({ action: "inspect", runIds: Array.from({ length: 21 }, (_, index) => `run_${index}`) })).rejects.toThrow(/1-20/);
+
+    finishThird("done");
+  });
+
+  it("paginates a small batch limitBytes one target at a time without dropping any target, bounding the FULL returned text (entries wrapper and nextCursor, not just entry sizes) including under multi-byte UTF-8, and fails actionably rather than overflowing or returning a non-advancing empty page when even one entry cannot fit", async () => {
+    const { execute, runsDirectory } = setup();
+    // Multi-byte descriptions make Buffer.byteLength meaningfully diverge
+    // from string .length, so a byte-based bound that was accidentally
+    // checking character length (or only the entries array, not the full
+    // wrapper+cursor envelope) would be caught here. The identical
+    // description on every record keeps each compact entry's own byte size
+    // equal, so a limitBytes derived from the first entry's boundary also
+    // holds for the second and third pages below.
+    const utf8Description = "Rêviéw 🧭 análysis summáry";
+    const first = await completedRecord(runsDirectory, { description: utf8Description });
+    const second = await completedRecord(runsDirectory, { description: utf8Description });
+    const third = await completedRecord(runsDirectory, { description: utf8Description });
+    const runIds = [first.runId, second.runId, third.runId];
+
+    // Find the exact minimal limitBytes at which the full 3-target request
+    // can serve its first page (one entry plus the {entries, nextCursor}
+    // envelope) rather than throwing — i.e. the real boundary a caller would
+    // hit, derived from the tool's actual behavior rather than a guessed
+    // constant that could drift from the real envelope/cursor overhead.
+    let lo = 4;
+    let hi = 16384;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      try {
+        const probe = await execute({ action: "inspect", runIds, limitBytes: mid });
+        if (probe.details.entries.length >= 1) hi = mid; else lo = mid + 1;
+      } catch {
+        lo = mid + 1;
+      }
+    }
+    const limitBytes = lo;
+
+    // Below the boundary: no entry fits even with the envelope. Must fail
+    // actionably (naming the run and how to proceed) rather than silently
+    // omitting the target or returning a zero-entry, non-advancing page.
+    await expect(execute({ action: "inspect", runIds, limitBytes: limitBytes - 1 }))
+      .rejects.toThrow(new RegExp(`${first.runId}.*limitBytes.*envelope.*increase limitBytes or inspect`, "i"));
+
+    // At and above the boundary: normal one-entry-per-page pagination, and
+    // the ACTUAL serialized response text — not merely the entries array —
+    // never exceeds the caller's own byte budget.
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await execute({ action: "inspect", runIds, limitBytes, cursor });
+      expect(page.details.entries.length).toBe(1);
+      const expectedText = JSON.stringify({ entries: page.details.entries, ...(page.details.nextCursor ? { nextCursor: page.details.nextCursor } : {}) });
+      expect(page.content[0].text).toBe(expectedText);
+      expect(Buffer.byteLength(page.content[0].text)).toBeLessThanOrEqual(limitBytes);
+      seen.push(page.details.entries[0].runId);
+      cursor = page.details.nextCursor;
+      pages++;
+    } while (cursor);
+    expect(seen).toEqual(runIds);
+    expect(pages).toBe(3);
+
+    // A cursor for a different target set is rejected rather than silently reused.
+    const firstPage = await execute({ action: "inspect", runIds, limitBytes });
+    await expect(execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes, cursor: firstPage.details.nextCursor }))
+      .rejects.toThrow(/does not match the requested run ids/i);
   });
 
   it("waits for one/any/all outcomes, returns workflow failure early, and repeats terminal waits immediately", async () => {
@@ -237,5 +347,145 @@ describe("external_runs", () => {
       ],
     });
     await expect(execute({ action: "cancel", runId: incompleteIdentity.runId })).rejects.toThrow(/no longer live/i);
+  });
+
+  it("projects a workflow's verified final result via view: final, including a legitimate JSON null result, without falling into the diagnostics shape", async () => {
+    const { execute, runsDirectory } = setup();
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+
+    const nullResultIdentity = createWorkflowRunIdentity("null result script", null);
+    const nullResultJournal = await createWorkflowJournalWriter({ dir, identity: nullResultIdentity, name: "null-result", source: "inline", project: "/project" });
+    await nullResultJournal.complete(null);
+    const nullFinal = await execute({ action: "inspect", runId: nullResultIdentity.runId, view: "final" });
+    expect(JSON.parse(nullFinal.content[0].text)).toEqual({ runId: nullResultIdentity.runId, result: null, finalAvailable: true });
+
+    const objectResultIdentity = createWorkflowRunIdentity("object result script", null);
+    const objectResultJournal = await createWorkflowJournalWriter({ dir, identity: objectResultIdentity, name: "object-result", source: "inline", project: "/project" });
+    await objectResultJournal.complete({ answer: 42 });
+    const objectFinal = await execute({ action: "inspect", runId: objectResultIdentity.runId, view: "final" });
+    expect(JSON.parse(objectFinal.content[0].text)).toEqual({ runId: objectResultIdentity.runId, result: { answer: 42 }, finalAvailable: true });
+
+    // A failed workflow must not promote its status/error through the final
+    // view (that shape belongs to the diagnostics branch, not final): an
+    // unavailable final answer is a bounded EMPTY page with
+    // finalAvailable:false — the tool's projection stays narration-free
+    // (a human-readable explanation is the UI layer's job, not this tool's,
+    // and is covered separately in test/external-command.test.ts) — never
+    // raw JSON or the diagnostics {status,error} shape a caller could
+    // mistake for a legitimate result.
+    const failedIdentity = createWorkflowRunIdentity("failed final script", null);
+    const failedJournal = await createWorkflowJournalWriter({ dir, identity: failedIdentity, name: "failed-final", source: "inline", project: "/project" });
+    await failedJournal.fail("deadline exceeded", "timed_out");
+    const failedFinal = await execute({ action: "inspect", runId: failedIdentity.runId, view: "final" });
+    expect(failedFinal.content[0].text).toBe("");
+    expect(failedFinal.details).toMatchObject({ runId: failedIdentity.runId, finalAvailable: false, status: "error" });
+  });
+
+  it("returns a consistent nested task/state/timing/output shape for live and durable agent AND workflow batch entries alike, omitting a workflow's unbounded children", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+
+    const doneAgent = await completedRecord(runsDirectory, { description: "Durable agent" });
+    let finishLiveAgent!: (value: string) => void;
+    registry.start({
+      runId: "run_live_batch",
+      kind: "agent",
+      sessionId: "session-a",
+      project: "/project",
+      run: () => new Promise((resolve) => { finishLiveAgent = resolve; }),
+    });
+
+    const historicalIdentity = createWorkflowRunIdentity("historical batch script", null);
+    const historicalJournal = await createWorkflowJournalWriter({ dir, identity: historicalIdentity, name: "historical-batch", source: "inline", project: "/project" });
+    for (let index = 1; index <= 5; index++) {
+      await historicalJournal.appendAgentQueued({ index, label: `child ${index}`, subagentType: "codex-worker", prompt: "private", runRecord: { runId: `run_hidden_${index}` } as any });
+    }
+    await historicalJournal.complete("historical done");
+
+    let finishLiveWorkflow!: (value: unknown) => void;
+    registry.start({
+      runId: "wf_live_batch",
+      kind: "workflow",
+      sessionId: "session-a",
+      project: "/project",
+      run: () => new Promise((resolve) => { finishLiveWorkflow = resolve; }),
+      outcome: (value) => ({ status: "done", outcome: "succeeded", result: value }),
+    });
+    registry.update("wf_live_batch", {
+      name: "live workflow",
+      source: "inline",
+      agentCount: 3,
+      agents: Array.from({ length: 3 }, (_, index) => ({ externalRunId: `run_hidden_live_${index}`, label: `live ${index}`, status: "done" })),
+    });
+
+    const runIds = [doneAgent.runId, "run_live_batch", historicalIdentity.runId, "wf_live_batch"];
+    const batch = await execute({ action: "inspect", runIds });
+    expect(batch.details.entries).toHaveLength(4);
+    // Same top-level key set across live agent, durable agent, live workflow,
+    // and durable workflow entries alike — never historicalAgent's raw flat
+    // RunRecordListItem shape, never a workflow's unbounded children array.
+    const keysets = batch.details.entries.map((entry: any) => Object.keys(entry).sort().join(","));
+    expect(new Set(keysets).size).toBe(1);
+    for (const entry of batch.details.entries) expect(entry).not.toHaveProperty("children");
+    expect(batch.details.entries.find((entry: any) => entry.runId === historicalIdentity.runId)).toMatchObject({
+      kind: "workflow", live: false, state: { status: "done" }, output: { finalAvailable: true },
+    });
+    expect(batch.details.entries.find((entry: any) => entry.runId === "wf_live_batch")).toMatchObject({
+      kind: "workflow", live: true, task: { name: "live workflow", source: "inline" },
+    });
+
+    finishLiveAgent("done");
+    finishLiveWorkflow("done");
+  });
+
+  it("rejects an unresolvable wf_... ID as unknown/unavailable rather than falling through to the agent-only durable reader", async () => {
+    const { execute } = setup();
+    const unknownWorkflowId = "wf_doesnotexist00000000000000000000";
+    await expect(execute({ action: "inspect", runId: unknownWorkflowId, view: "summary" })).rejects.toThrow(/unknown or unavailable/i);
+    await expect(execute({ action: "cancel", runId: unknownWorkflowId })).rejects.toThrow(/unknown or unavailable/i);
+    await expect(execute({ action: "wait", runIds: [unknownWorkflowId] })).rejects.toThrow(/unknown or unavailable/i);
+    await expect(execute({ action: "inspect", runIds: [unknownWorkflowId] })).rejects.toThrow(/unknown or unavailable/i);
+  });
+
+  it("prioritizes the registry's settled outcome status over a stale observation.status", async () => {
+    const { execute, registry } = setup();
+    let resolveRun!: (value: string) => void;
+    const handle = registry.start({
+      runId: "run_stale_obs",
+      kind: "agent",
+      sessionId: "session-a",
+      project: "/project",
+      run: () => new Promise((resolve) => { resolveRun = resolve; }),
+      outcome: () => ({ status: "done", outcome: "succeeded", result: "answer" }),
+    });
+    // Simulate an observation left behind mid-run (e.g. a caller whose final
+    // progress update races behind settle()) that is never refreshed to
+    // "done" before the run settles.
+    registry.update("run_stale_obs", { status: "running", description: "Working" });
+    resolveRun("answer");
+    await handle.result;
+
+    const listed = await execute({ action: "list" });
+    expect(listed.details.runs.find((run: any) => run.runId === "run_stale_obs")).toMatchObject({ status: "done", outcome: "succeeded" });
+    const inspected = await execute({ action: "inspect", runId: "run_stale_obs", view: "summary" });
+    expect(JSON.parse(inspected.content[0].text).state.status).toBe("done");
+  });
+
+  it("rejects a batch cursor replayed under a different session/project scope", async () => {
+    const { execute, runsDirectory } = setup();
+    const first = await completedRecord(runsDirectory, { description: "First" });
+    const second = await completedRecord(runsDirectory, { description: "Second" });
+    const page = await execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes: 900 });
+    expect(page.details.nextCursor).toEqual(expect.any(String));
+
+    const otherTool = createExternalRunsTool({ registry: new RunRegistry(), runsDirectory: () => runsDirectory }) as any;
+    const otherCtx = { cwd: "/project", sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-other" } };
+    await expect(otherTool.execute(
+      "x",
+      { action: "inspect", runIds: [first.runId, second.runId], limitBytes: 900, cursor: page.details.nextCursor },
+      undefined,
+      undefined,
+      otherCtx,
+    )).rejects.toThrow(/unknown or unavailable/i);
   });
 });

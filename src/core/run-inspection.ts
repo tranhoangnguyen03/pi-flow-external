@@ -14,7 +14,7 @@ const MAX_CURSOR_CHARS = 4096;
 const MAX_LIST_SCAN = 200;
 const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{1,128}$/;
 
-export type RunInspectionView = "output" | "diagnostics" | "summary";
+export type RunInspectionView = "output" | "diagnostics" | "summary" | "final";
 export type RunRecordIntegrity = "complete" | "incomplete" | "damaged";
 export type RunOutputStatus = "preliminary" | "final" | "interrupted";
 
@@ -25,9 +25,39 @@ export interface RunInspectionPage {
   view: RunInspectionView;
   items: RunInspectionItem[];
   outputStatus: RunOutputStatus;
+  /** Whether a separate verified final answer (view: "final") is available for this run. */
+  finalAvailable: boolean;
   integrity: RunRecordIntegrity;
   truncatedTail: boolean;
   nextCursor?: string;
+}
+
+/**
+ * Raw timestamp inputs for {@link deriveRunTiming}. Accepts either an ISO
+ * string (durable evidence) or an epoch-ms number (live `SubagentProgressNode`
+ * fields) so both `run-inspection.ts` and `external-runs.ts` can share one
+ * derivation without a normalization step at every call site.
+ */
+export interface RunTimingInputs {
+  queuedAt?: string | number;
+  executionStartedAt?: string | number;
+  processStartedAt?: string | number;
+  firstActivityAt?: string | number;
+  lastActivityAt?: string | number;
+  finishedAt?: string | number;
+}
+
+export interface RunTiming {
+  queuedAt?: string;
+  executionStartedAt?: string;
+  processStartedAt?: string;
+  firstActivityAt?: string;
+  lastActivityAt?: string;
+  finishedAt?: string;
+  queueDelayMs?: number;
+  elapsedMs?: number;
+  activityAgeMs?: number;
+  processDurationMs?: number;
 }
 
 export interface RunRecordListItem {
@@ -43,6 +73,8 @@ export interface RunRecordListItem {
   parentSessionId?: string;
   workflowRunId?: string;
   outputAvailable: boolean;
+  finalAvailable: boolean;
+  timing: RunTiming;
   integrity: RunRecordIntegrity;
 }
 
@@ -61,6 +93,7 @@ interface ScanResult { missing: boolean; stopped: boolean; truncatedTail: boolea
 interface RunObservation {
   metadata?: Record<string, unknown>;
   queuedAt?: string;
+  executionStartedAt?: string;
   processStartedAt?: string;
   firstActivityAt?: string;
   lastActivityAt?: string;
@@ -94,6 +127,7 @@ export async function inspectRun({
   const summary = await readSummary(join(directory, "summary.json"), runId);
   const terminal = asRecord(summary.document?.summary);
   const terminalStatus = asString(terminal?.status);
+  const finalAvailable = isFinalAvailable(terminal);
 
   if (view === "summary") {
     if (decoded?.kind === "inspect" && decoded.source !== "summary") throw new Error("Cursor source does not match summary view");
@@ -109,6 +143,7 @@ export async function inspectRun({
       view,
       items: portion.text ? [{ text: portion.text }] : [],
       outputStatus: outputStatus(terminalStatus),
+      finalAvailable,
       integrity: mergedIntegrity(summary, observation),
       truncatedTail: observation.truncatedTail,
       ...(portion.nextOffset < text.length
@@ -118,6 +153,34 @@ export async function inspectRun({
   }
 
   if (decoded?.kind === "inspect" && decoded.source === "summary") throw new Error("Cursor source does not match inspection view");
+
+  if (view === "final") {
+    // Reuses the same canonical terminal result every other view already reads
+    // (canonicalResult/isFinalAvailable) — no separate backend parser or
+    // narration heuristic. Always a single small terminal-document item, so it
+    // reuses the same "terminal" cursor source as view: "output".
+    const observation = await readObservation(eventsPath, runId);
+    const finalText = finalAvailable ? canonicalResult(terminal) : undefined;
+    const items: RunInspectionItem[] = finalText ? [{ text: finalText }] : [];
+    const revision = contentRevision(finalText ?? "");
+    const finalCursor = decoded?.kind === "inspect"
+      ? decoded
+      : { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
+    if (finalCursor.source !== "terminal") throw new Error("Cursor source does not match final view");
+    if (finalCursor.revision !== revision) throw staleCursorError();
+    return terminalPage(
+      runId,
+      view,
+      items,
+      finalCursor,
+      limit,
+      mergedIntegrity(summary, observation),
+      observation.truncatedTail,
+      terminalStatus,
+      finalAvailable,
+    );
+  }
+
   if (view === "output" && summary.document && (terminalStatus === "done" || assistantItems(terminal).length > 0)) {
     if (decoded?.kind === "inspect" && decoded.source === "events") throw staleCursorError();
     const observation = await readObservation(eventsPath, runId);
@@ -137,6 +200,7 @@ export async function inspectRun({
       mergedIntegrity(summary, observation),
       observation.truncatedTail,
       terminalStatus,
+      finalAvailable,
     );
   }
   if (decoded?.kind === "inspect" && decoded.source === "terminal") throw new Error("Cursor source does not match diagnostics view");
@@ -187,6 +251,7 @@ export async function inspectRun({
     view,
     items,
     outputStatus: outputStatus(terminalStatus),
+    finalAvailable,
     integrity,
     truncatedTail: scan.truncatedTail,
     ...(nextCursor ? { nextCursor: encodeCursor(nextCursor) } : {}),
@@ -258,8 +323,9 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
   const metadata = asRecord(summary.document?.metadata) ?? observation?.metadata;
   if (!metadata && summary.integrity === "damaged") return undefined;
   const terminal = asRecord(summary.document?.summary);
-  const processStarted = Boolean(timeValue(terminal?.processStartedAt) ?? observation?.processStartedAt ?? observation?.outputAvailable);
-  const status = asString(terminal?.status) ?? (processStarted ? "running" : "queued");
+  const executionStartedAt = timeValue(terminal?.executionStartedAt) ?? observation?.executionStartedAt;
+  const processStartedAtValue = timeValue(terminal?.processStartedAt) ?? observation?.processStartedAt;
+  const status = asString(terminal?.status) ?? classifyQueuedOrRunning(executionStartedAt, processStartedAtValue, observation?.outputAvailable);
   const outcome = terminal
     ? status === "done" ? "succeeded" : terminal.timedOut === true ? "timed_out" : status === "aborted" ? "cancelled" : "failed"
     : undefined;
@@ -278,8 +344,34 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
     ...(asString(metadata?.parentSessionId) ? { parentSessionId: asString(metadata?.parentSessionId) } : {}),
     ...(asString(metadata?.workflowRunId) ? { workflowRunId: asString(metadata?.workflowRunId) } : {}),
     outputAvailable: Boolean(canonicalResult(terminal) || assistantItems(terminal).length || observation?.outputAvailable),
+    finalAvailable: isFinalAvailable(terminal),
+    // Never live: a historical list row has no RunRegistry access either, so
+    // this timing is always the durable-evidence-only projection (live=false).
+    timing: deriveRunTiming({
+      queuedAt,
+      executionStartedAt,
+      processStartedAt: processStartedAtValue,
+      firstActivityAt: timeValue(terminal?.firstActivityAt) ?? observation?.firstActivityAt,
+      lastActivityAt: timeValue(terminal?.lastActivityAt) ?? observation?.lastActivityAt,
+      finishedAt: summary.document?.finishedAt,
+    }, false),
     integrity: observation ? observation.integrity : summary.integrity,
   };
+}
+
+/**
+ * Shared queued/running classification for a raw (pre-integrity-override)
+ * status, used by both `readListItem` and `summaryProjection`.
+ * `executionStartedAt` is backend-agnostic (present for pi too, unlike
+ * `processStartedAt`, which only CLI backends with a child OS process ever
+ * emit) and is the earliest reliable "execution actually began" signal, so it
+ * must gate this classification alongside `processStartedAt`/output — or a pi
+ * run that has started but produced no output yet would misreport as still
+ * "queued". Does not affect the separate integrity/interrupted_or_uncertain
+ * distinction, applied independently downstream (e.g. by `historicalAgent`).
+ */
+function classifyQueuedOrRunning(executionStartedAt: unknown, processStartedAt: unknown, outputAvailable: unknown): "queued" | "running" {
+  return Boolean(executionStartedAt) || Boolean(processStartedAt) || Boolean(outputAvailable) ? "running" : "queued";
 }
 
 function documentTime(value: unknown): number | undefined {
@@ -296,6 +388,8 @@ async function readObservation(eventsPath: string, runId: string): Promise<RunOb
     if (event.type === "run_started") {
       observation.metadata = asRecord(event.data);
       observation.queuedAt = asString(observation.metadata?.queuedAt) ?? event.timestamp;
+    } else if (event.type === "execution_started") {
+      observation.executionStartedAt ??= event.timestamp;
     } else if (event.type === "process_started") {
       observation.processStartedAt ??= event.timestamp;
     } else if (event.type === "backend_event") {
@@ -317,10 +411,12 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   const document = summary.document;
   const metadata = asRecord(document?.metadata) ?? observation.metadata;
   const terminal = asRecord(document?.summary);
+  const executionStartedAt = timeValue(terminal?.executionStartedAt) ?? observation.executionStartedAt;
   const processStartedAt = timeValue(terminal?.processStartedAt) ?? observation.processStartedAt;
   const firstActivityAt = timeValue(terminal?.firstActivityAt) ?? observation.firstActivityAt;
   const lastActivityAt = timeValue(terminal?.lastActivityAt) ?? observation.lastActivityAt;
-  const status = asString(terminal?.status) ?? (processStartedAt || observation.outputAvailable ? "running" : "queued");
+  const status = asString(terminal?.status) ?? classifyQueuedOrRunning(executionStartedAt, processStartedAt, observation.outputAvailable);
+  const queuedAt = asString(document?.queuedAt) ?? observation.queuedAt;
   return {
     runId,
     task: compactObject({
@@ -333,7 +429,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
     }),
     state: compactObject({
       status,
-      queuedAt: asString(document?.queuedAt) ?? observation.queuedAt,
+      queuedAt,
       processStartedAt,
       firstActivityAt,
       lastActivityAt,
@@ -341,9 +437,22 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
       error: boundedString(terminal?.error),
       integrity: mergedIntegrity(summary, observation),
     }),
+    // Never live here: this projection is durable-evidence-only (inspectRun has
+    // no RunRegistry access), so now-relative fields (elapsedMs while running,
+    // activityAgeMs) are never computed — only src/external-runs.ts may do that,
+    // and only for a target it resolves through registry.get(runId).
+    timing: deriveRunTiming({
+      queuedAt,
+      executionStartedAt,
+      processStartedAt,
+      firstActivityAt,
+      lastActivityAt,
+      finishedAt: document?.finishedAt,
+    }, false),
     output: {
       available: Boolean(canonicalResult(terminal) || assistantItems(terminal).length || observation.outputAvailable),
       status: outputStatus(asString(terminal?.status)),
+      finalAvailable: isFinalAvailable(terminal),
     },
   };
 }
@@ -457,7 +566,7 @@ async function validateEventCursor(path: string, runId: string, view: RunInspect
   }
 }
 
-function terminalPage(runId: string, view: "output", items: RunInspectionItem[], cursor: Extract<InspectionCursor, { source: "terminal" }>, limit: number, integrity: RunRecordIntegrity, truncatedTail: boolean, terminalStatus: string | undefined): RunInspectionPage {
+function terminalPage(runId: string, view: "output" | "final", items: RunInspectionItem[], cursor: Extract<InspectionCursor, { source: "terminal" }>, limit: number, integrity: RunRecordIntegrity, truncatedTail: boolean, terminalStatus: string | undefined, finalAvailable: boolean): RunInspectionPage {
   if (items.length || cursor.itemIndex !== 0 || cursor.textOffset !== 0) validateItemCursor(items, cursor.itemIndex, cursor.textOffset);
   const served = serveItems(items, cursor.itemIndex, cursor.textOffset, limit);
   return {
@@ -465,6 +574,7 @@ function terminalPage(runId: string, view: "output", items: RunInspectionItem[],
     view,
     items: served.items,
     outputStatus: outputStatus(terminalStatus),
+    finalAvailable,
     integrity,
     truncatedTail,
     ...(served.next ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next, revision: cursor.revision }) } : {}),
@@ -536,6 +646,75 @@ function staleCursorError(): Error {
 
 function canonicalResult(summary: Record<string, unknown> | undefined): string | undefined {
   return summary?.status === "done" ? textValue(summary.structuredOutput ?? summary.result) : undefined;
+}
+
+/**
+ * Whether a separate verified final answer (view: "final") is available.
+ * Deliberately identical to `Boolean(canonicalResult(summary))`: the terminal
+ * `status: "done"` gate lives inside `canonicalResult` itself, so there is
+ * exactly one place that decides "this run has a verified successful
+ * terminal boundary" — no second heuristic, no narration promotion.
+ */
+function isFinalAvailable(summary: Record<string, unknown> | undefined): boolean {
+  return Boolean(canonicalResult(summary));
+}
+
+function msValue(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function nonNegativeDelta(end: number | undefined, start: number | undefined): number | undefined {
+  if (end === undefined || start === undefined) return undefined;
+  const delta = end - start;
+  return delta >= 0 ? delta : undefined;
+}
+
+function isoValue(value: string | number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "string" ? value : timeValue(value);
+}
+
+/**
+ * One shared, pure timing projection used by durable summaries, list entries,
+ * batch inspection, and (via `live: true`) live registry-backed summaries.
+ *
+ * `live` must be true ONLY for a target independently confirmed still running
+ * by `RunRegistry` (i.e. resolved via `registry.get(runId)` in
+ * `src/external-runs.ts`). Durable-evidence-only callers in this module
+ * (`inspectRun`, `listRunRecords`, `getRunRecord`) always pass `false`: a
+ * record with no `finishedAt` and no owning registry entry could be a
+ * genuinely still-running child, or an orphaned/crashed one whose parent
+ * session never got to write `finishedAt` — durable evidence alone cannot
+ * tell the two apart, so a `now`-relative field is never fabricated for it.
+ */
+export function deriveRunTiming(inputs: RunTimingInputs, live: boolean, now: number = Date.now()): RunTiming {
+  const queuedAtMs = msValue(inputs.queuedAt);
+  const executionStartedAtMs = msValue(inputs.executionStartedAt);
+  const processStartedAtMs = msValue(inputs.processStartedAt);
+  const lastActivityAtMs = msValue(inputs.lastActivityAt);
+  const finishedAtMs = msValue(inputs.finishedAt);
+
+  const queueDelayMs = nonNegativeDelta(executionStartedAtMs, queuedAtMs);
+  const elapsedMs = finishedAtMs !== undefined
+    ? nonNegativeDelta(finishedAtMs, executionStartedAtMs)
+    : live ? nonNegativeDelta(now, executionStartedAtMs) : undefined;
+  const activityAgeMs = live && finishedAtMs === undefined ? nonNegativeDelta(now, lastActivityAtMs) : undefined;
+  const processDurationMs = nonNegativeDelta(finishedAtMs, processStartedAtMs);
+
+  return {
+    ...(isoValue(inputs.queuedAt) ? { queuedAt: isoValue(inputs.queuedAt) } : {}),
+    ...(isoValue(inputs.executionStartedAt) ? { executionStartedAt: isoValue(inputs.executionStartedAt) } : {}),
+    ...(isoValue(inputs.processStartedAt) ? { processStartedAt: isoValue(inputs.processStartedAt) } : {}),
+    ...(isoValue(inputs.firstActivityAt) ? { firstActivityAt: isoValue(inputs.firstActivityAt) } : {}),
+    ...(isoValue(inputs.lastActivityAt) ? { lastActivityAt: isoValue(inputs.lastActivityAt) } : {}),
+    ...(isoValue(inputs.finishedAt) ? { finishedAt: isoValue(inputs.finishedAt) } : {}),
+    ...(queueDelayMs !== undefined ? { queueDelayMs } : {}),
+    ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+    ...(activityAgeMs !== undefined ? { activityAgeMs } : {}),
+    ...(processDurationMs !== undefined ? { processDurationMs } : {}),
+  };
 }
 
 function textValue(value: unknown): string | undefined {
@@ -623,7 +802,7 @@ function hasKeys(value: Record<string, unknown>, keys: string[]): boolean {
 }
 
 function isView(value: unknown): value is RunInspectionView {
-  return value === "output" || value === "diagnostics" || value === "summary";
+  return value === "output" || value === "diagnostics" || value === "summary" || value === "final";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

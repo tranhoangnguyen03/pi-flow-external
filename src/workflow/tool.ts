@@ -241,6 +241,7 @@ export function createWorkflowTool(
           defaultPermission,
           maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
           resumeRunId: call.resumeRunId,
+          executionStartedAt: call.executionStartedAt,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
             const agent = snapshot.agents.find((item) => item.index === childIndex);
@@ -358,10 +359,10 @@ export function createWorkflowTool(
           limiter,
           runAgent,
           startAgentRun: (call, run) => {
-            const runId = call.runRecord?.runId;
-            if (!runId) throw new Error("workflow child run evidence was not allocated");
-            return options.registry.start({
-              runId,
+            const runRecord = call.runRecord;
+            if (!runRecord) throw new Error("workflow child run evidence was not allocated");
+            const registered = options.registry.start({
+              runId: runRecord.runId,
               kind: "agent",
               sessionId,
               sessionVersion,
@@ -377,7 +378,25 @@ export function createWorkflowTool(
                   ? childSignal.reason instanceof Error ? childSignal.reason.message : String(childSignal.reason)
                   : error instanceof Error ? error.message : String(error),
               }),
-            }).result;
+            });
+            // Seed an initial queued observation immediately, mirroring the
+            // direct Agent tool's own top-of-executeRun registry.update: a
+            // registered entry otherwise carries no observation at all until
+            // the backend's first progress event fires deep inside
+            // spawnSubagent (after limiter acquisition), so a workflow child
+            // still queued on the shared concurrency limiter would default to
+            // reporting "running" with no queuedAt instead of being visibly
+            // queued. registry.start() runs `run`'s synchronous prefix
+            // in-place before returning (it only yields at its first await,
+            // limiter.acquire()), so this update is guaranteed to land before
+            // any real progress observation from execution.
+            options.registry.update(runRecord.runId, {
+              status: "queued",
+              queuedAt: Date.parse(runRecord.queuedAt),
+              description: call.label,
+              backend: profiles.get(call.subagentType)?.backend,
+            });
+            return registered.result;
           },
           defaultSubagentType: null,
           resolveSubagentType: (selection) => {
@@ -468,6 +487,22 @@ export function createWorkflowTool(
             if (event.cached) {
               agent.endedAt = agent.startedAt;
               snapshot.cachedAgentCount = (snapshot.cachedAgentCount ?? 0) + 1;
+            } else if (event.runId) {
+              // Transition this child's OWN registry entry (not just the
+              // workflow's aggregate snapshot above) from queued to running
+              // immediately after the concurrency limiter granted its slot —
+              // mirroring the direct Agent tool's own top-of-executeRun
+              // registry.update — and BEFORE any backend progress arrives.
+              // Without this, the child's entry only left "queued" once
+              // spawnSubagent's own onProgress first fired deep inside
+              // backend startup, well after the slot was actually granted.
+              options.registry.update(event.runId, {
+                status: "running",
+                queuedAt: agent.queuedAt,
+                executionStartedAt: event.executionStartedAt,
+                description: event.label,
+                backend: profiles.get(event.subagentType)?.backend,
+              });
             }
             emit();
           },

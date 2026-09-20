@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { SessionManager, Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
-import { fauxAssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+import { fauxAssistantMessage, type AssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
@@ -557,7 +557,7 @@ describe("runWorkflow", () => {
         limiter,
         runAgent: async () => "must not start",
         onAgentQueued: (event) => {
-          event.runRecord = { runId: "run_target", finish: async () => undefined } as any;
+          event.runRecord = { runId: "run_target", event: async () => undefined, finish: async () => undefined } as any;
         },
         startAgentRun: (_call, run) => registry.start({
           runId: "run_target",
@@ -603,7 +603,7 @@ describe("runWorkflow", () => {
           });
         },
         onAgentQueued: (event) => {
-          event.runRecord = { runId: `run_${event.label}`, finish: async () => undefined } as any;
+          event.runRecord = { runId: `run_${event.label}`, event: async () => undefined, finish: async () => undefined } as any;
         },
         onAgentResult: (event) => { recorded.push(event); },
       },
@@ -1194,6 +1194,176 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
 
     expect(result.details.status).toBe("completed");
     expect(result.details.result).toEqual({ resp: "CUSTOM_PI_WORKFLOW_OK" });
+  });
+
+  it("keeps a workflow child's queued state and queuedAt visible in the registry before its concurrency slot is granted", async () => {
+    const { session, modelRegistry, registration } = await createSession({
+      piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
+    });
+    registration.setResponses([() => fauxAssistantMessage("done")]);
+
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-custom.md"),
+      "---\ndescription: Custom reviewer.\nbackend: pi\nharness: pi-deepseek\n---\nCustom.\n",
+    );
+
+    const registry = new RunRegistry();
+    // Saturate the only slot externally before the workflow ever queues its
+    // own child, so the child is guaranteed to sit queued (not racing a real
+    // backend response) until this test explicitly releases it.
+    const limiter = new ConcurrencyLimiter(1);
+    const releaseExternalSlot = await limiter.acquire();
+    const tool = createWorkflowTool({
+      registry,
+      getLimiter: () => limiter,
+      getThinkingLevel: () => "high",
+      getSubagentTimeoutMs: () => 60_000,
+      getDefaultPermission: () => "edit",
+      getDefaultHarness: () => "pi-deepseek",
+      getDefaultMaxBudgetUsd: () => undefined,
+      updateStatus: () => {},
+    });
+    const ctx = {
+      cwd,
+      modelRegistry,
+      sessionManager: session.sessionManager,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+
+    const runPromise = tool.execute(
+      "queued-visibility",
+      {
+        script: `
+          export const meta = { apiVersion: 1, name: "queued-visibility", description: "queue visibility" };
+          const value = await agent("only child", { role: "custom", harness: "pi-deepseek", label: "only" });
+          return { value };
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    const sessionId = session.sessionManager.getSessionId();
+    const project = resolve(cwd);
+    let queuedEntry: { observation?: unknown } | undefined;
+    await vi.waitFor(() => {
+      queuedEntry = registry.list(sessionId, project).find((entry) => entry.kind === "agent");
+      expect(queuedEntry).toBeDefined();
+    }, { timeout: 5_000 });
+    // This is the fix under test: without an initial registry.update() seed at
+    // queue time (mirroring the direct Agent tool's own top-of-executeRun
+    // update), a workflow child had no observation at all until its first
+    // real progress event — after limiter acquisition — so a still-queued
+    // child would default to reporting "running" with no queuedAt instead of
+    // visibly queued.
+    expect(queuedEntry?.observation).toMatchObject({ status: "queued", queuedAt: expect.any(Number) });
+
+    releaseExternalSlot();
+    const result = await runPromise;
+    expect(result.details.status).toBe("completed");
+    expect(result.details.result).toEqual({ value: "done" });
+  });
+
+  it("transitions a workflow child's OWN registry entry from queued to running with executionStartedAt immediately after its concurrency slot is granted, strictly before any backend progress arrives", async () => {
+    const { session, modelRegistry, registration } = await createSession({
+      piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
+    });
+    // Hold the backend's only response indefinitely so nothing downstream of
+    // session.prompt() (real backend progress) can possibly have happened yet
+    // while this test inspects the registry.
+    let resolveResponse!: (value: AssistantMessage) => void;
+    const heldResponse = new Promise<AssistantMessage>((resolve) => { resolveResponse = resolve; });
+    registration.setResponses([() => heldResponse]);
+
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(
+      join(subagentsDir, "pi-deepseek-custom.md"),
+      "---\ndescription: Custom reviewer.\nbackend: pi\nharness: pi-deepseek\n---\nCustom.\n",
+    );
+
+    const registry = new RunRegistry();
+    let childRunId: string | undefined;
+    const capturedUpdates: unknown[] = [];
+    const originalUpdate = registry.update.bind(registry);
+    vi.spyOn(registry, "update").mockImplementation((runId: string, observation: unknown) => {
+      if (childRunId !== undefined && runId === childRunId) capturedUpdates.push(observation);
+      return originalUpdate(runId, observation);
+    });
+
+    const limiter = new ConcurrencyLimiter(1);
+    const releaseExternalSlot = await limiter.acquire();
+    const tool = createWorkflowTool({
+      registry,
+      getLimiter: () => limiter,
+      getThinkingLevel: () => "high",
+      getSubagentTimeoutMs: () => 60_000,
+      getDefaultPermission: () => "edit",
+      getDefaultHarness: () => "pi-deepseek",
+      getDefaultMaxBudgetUsd: () => undefined,
+      updateStatus: () => {},
+    });
+    const ctx = {
+      cwd,
+      modelRegistry,
+      sessionManager: session.sessionManager,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+
+    const runPromise = tool.execute(
+      "execution-transition",
+      {
+        script: `
+          export const meta = { apiVersion: 1, name: "execution-transition", description: "transition visibility" };
+          const value = await agent("only child", { role: "custom", harness: "pi-deepseek", label: "only" });
+          return { value };
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    const sessionId = session.sessionManager.getSessionId();
+    const project = resolve(cwd);
+    await vi.waitFor(() => {
+      const entry = registry.list(sessionId, project).find((item) => item.kind === "agent");
+      expect(entry).toBeDefined();
+      childRunId = entry!.runId;
+      expect((entry!.observation as { status?: string } | undefined)?.status).toBe("queued");
+    }, { timeout: 5_000 });
+
+    releaseExternalSlot();
+
+    // The child's own registry entry (not just the workflow's aggregate
+    // snapshot) must leave "queued" for "running" while the backend response
+    // is still held — i.e. strictly before any backend progress could have
+    // arrived.
+    await vi.waitFor(() => {
+      const entry = registry.get(childRunId!);
+      expect((entry?.observation as { status?: string } | undefined)?.status).toBe("running");
+    }, { timeout: 5_000 });
+
+    // The FIRST observation reporting "running" must be the small, explicit
+    // update wired at the onAgentStart boundary ({status, executionStartedAt,
+    // queuedAt, description, backend}) — not a full SubagentProgressNode
+    // (which would carry `activity`/`id` fields) from spawnSubagent's own
+    // onProgress. This is exactly the fix under test: without it, the
+    // child's OWN registry entry only ever left "queued" once real backend
+    // progress arrived deep inside spawnSubagent, well after the limiter had
+    // already granted its slot.
+    const firstRunning = capturedUpdates.find((observation) => (observation as { status?: string }).status === "running");
+    expect(firstRunning).toMatchObject({ status: "running", executionStartedAt: expect.any(Number), queuedAt: expect.any(Number) });
+    expect(firstRunning).not.toHaveProperty("activity");
+    expect(firstRunning).not.toHaveProperty("id");
+
+    resolveResponse(fauxAssistantMessage("done"));
+    const result = await runPromise;
+    expect(result.details.status).toBe("completed");
+    expect(result.details.result).toEqual({ value: "done" });
   });
 
   it("fails only when conflicting profile is specifically selected", async () => {

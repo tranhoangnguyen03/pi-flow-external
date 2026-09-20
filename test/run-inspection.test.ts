@@ -236,6 +236,109 @@ describe("run evidence inspection", () => {
       .rejects.toThrow(/run changed.*restart inspection/i);
   });
 
+  it("derives queue delay, terminal elapsed time, and process duration from the execution_started boundary without inventing live fields", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root, metadata: { queuedAt: "2026-09-20T00:00:00.000Z" } });
+    await record.event("execution_started");
+    await record.event("process_started", { pid: 1 });
+    await record.finish({ status: "done", result: "ok" });
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary" });
+    const projection = JSON.parse(page.items.map((item) => item.text).join(""));
+    expect(projection.timing.executionStartedAt).toEqual(expect.any(String));
+    expect(projection.timing.queueDelayMs).toBeGreaterThanOrEqual(0);
+    expect(projection.timing.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(projection.timing.processDurationMs).toBeGreaterThanOrEqual(0);
+    // A terminal run never presents lastActivityAt as current staleness.
+    expect(projection.timing.activityAgeMs).toBeUndefined();
+  });
+
+  it("never derives a now-relative elapsed time or activity age from durable evidence alone, even when status reads running", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    await record.event("execution_started");
+    await record.event("backend_event", {
+      backend: "codex",
+      event: { type: "item.completed", item: { id: "partial", type: "agent_message", text: "still working" } },
+    });
+    // No record.finish(): this record looks exactly like an orphaned/crashed
+    // run would (no finishedAt, no owning RunRegistry entry). run-inspection.ts
+    // has no registry access, so it must never fabricate now-relative timing
+    // for it; only src/external-runs.ts may do that for a registry-confirmed
+    // live entry.
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary" });
+    const projection = JSON.parse(page.items.map((item) => item.text).join(""));
+    expect(projection.state.status).toBe("running");
+    expect(projection.timing.executionStartedAt).toEqual(expect.any(String));
+    expect(projection.timing.elapsedMs).toBeUndefined();
+    expect(projection.timing.activityAgeMs).toBeUndefined();
+  });
+
+  it("classifies a pi run as running from executionStartedAt alone, before any processStartedAt or output evidence exists", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    // Pi children have no child OS process, so process_started never fires
+    // for them; execution_started (backend-agnostic) must be enough on its
+    // own to classify the run as running rather than still queued.
+    await record.event("execution_started");
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary" });
+    const projection = JSON.parse(page.items.map((item) => item.text).join(""));
+    expect(projection.state.status).toBe("running");
+    expect(projection.timing.executionStartedAt).toEqual(expect.any(String));
+  });
+
+  it("exposes a verified final answer separately from combined output, reusing the same canonical terminal result", async () => {
+    const root = await temporaryRoot();
+    const done = createRunRecord({ directory: root });
+    await done.event("backend_event", {
+      backend: "claude",
+      event: { type: "assistant", message: { id: "m1", content: [{ type: "text", text: "narration, not the answer" }] } },
+    });
+    await done.finish({
+      status: "done",
+      result: "canonical answer",
+      assistantOutput: { status: "final", messages: [{ id: "m1", text: "narration, not the answer" }] },
+    });
+
+    const finalPage = await inspectRun({ runsDirectory: root, runId: done.runId, view: "final", limitBytes: 1_000 });
+    expect(finalPage.finalAvailable).toBe(true);
+    expect(finalPage.items).toEqual([{ text: "canonical answer" }]);
+    expect(finalPage.nextCursor).toBeUndefined();
+
+    const summaryPage = await inspectRun({ runsDirectory: root, runId: done.runId, view: "summary" });
+    expect(JSON.parse(summaryPage.items.map((item) => item.text).join("")).output.finalAvailable).toBe(true);
+
+    const outputPage = await inspectRun({ runsDirectory: root, runId: done.runId, view: "output" });
+    expect(outputPage.finalAvailable).toBe(true);
+    expect(outputPage.items.map((item) => item.text)).toContain("narration, not the answer");
+
+    const failed = createRunRecord({ directory: root });
+    await failed.event("backend_event", {
+      backend: "claude",
+      event: { type: "assistant", message: { id: "m1", content: [{ type: "text", text: "partial progress before failure" }] } },
+    });
+    await failed.finish({ status: "error", error: "boom" });
+    const failedFinal = await inspectRun({ runsDirectory: root, runId: failed.runId, view: "final" });
+    expect(failedFinal.finalAvailable).toBe(false);
+    expect(failedFinal.items).toEqual([]);
+    expect(failedFinal.outputStatus).toBe("interrupted");
+
+    const queued = createRunRecord({ directory: root });
+    const queuedFinal = await inspectRun({ runsDirectory: root, runId: queued.runId, view: "final" });
+    expect(queuedFinal.finalAvailable).toBe(false);
+    expect(queuedFinal.items).toEqual([]);
+  });
+
+  it("lists a pi run as running from executionStartedAt alone, before any processStartedAt or output evidence exists", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root, metadata: { parentSessionId: "session-a", project: "/repo" } });
+    await record.event("execution_started");
+
+    const page = await listRunRecords({ runsDirectory: root, sessionId: "session-a", project: "/repo" });
+    expect(page.items).toEqual([expect.objectContaining({ runId: record.runId, status: "running" })]);
+  });
+
   it("reads legacy records and lists scoped workflow children with stable keyset pagination", async () => {
     const root = await temporaryRoot();
     const scoped = { parentSessionId: "current", project: "/repo", workflowRunId: "wf_current", backend: "codex" };

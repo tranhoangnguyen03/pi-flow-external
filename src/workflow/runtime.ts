@@ -290,9 +290,13 @@ export async function runWorkflow<T = unknown>(
         throw childError;
       }
 
+      const executionStartedAt = Date.now();
+      void runRecord?.event("execution_started");
+      call.executionStartedAt = executionStartedAt;
+
       let result: unknown;
       try {
-        options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt });
+        options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, runId: runRecord?.runId, executionStartedAt });
         throwIfAborted();
         result = await options.runAgent(call, executionSignal);
         throwIfAborted();
