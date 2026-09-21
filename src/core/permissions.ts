@@ -55,7 +55,10 @@ export function resolveEffectivePermissionTier(
   profile: PermissionProfileRef | undefined,
   defaultTier: PermissionTier = "danger",
 ): PermissionTier {
-  const baseTier = requestedTier ?? profile?.permission ?? defaultTier;
+  // Profile permissions are a floor: parent requests can grant more, never less.
+  const floor = profile?.permission ?? defaultTier;
+  const tiers: readonly PermissionTier[] = ["readonly", "edit", "danger"];
+  const baseTier = tiers[Math.max(tiers.indexOf(floor), tiers.indexOf(requestedTier ?? floor))]!;
   if (profile?.backend === "agy") {
     // Get out of the way: agy's only unsandboxed headless mode is
     // --dangerously-skip-permissions, and its default sandbox denies even

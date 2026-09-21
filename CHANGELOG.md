@@ -4,6 +4,11 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.3.1-external.0] - 2026-09-21
+
+### Fixed
+- Resolve permission requests against the profile's minimum authority (`readonly < edit < danger`) across all harnesses. Parent requests can increase permissions but cannot reduce a worker's calibrated permission floor. Agent, workflow, and disclosures share the same resolver; backend-specific floors remain in effect.
+
 ## [2.3.0-external.0] - 2026-09-21
 
 Unifies the run experience across direct `Agent`, `workflow`, and `external_runs` per issue #52: a shared projection, shared rendering, and a corrected model/human contract, rather than isolated renderer patches.

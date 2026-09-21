@@ -84,7 +84,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). Enforcement varies by backend: codex and grok use their --sandbox axis, claude denies shell commands below danger, and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
+        "Optional permission tier request. Effective permissions take the higher of the profile floor and this request (readonly < edit < danger); a request cannot reduce the profile's authority. Omit to use the profile floor (recommended). Enforcement varies by backend: codex and grok use their --sandbox axis, claude denies shell commands below danger, and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
     }),
   ),
   max_budget_usd: Type.Optional(
