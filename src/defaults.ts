@@ -12,12 +12,13 @@ import type { SubagentBackend, SubagentProfile } from "./types.ts";
  * Role bodies themselves live in default-roles.ts, the one canonical source
  * also used to synthesize the same six roles for named Pi harness configs.
  */
-const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok"];
+const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok", "muse"];
 const BACKEND_LABELS: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
   agy: "Antigravity",
   grok: "Grok CLI",
+  muse: "Muse Code",
 };
 
 /**
@@ -26,6 +27,7 @@ const BACKEND_LABELS: Record<string, string> = {
  */
 const SEED_MARKER_V1 = ".pi-flow-defaults-seeded-v1";
 const SEED_MARKER_V2 = ".pi-flow-defaults-seeded-v2";
+const SEED_MARKER_V3 = ".pi-flow-defaults-seeded-v3";
 
 export function defaultProfileNames(): string[] {
   return DEFAULT_BACKENDS.flatMap((backend) => Object.keys(DEFAULT_ROLES).map((role) => `${backend}-${role}`));
@@ -60,15 +62,22 @@ export interface SeedResult {
  */
 export function seedDefaultProfiles(agentDir: string): SeedResult {
   const dir = join(agentDir, "subagents");
-  const markerV2 = join(dir, SEED_MARKER_V2);
-  if (existsSync(markerV2)) return { seeded: false, added: [] };
+  const markerV3 = join(dir, SEED_MARKER_V3);
+  if (existsSync(markerV3)) return { seeded: false, added: [] };
   mkdirSync(dir, { recursive: true });
 
+  // On an upgrade, only the backend(s) newly introduced since the install's
+  // last seeding pass are candidates: an already-seeded backend's files must
+  // never be reconsidered, or a profile the user deliberately deleted would
+  // be silently resurrected the moment the roster grows again.
   const markerV1 = join(dir, SEED_MARKER_V1);
-  const isV1 = existsSync(markerV1);
-  const candidateNames = isV1
-    ? defaultProfileNames().filter((name) => name.startsWith("grok-"))
-    : defaultProfileNames();
+  const markerV2 = join(dir, SEED_MARKER_V2);
+  const newBackends = existsSync(markerV2)
+    ? ["muse"]
+    : existsSync(markerV1)
+      ? ["grok", "muse"]
+      : DEFAULT_BACKENDS;
+  const candidateNames = defaultProfileNames().filter((name) => newBackends.some((backend) => name.startsWith(`${backend}-`)));
 
   const added: string[] = [];
   for (const name of candidateNames) {
@@ -80,7 +89,7 @@ export function seedDefaultProfiles(agentDir: string): SeedResult {
     added.push(name);
   }
   try {
-    writeFileSync(markerV2, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+    writeFileSync(markerV3, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
   }

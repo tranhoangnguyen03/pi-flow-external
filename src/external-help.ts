@@ -23,7 +23,7 @@ const externalHelpParameters = Type.Object({
   }),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, or a registered pi-* harness. Do not use with topic workflow.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. Do not use with topic workflow.",
   })),
 });
 
@@ -47,6 +47,7 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
   claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
   codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
   grok: "grok: readonly uses --sandbox read-only, edit uses --sandbox workspace, and danger uses --sandbox off, always alongside --permission-mode bypassPermissions. Enforced by a kernel sandbox, but network blocking is Linux-only; edit limits writes to the workspace. No execution-lane danger floor, since edit already permits shell.",
+  muse: "muse: readonly uses --disable-approval --disable-write --disable-shell (approval, non-shell writes, and shell execution all disabled), edit uses --disable-approval alone (the sandbox stays enabled by default; writes and shell remain available within it), and danger uses --yolo, which disables approval and the sandbox and additionally trusts this workspace (loads its skills/rules) for this run — a broader grant than an unsandboxed run alone. No execution-lane danger floor, since edit already permits shell within the sandbox. Native provider retries (up to 10 attempts) are disclosed via activity narration, not performed by this extension.",
   pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project extensions, skills, or MCP tools load into the child. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
 };
 

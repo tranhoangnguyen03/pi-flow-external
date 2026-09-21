@@ -4,6 +4,22 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.4.0-external.0] - 2026-09-21
+
+Adds `muse` as a fifth external CLI backend, delegating to Muse Code alongside Claude Code, Codex CLI, Antigravity, and Grok Build CLI. Investigation notes: `docs/plans/muse-backend-prep.md`; ex-ante design issue: none filed — additive backend addition following the same shape as the Grok backend.
+
+### Added
+
+- `muse` backend (`src/core/muse.ts`), verified against Muse Code `1.3.0` running its `meta` provider, installed and authenticated independently of Pi. Runs `exec --json`, parsing schema-versioned MSP JSONL envelopes (`payload_type`/`payload`) — a different event shape from claude/codex/grok's flat events. Root-run ownership is established once from the process's own `runtime.command.accepted`/`session.run.linked` bootstrap pair (`command_id` tied to `run_stream.id`) and checked explicitly on every subsequent envelope: only a `run.terminal.completed`/`run.terminal.failed`/`run.output.delta` whose own `payload.run_stream.id` matches can finalize, fail, or contribute partial output to the result, so a nested or foreign-run envelope with an identical shape can never masquerade as the root's own answer, and `sessionId` is captured once from that bootstrap rather than from every envelope. Structured output uses `--output-schema <FILE>` (a temp file path, unlike Grok's inline `--json-schema`); the terminal event's `text` is already the pre-serialized JSON document. Muse has no native system-prompt flag, so a profile's `systemPrompt` is folded into the prompt file content, the same pattern Antigravity uses.
+- Native approval/sandbox permission tiers: `readonly` (`--disable-approval --disable-write --disable-shell`), `edit` (`--disable-approval` only, sandbox left enabled), and `danger` (`--yolo`, which disables approval and the sandbox and additionally trusts the workspace for this run — a broader grant than an unsandboxed run alone, disclosed in full permission-help text). Approval and sandbox are ON by default, so every tier bypasses approval to avoid hanging headlessly. `edit` already permits shell execution within the sandbox, so Muse execution-lane roles need no `edit`→`danger` floor.
+- `resume` support via Muse's own `exec --session-id <uuid>` flag, verified against the real CLI: two independent `muse exec` processes sharing the same session id shared context, confirmed by the second recalling a fact only told to the first (distinct from the separate, interactive-only `muse resume` command, which is not used here). Muse has never been observed to report token usage or cost on any run, so usage is reported as unknown (`costKnown: false`) rather than a fabricated zero or a locally estimated cost, and — like codex and grok — failed or aborted runs are never automatically retried by this extension; Muse's own `meta` provider integration performs its own internal retries (observed up to 10 attempts with growing backoff on transient errors) entirely inside the `muse` process, surfaced only as activity narration.
+- Default roster migration: a pre-existing installation gains only the six new `muse-*` profiles on its next seed pass (30 default profiles total across five backends), without resurrecting any profile the user previously deleted or customized; a fresh installation seeds all 30 directly.
+- Offline coverage in `test/muse-backend.test.ts` (including authoritative negative tests for a nested run's own terminal.completed/terminal.failed being ignored, and a terminal event whose run_stream never matches the established root failing closed) plus extended permission/defaults/profiles/resume/spawn-observation/run-inspection regression tests; opt-in real-provider coverage via `npm run e2e -- --backend muse` and `--backend muse --workflow`/`--interrupt`.
+
+### Known limitation
+
+- Nested-agent (sub-delegation) detection for Muse always reports false and never grants the one-time nested-timeout extension: every real probe run observed only internal `reminder.agent.*` skill-reminder tasks, never a genuine agent delegation (the CLI reported "Agent delegation: auto unavailable: workspace is untrusted" in every probe), so there is no confirmed real event shape to key off — a speculative `task_kind` match was deliberately rejected as unsafe (it would let ordinary internal task activity spuriously extend the deadline) and removed after review.
+
 ## [2.3.1-external.0] - 2026-09-21
 
 ### Fixed

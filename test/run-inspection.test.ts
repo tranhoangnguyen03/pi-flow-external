@@ -134,6 +134,43 @@ describe("run evidence inspection", () => {
     expect(projection.output).toEqual({ available: true, status: "preliminary", finalAvailable: false });
   });
 
+  it("concatenates muse run.output.delta chunks into one growing item and registers status narration as activity", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+      await record.event("backend_event", {
+        backend: "muse",
+        event: { payload_type: "run.output.delta", payload: { text: "60db8abf-e619-" } },
+      });
+      // A status-only envelope produces no output text, but must still
+      // register as activity via museActivityFromEvent (e.g. surfacing
+      // muse's own native provider-retry narration).
+      vi.setSystemTime(new Date("2024-01-01T00:00:01.000Z"));
+      await record.event("backend_event", {
+        backend: "muse",
+        event: { payload_type: "task.lifecycle.status", payload: { event: { kind: "status", message: "opening meta model stream attempt 1/10" } } },
+      });
+      vi.setSystemTime(new Date("2024-01-01T00:00:02.000Z"));
+      await record.event("backend_event", {
+        backend: "muse",
+        event: { payload_type: "run.output.delta", payload: { text: "42b6-b9f3" } },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output" });
+    expect(page.outputStatus).toBe("preliminary");
+    expect(page.items).toEqual([{ text: "60db8abf-e619-42b6-b9f3" }]);
+
+    const summaryPage = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary" });
+    const projection = JSON.parse(summaryPage.items.map((item) => item.text).join(""));
+    expect(projection.state.firstActivityAt).toBe("2024-01-01T00:00:00.000Z");
+    expect(projection.state.lastActivityAt).toBe("2024-01-01T00:00:02.000Z");
+  });
+
   it("continues a single oversized message with a bound cursor", async () => {
     const root = await temporaryRoot();
     const record = createRunRecord({ directory: root });

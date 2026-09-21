@@ -6,6 +6,7 @@ import { agyActivityFromEvent } from "./agy.ts";
 import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
 import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
+import { museActivityFromEvent } from "./muse.ts";
 import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
@@ -218,7 +219,11 @@ export async function inspectRun({
   const items: RunInspectionItem[] = [];
   let usedBytes = 0;
   let nextCursor: InspectionCursor | undefined;
-  let activeAgyId: string | undefined;
+  // agy and muse stream incremental deltas that must be concatenated onto the
+  // same growing item; every other kind's outputFromEvent already returns one
+  // complete message per event, so each becomes its own item.
+  const STREAMING_DELTA_KINDS = new Set(["agy", "muse"]);
+  let activeStreamingId: string | undefined;
   const scan = await scanCompleteLines(eventsPath, state.position, (line) => {
     const event = parseEvent(line.text, runId);
     if (!event) return "malformed";
@@ -236,9 +241,10 @@ export async function inspectRun({
       return "stop";
     }
     if (chunk.text) {
-      if (view === "output" && projected.kind === "agy" && activeAgyId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
+      const isStreamingDelta = STREAMING_DELTA_KINDS.has(projected.kind);
+      if (view === "output" && isStreamingDelta && activeStreamingId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
       else items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
-      activeAgyId = projected.kind === "agy" ? projected.id : undefined;
+      activeStreamingId = isStreamingDelta ? projected.id : undefined;
       usedBytes += Buffer.byteLength(chunk.text);
     }
     if (chunk.nextOffset < projected.text.length) {
@@ -465,7 +471,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   };
 }
 
-function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok"; id?: string; text: string }) | undefined {
+function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok" | "muse"; id?: string; text: string }) | undefined {
   if (event.type !== "backend_event") return undefined;
   const envelope = asRecord(event.data);
   const backendEvent = asRecord(envelope?.event);
@@ -491,6 +497,14 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const id = asString(update?.step_id);
     return text ? { kind: "agy", ...(id ? { id } : {}), text } : undefined;
   }
+  if (envelope?.backend === "muse" && backendEvent.payload_type === "run.output.delta") {
+    // Deltas carry no id: every chunk within a run belongs to the same
+    // ongoing stream, so activeStreamingId's undefined===undefined match
+    // below concatenates them in order onto one growing item.
+    const payload = asRecord(backendEvent.payload);
+    const text = typeof payload?.text === "string" ? payload.text : undefined;
+    return text ? { kind: "muse", text } : undefined;
+  }
   if (envelope?.backend === "pi" && backendEvent.type === "message_end") {
     const message = asRecord(backendEvent.message);
     if (message?.role === "assistant") {
@@ -510,6 +524,7 @@ function activityFromEvent(event: EvidenceEvent): string | undefined {
   if (envelope?.backend === "codex") return codexActivityFromEvent(backendEvent);
   if (envelope?.backend === "agy") return agyActivityFromEvent(backendEvent);
   if (envelope?.backend === "grok") return grokActivityFromEvent(backendEvent);
+  if (envelope?.backend === "muse") return museActivityFromEvent(backendEvent);
   return undefined;
 }
 

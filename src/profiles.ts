@@ -31,7 +31,7 @@ function parseBackend(value: unknown): SubagentBackend | "invalid" {
     return "pi";
   }
   const backend = optionalString(value);
-  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy" || backend === "grok") {
+  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy" || backend === "grok" || backend === "muse") {
     return backend;
   }
   return "invalid";

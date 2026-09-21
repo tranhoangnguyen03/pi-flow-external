@@ -127,6 +127,25 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
               ? "writes limited to workspace"
               : undefined,
       };
+    case "muse":
+      // --disable-approval/--disable-write/--disable-shell and --yolo are real,
+      // enforced flags (verified against real muse exec runs), not advisory
+      // instructions. danger's --yolo grants a broader trust than an
+      // unsandboxed run alone: it also trusts the workspace for this run
+      // (loads its skills/rules), disclosed in the full permission-help text
+      // rather than this terse caveat (matching permissionLabel's universal
+      // "unsandboxed external CLI" wording for every danger tier).
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat:
+          tier === "readonly"
+            ? "disables approval, non-shell writes, and shell execution"
+            : tier === "edit"
+              ? "sandbox stays enabled; only approval is bypassed"
+              : undefined,
+      };
     case "pi":
       // A curated builtins-only tool surface bounds which tool *names* exist
       // (see spawn.ts's pi branch); it is a real, truthful tool-level
@@ -172,6 +191,15 @@ export function buildPermissionArgs(
       if (tier === "readonly") return ["--sandbox", "read-only", "--permission-mode", "bypassPermissions"];
       if (tier === "edit") return ["--sandbox", "workspace", "--permission-mode", "bypassPermissions"];
       return ["--sandbox", "off", "--permission-mode", "bypassPermissions"];
+    case "muse":
+      // Approval must always be bypassed headlessly, or exec would hang on an
+      // interactive prompt. readonly additionally strips non-shell writes and
+      // shell; edit leaves the (on-by-default) sandbox enabled with only
+      // approval bypassed; danger's --yolo disables approval and the sandbox
+      // and additionally trusts the workspace for this run.
+      if (tier === "readonly") return ["--disable-approval", "--disable-write", "--disable-shell"];
+      if (tier === "edit") return ["--disable-approval"];
+      return ["--yolo"];
     default:
       return [];
   }

@@ -4,6 +4,7 @@ import { claudeActivityFromEvent } from "../src/core/claude.ts";
 import { codexActivityFromEvent } from "../src/core/codex.ts";
 import { getBackendAgentLabel } from "../src/core/display.ts";
 import { grokActivityFromEvent } from "../src/core/grok.ts";
+import { museActivityFromEvent } from "../src/core/muse.ts";
 import { createProgressEmitter } from "../src/core/progress.ts";
 import { hasNestedAgentActivity } from "../src/core/spawn.ts";
 
@@ -53,6 +54,18 @@ describe("external nested-agent observation", () => {
       type: "assistant",
       message: { content: [{ type: "text", text: "no tool use here" }] },
     }, "grok")).toBe(false);
+
+    expect(hasNestedAgentActivity({
+      payload_type: "task.lifecycle.proposed",
+      payload: { event: { kind: "proposed", task_kind: "reminder.agent.skill-reminder" } },
+    }, "muse")).toBe(false);
+    // Never true for muse, even for a task_kind that looks like real
+    // delegation: no confirmed real delegation event has ever been observed,
+    // so speculative task_kind matching must not extend the nested timeout.
+    expect(hasNestedAgentActivity({
+      payload_type: "task.lifecycle.proposed",
+      payload: { event: { kind: "proposed", task_kind: "agent.delegate" } },
+    }, "muse")).toBe(false);
   });
 
   it("tracks child freshness without treating init or heartbeat as activity", async () => {
@@ -60,6 +73,7 @@ describe("external nested-agent observation", () => {
     expect(codexActivityFromEvent({ type: "thread.started" })).toBeUndefined();
     expect(agyActivityFromEvent({ event: "init" })).toBeUndefined();
     expect(grokActivityFromEvent({ type: "system", subtype: "init", session_id: "grok-sess" })).toBeUndefined();
+    expect(museActivityFromEvent({ payload_type: "run.model.configured", payload: { provider_id: "meta" } })).toBeUndefined();
 
     vi.useFakeTimers();
     try {
@@ -83,8 +97,9 @@ describe("external nested-agent observation", () => {
     }
   });
 
-  it("labels grok distinctly from the other external CLIs", () => {
+  it("labels grok and muse distinctly from the other external CLIs", () => {
     expect(getBackendAgentLabel("grok")).toBe("Grok CLI");
+    expect(getBackendAgentLabel("muse")).toBe("Muse Code");
     expect(getBackendAgentLabel("claude")).toBe("Claude Code");
     expect(getBackendAgentLabel("codex")).toBe("Codex CLI");
     expect(getBackendAgentLabel("agy")).toBe("Antigravity");

@@ -2,7 +2,7 @@ import type { ParentContextReceipt } from "./core/parent-context.ts";
 import type { ChildRunOutcome, WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
-export const EXTERNAL_HARNESSES = ["agy", "claude", "codex", "grok"] as const;
+export const EXTERNAL_HARNESSES = ["agy", "claude", "codex", "grok", "muse"] as const;
 export type ExternalHarness = (typeof EXTERNAL_HARNESSES)[number];
 export type SubagentBackend = "pi" | ExternalHarness;
 export type ThinkingLevel = string;
@@ -20,7 +20,7 @@ export interface SubagentProfile {
   description: string;
   backend: SubagentBackend;
   /**
-   * Which configuration to use. For claude/codex/agy/grok this always equals
+   * Which configuration to use. For claude/codex/agy/grok/muse this always equals
    * `backend`. For a pi-backed profile, `backend` is always the literal "pi"
    * while `harness` names the specific registered `pi-*` configuration
    * (see src/harnesses.ts) that pins its model and thinking level.

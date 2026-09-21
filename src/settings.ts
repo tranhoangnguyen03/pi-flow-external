@@ -58,7 +58,7 @@ function isExternalHarness(value: unknown): value is ExternalHarness {
 }
 
 /**
- * Shape-only validation for a `defaultHarness` selector: one of the four
+ * Shape-only validation for a `defaultHarness` selector: one of the five
  * external CLI harnesses, or a `pi-*` name matching the named-Pi-harness
  * registry's key pattern. This is pure and synchronous, matching
  * parseSettings's existing contract; whether a named `pi-*` harness is

@@ -3,7 +3,7 @@ import { EXTERNAL_HARNESSES, type SubagentProfile } from "./types.ts";
 import { externalProfileRole, externalRoleAvailability } from "./profiles.ts";
 
 export const AGENT_PROMPT_SNIPPET =
-  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, or registered Pi harness role.";
+  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role.";
 
 export const WORKFLOW_PROMPT_SNIPPET =
   "Run requested multi-agent orchestration with external roles; use external_help for syntax and saved workflows.";
