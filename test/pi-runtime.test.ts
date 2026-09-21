@@ -426,7 +426,7 @@ describe("pi runtime curated tool tiers", () => {
       // execution-role name convention and would trigger the edit->danger
       // floor (resolveEffectivePermissionTier), which is tested separately in
       // permissions.test.ts and would defeat this suite's tool-tier checks.
-      profile: { name: "pi-test-reviewer", description: "x", backend: "pi", harness: "pi-test", ...profileOverrides },
+      profile: { name: "pi-test-reviewer", description: "x", backend: "pi", harness: "pi-test", permission: "readonly", ...profileOverrides },
     }));
     return { result, childContext, session };
   }

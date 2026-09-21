@@ -4,6 +4,11 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.3.1-external.0] - 2026-09-21
+
+### Fixed
+- Resolve permission requests against the profile's minimum authority (`readonly < edit < danger`) across all harnesses. Parent requests can increase permissions but cannot reduce a worker's calibrated permission floor. Agent, workflow, and disclosures share the same resolver; backend-specific floors remain in effect.
+
 ## [2.3.0-external.0] - 2026-09-21
 
 Adds `grok` as a fourth external CLI backend, delegating to the official Grok Build CLI alongside Claude Code, Codex CLI, and Antigravity. Investigation notes: `docs/plans/grok-backend-prep.md`; implementation plan: `docs/plans/2026-05-21-grok-cli-implementation.md`; ex-ante design issue: [#51](https://github.com/tranhoangnguyen03/pi-flow-external/issues/51).
