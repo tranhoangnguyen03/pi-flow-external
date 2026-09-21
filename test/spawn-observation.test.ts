@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { agyActivityFromEvent } from "../src/core/agy.ts";
 import { claudeActivityFromEvent } from "../src/core/claude.ts";
 import { codexActivityFromEvent } from "../src/core/codex.ts";
+import { getBackendAgentLabel } from "../src/core/display.ts";
+import { grokActivityFromEvent } from "../src/core/grok.ts";
 import { createProgressEmitter } from "../src/core/progress.ts";
 import { hasNestedAgentActivity } from "../src/core/spawn.ts";
 
@@ -30,6 +32,11 @@ describe("external nested-agent observation", () => {
         subagent_info: { subagents: [{ type_name: "research" }] },
       },
     }, "agy")).toBe(true);
+
+    expect(hasNestedAgentActivity({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "spawn_subagent" }] },
+    }, "grok")).toBe(true);
   });
 
   it("ignores generic values and terminal structured output", () => {
@@ -42,12 +49,17 @@ describe("external nested-agent observation", () => {
       event: "result",
       result: { status: "SUCCESS", structured_output: { type: "agent" } },
     }, "agy")).toBe(false);
+    expect(hasNestedAgentActivity({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "no tool use here" }] },
+    }, "grok")).toBe(false);
   });
 
   it("tracks child freshness without treating init or heartbeat as activity", async () => {
     expect(claudeActivityFromEvent({ type: "system", subtype: "init" })).toBeUndefined();
     expect(codexActivityFromEvent({ type: "thread.started" })).toBeUndefined();
     expect(agyActivityFromEvent({ event: "init" })).toBeUndefined();
+    expect(grokActivityFromEvent({ type: "system", subtype: "init", session_id: "grok-sess" })).toBeUndefined();
 
     vi.useFakeTimers();
     try {
@@ -69,5 +81,12 @@ describe("external nested-agent observation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("labels grok distinctly from the other external CLIs", () => {
+    expect(getBackendAgentLabel("grok")).toBe("Grok CLI");
+    expect(getBackendAgentLabel("claude")).toBe("Claude Code");
+    expect(getBackendAgentLabel("codex")).toBe("Codex CLI");
+    expect(getBackendAgentLabel("agy")).toBe("Antigravity");
   });
 });

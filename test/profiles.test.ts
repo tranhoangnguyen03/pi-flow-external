@@ -253,6 +253,30 @@ Arbitrary Claude model prompt.`);
       systemPrompt: "Arbitrary Claude model prompt.",
     });
   });
+
+  it("loads grok-backed custom profiles with bare model names", () => {
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(join(subagentsDir, "grok-reviewer.md"), `---
+description: Reviews through Grok CLI.
+backend: grok
+model: grok-4.6
+thinking: high
+---
+
+Grok reviewer prompt.`);
+
+    const profiles = getSubagentProfiles(agentDir);
+
+    expect(profiles.get("grok-reviewer")).toMatchObject({
+      name: "grok-reviewer",
+      description: "Reviews through Grok CLI.",
+      backend: "grok",
+      model: "grok-4.6",
+      thinking: "high",
+      systemPrompt: "Grok reviewer prompt.",
+    });
+  });
 });
 
 describe("role-first profile resolution", () => {

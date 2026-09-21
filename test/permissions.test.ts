@@ -48,6 +48,12 @@ describe("permission tier argv mapping", () => {
     expect(buildPermissionArgs("danger", "agy")).toEqual(["--dangerously-skip-permissions"]);
   });
 
+  it("maps every tier onto native grok sandbox flags plus the bypass permission mode", () => {
+    expect(buildPermissionArgs("readonly", "grok")).toEqual(["--sandbox", "read-only", "--permission-mode", "bypassPermissions"]);
+    expect(buildPermissionArgs("edit", "grok")).toEqual(["--sandbox", "workspace", "--permission-mode", "bypassPermissions"]);
+    expect(buildPermissionArgs("danger", "grok")).toEqual(["--sandbox", "off", "--permission-mode", "bypassPermissions"]);
+  });
+
   it("threads tiers and budget through buildClaudeArgs", () => {
     const base = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, permission: "edit" });
     expect(base).toContain("--permission-mode");
@@ -215,6 +221,22 @@ describe("tier enforcement resolution", () => {
     expect(permissionLabel(resolvePermission("readonly", "claude"))).toContain("readonly");
   });
 
+  it("resolves grok as enforced at every tier with an accurate sandbox caveat", () => {
+    const readonly = resolvePermission("readonly", "grok");
+    expect(readonly.enforced).toBe(true);
+    expect(readonly.caveat).toContain("kernel sandbox");
+    expect(readonly.caveat).toContain("Linux-only");
+
+    const edit = resolvePermission("edit", "grok");
+    expect(edit.enforced).toBe(true);
+    expect(edit.caveat).toContain("workspace");
+
+    const danger = resolvePermission("danger", "grok");
+    expect(danger.enforced).toBe(true);
+    expect(danger.caveat).toBeUndefined();
+    expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
+  });
+
   it("drops non-finite budgets instead of emitting them as CLI flags", () => {
     const args = buildClaudeArgs({
       profile: profile("claude"),
@@ -290,6 +312,18 @@ describe("effective permission tier resolution", () => {
       permission: "readonly",
     };
     expect(resolveEffectivePermissionTier("edit", claudeExplorer)).toBe("edit");
+  });
+
+  it("never elevates grok execution profiles at edit tier — its workspace sandbox already permits shell", () => {
+    const grokImplementer: SubagentProfile = {
+      name: "grok-implementer",
+      description: "implement",
+      backend: "grok",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", grokImplementer)).toBe("edit");
+    expect(resolveEffectivePermissionTier("readonly", grokImplementer)).toBe("readonly");
+    expect(resolveEffectivePermissionTier("danger", grokImplementer)).toBe("danger");
   });
 
   it("elevates pi execution profiles to danger floor when edit tier is requested", () => {

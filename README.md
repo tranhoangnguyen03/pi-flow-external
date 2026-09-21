@@ -5,6 +5,7 @@ External agent delegation for [pi](https://github.com/earendil-works/pi) through
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) profiles with `backend: claude`
 - [Codex CLI](https://github.com/openai/codex) profiles with `backend: codex`
 - Antigravity profiles with `backend: agy`
+- [Grok Build CLI](https://github.com/xai-org/grok-build) profiles with `backend: grok`
 - Named Pi harness configurations (`pi-<label>`) — in-process, per-model configs you register yourself, not a spawned CLI
 
 The ordinary driver has four tools (`workflow` can be disabled):
@@ -14,7 +15,7 @@ The ordinary driver has four tools (`workflow` can be disabled):
 - `external_help` returns role details, permission behavior, or workflow guidance on demand.
 - `external_runs` lists, inspects, waits for, and cancels session-owned runs.
 
-`Agent` and `workflow` accept external roles with an optional harness override — one of the three CLIs, or a registered named Pi harness. Use pi's native subagent system for Pi-backed agents. The `pi_flow_profile_create` and `pi_flow_harness_create` finalizers are active only during `/external profile create`.
+`Agent` and `workflow` accept external roles with an optional harness override — one of the four CLIs, or a registered named Pi harness. Use pi's native subagent system for Pi-backed agents. The `pi_flow_profile_create` and `pi_flow_harness_create` finalizers are active only during `/external profile create`.
 
 ## Install
 
@@ -48,18 +49,20 @@ Install and authenticate each external CLI you intend to use:
 claude --version
 codex --version
 agy --version
+grok --version
 ```
 
-Pi's coordinator model and the external CLIs authenticate independently. A working Claude, Codex, or Antigravity login does not authenticate the root Pi model.
+Pi's coordinator model and the external CLIs authenticate independently. A working Claude, Codex, Antigravity, or Grok login does not authenticate the root Pi model. The Grok Build CLI installs and authenticates entirely separately from Pi: install with `curl -fsSL https://x.ai/cli/install.sh | bash`, then authenticate with `grok login` or an `XAI_API_KEY` environment variable. This integration is verified against Grok Build CLI `1.0.40`.
 
 External agents use the effective permission tier and each harness's native mechanism:
 
 - Claude: `--permission-mode plan`, `--permission-mode acceptEdits`, or `--dangerously-skip-permissions`
 - Codex: `--sandbox read-only`, `workspace-write`, or `danger-full-access`
 - Antigravity: always `--dangerously-skip-permissions`
+- Grok: `--sandbox read-only`, `workspace`, or `off`, always alongside `--permission-mode bypassPermissions` — bypass only skips the interactive approval prompt; the kernel sandbox remains the enforced boundary. `readonly`'s network-blocking guarantee is Linux-only (a no-op on macOS), and sandbox startup can fail closed on some macOS hosts (for example when `/var/run/docker.sock` resolves to a symlink) rather than silently running unsandboxed.
 - Named Pi harnesses: a curated `tools:` allow-list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`
 
-Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
+Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Grok needs no such floor: its `edit` tier (`--sandbox workspace`) already permits shell execution, sandboxed to writes within the workspace. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
 The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger and all Agy runs, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and shows `external host access` while workflow work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
 
@@ -113,7 +116,7 @@ Profiles live in:
 ~/.pi/agent/subagents/<name>.md
 ```
 
-Names may contain lowercase letters, numbers, and hyphens. A profile must declare `backend: claude`, `backend: codex`, `backend: agy`, or (alongside `harness: <a registered pi-* name>`) `backend: pi`, and its name should start with the matching harness name.
+Names may contain lowercase letters, numbers, and hyphens. A profile must declare `backend: claude`, `backend: codex`, `backend: agy`, `backend: grok`, or (alongside `harness: <a registered pi-* name>`) `backend: pi`, and its name should start with the matching harness name.
 
 Example Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
 
@@ -140,11 +143,16 @@ backend: agy
 model: gemini-3.7-flash-high
 ```
 
+```yaml
+backend: grok
+model: grok-4.6
+```
+
 Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is only available to this extension when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below); a bare `backend: pi` profile, or no backend at all, belongs to Pi's native subagent system and is never modified by this extension.
 
 ### Default profiles
 
-On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend (18 files). The compact agent catalog advertises each role once rather than presenting 18 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster can be added with `/external profile create`.
+On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend across four backends (24 files). The compact agent catalog advertises each role once rather than presenting 24 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster can be added with `/external profile create`. An installation seeded before Grok support existed gains only the six new `grok-*` profiles the next time it seeds, without resurrecting any claude/codex/agy profile you previously deleted or customized.
 
 Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
 
@@ -176,7 +184,7 @@ Agent({
 });
 ```
 
-A custom (non-canonical) role still needs its own profile file per harness, the same as for the three CLI backends: `~/.pi/agent/subagents/pi-deepseek-security-reviewer.md` with `backend: pi` and `harness: pi-deepseek`. That file's body/permission/tools may be customized; its `model`/`thinking` are not — they always come from the harness's registered config, and a file that tries to override them to a different value is rejected rather than silently honored.
+A custom (non-canonical) role still needs its own profile file per harness, the same as for the four CLI backends: `~/.pi/agent/subagents/pi-deepseek-security-reviewer.md` with `backend: pi` and `harness: pi-deepseek`. That file's body/permission/tools may be customized; its `model`/`thinking` are not — they always come from the harness's registered config, and a file that tries to override them to a different value is rejected rather than silently honored.
 
 **v1 scope, by design:** a pi child's entire tool surface is the SDK's own builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit` tiers) — no project/user extensions, skills, prompt templates, or themes load into it. This bounds which tool *names* exist; it does not make `bash` at `danger` tier any less exposed than on an external CLI. Retry is disabled per pi child (in-memory, never touching your real Pi settings) so a transient provider error fails immediately rather than silently retrying. Pi children cannot resume a prior conversation and have no enforced budget cap. Expanding this capability set (trusted extensions/MCP/skills, a shared custom-role format, resumable sessions, real budget controls) is tracked in [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
 
@@ -352,8 +360,8 @@ Every child selects from one parent snapshot and effective settings frozen at wo
 Every `Agent` call and workflow `agent()` child also accepts these optional run parameters (`context` is covered under agent usage above):
 
 - `permission`: `readonly` | `edit` | `danger` (default `danger`). Tiers map onto native harness mechanisms — Claude permission modes and Codex's single-axis `--sandbox`. Antigravity (`agy`) is different: its headless sandbox denies even read-only tools like `read_url_content`, and its only unsandboxed mode is `--dangerously-skip-permissions`, so **every agy run is unsandboxed** and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Getting out of the model's way is deliberate; every agy run discloses as `unsandboxed external CLI` rather than claiming a read-only boundary it cannot keep. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
-- `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag; codex and agy do not report cost, so the cap is recorded and marked `budget unenforceable` instead of pretended.
-- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you. `resume` cannot be combined with `context` sharing — continue an existing child, or start a new one with a snapshot.
+- `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag. Codex estimates cost from a price map and agy does not report cost at all; Grok reports its own native cost (`total_cost_usd`) but exposes no enforcement flag. For codex, agy, and grok alike, the cap is recorded and marked `budget unenforceable` instead of pretended.
+- `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`, Grok `--resume`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you. `resume` cannot be combined with `context` sharing — continue an existing child, or start a new one with a snapshot.
 
 Resolution order for tiers and budgets: call > profile frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
 
@@ -453,21 +461,29 @@ Run the deterministic offline checks:
 npm run check
 ```
 
-Real-provider checks consume tokens. Point the runner at the authenticated Pi agent directory:
+Real-provider checks consume tokens, but the default lane never prompts a root LLM to choose the tool call: it builds an in-process Pi SDK session with a faux, never-streamed root model and calls the `Agent`/`workflow`/`external_runs` tool executors directly, so only the selected external backend's own child (a real spawned CLI process, or, for `--backend pi`, a real in-process nested Pi child) is real:
 
 ```bash
-export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 npm run e2e -- --backend claude
 npm run e2e -- --backend codex
 npm run e2e -- --backend agy
+npm run e2e -- --backend grok
 npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
 npm run e2e -- --backend agy --workflow
+npm run e2e -- --backend grok --workflow
 npm run e2e -- --backend pi --harness pi-deepseek
 npm run e2e -- --backend pi --harness pi-deepseek --workflow
 ```
 
-The `pi` backend requires a harness you have already registered yourself in your real `harnesses.json` with real credentials configured; the script never registers or pays for one on your behalf.
+The `pi` backend requires a harness you have already registered yourself in your real `harnesses.json` with real credentials configured; the script never registers, writes to, or pays for one on your behalf. `--interrupt` cancels a backgrounded `Agent` through `external_runs` instead of `--workflow`'s two-child check.
+
+A separate, explicit `--routing-smoke` lane spawns a real `pi` CLI process with a real root model and asks it, in plain language, to pick the right tool — useful only when role discovery, tool descriptions, or coordinator guidance changes, and never the default:
+
+```bash
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+npm run e2e -- --routing-smoke --backend codex
+```
 
 See [`docs/field-testing.md`](docs/field-testing.md) for provider checks and [`docs/releasing.md`](docs/releasing.md) for the release process.
 

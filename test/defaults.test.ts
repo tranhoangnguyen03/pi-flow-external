@@ -26,10 +26,10 @@ describe("default profile seeding", () => {
 
     expect(first.seeded).toBe(true);
     expect([...first.added].sort()).toEqual(defaultProfileNames().sort());
-    expect(defaultProfileNames()).toHaveLength(18);
+    expect(defaultProfileNames()).toHaveLength(24);
 
     const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
-    expect(profiles.size).toBe(18);
+    expect(profiles.size).toBe(24);
     for (const name of defaultProfileNames()) {
       const profile = profiles.get(name);
       expect(profile, name).toBeDefined();
@@ -41,6 +41,10 @@ describe("default profile seeding", () => {
     expect(profiles.get("claude-explorer")?.permission).toBe("readonly");
     expect(profiles.get("claude-qa")?.permission).toBe("danger");
     expect(profiles.get("agy-worker")?.description).toContain("Antigravity");
+    expect(profiles.get("grok-explorer")?.permission).toBe("readonly");
+    expect(profiles.get("grok-qa")?.permission).toBe("danger");
+    expect(profiles.get("grok-worker")?.description).toContain("Grok CLI");
+    expect(existsSync(join(agentDir, "subagents", ".pi-flow-defaults-seeded-v2"))).toBe(true);
 
     const second = seedDefaultProfiles(agentDir);
     expect(second).toEqual({ seeded: false, added: [] });
@@ -62,6 +66,49 @@ describe("default profile seeding", () => {
     const second = seedDefaultProfiles(agentDir);
     expect(second.seeded).toBe(false);
     expect(existsSync(join(dir, "codex-worker.md"))).toBe(false);
+  });
+
+  it("migrates v1 marker to v2 by adding missing grok profiles without resurrecting deleted profiles", () => {
+    const agentDir = tempAgentDir();
+    const dir = join(agentDir, "subagents");
+    mkdirSync(dir, { recursive: true });
+
+    // Simulate an existing v1 installation where the user deleted claude-worker and codex-qa,
+    // and already created a custom grok-explorer profile.
+    writeFileSync(join(dir, ".pi-flow-defaults-seeded-v1"), "", "utf8");
+    writeFileSync(join(dir, "claude-explorer.md"), "---\ndescription: Claude explorer.\nbackend: claude\n---\nExplore.\n", "utf8");
+    const customGrokExplorer = "---\ndescription: Custom Grok explorer.\nbackend: grok\n---\nCustom grok explore.\n";
+    writeFileSync(join(dir, "grok-explorer.md"), customGrokExplorer, "utf8");
+
+    const migration = seedDefaultProfiles(agentDir);
+    expect(migration.seeded).toBe(true);
+
+    // Only missing grok-* profiles are added
+    const expectedAddedGrok = [
+      "grok-planner",
+      "grok-implementer",
+      "grok-reviewer",
+      "grok-qa",
+      "grok-worker",
+    ];
+    expect([...migration.added].sort()).toEqual(expectedAddedGrok.sort());
+
+    // Never overwrite existing custom grok profile
+    expect(migration.added).not.toContain("grok-explorer");
+    expect(readFileSync(join(dir, "grok-explorer.md"), "utf8")).toBe(customGrokExplorer);
+
+    // Deleted claude/codex/agy profiles are NOT resurrected
+    expect(existsSync(join(dir, "claude-worker.md"))).toBe(false);
+    expect(existsSync(join(dir, "codex-qa.md"))).toBe(false);
+    expect(migration.added).not.toContain("claude-worker");
+    expect(migration.added).not.toContain("codex-qa");
+
+    // v2 marker is written
+    expect(existsSync(join(dir, ".pi-flow-defaults-seeded-v2"))).toBe(true);
+
+    // Subsequent calls are idempotent
+    const rerun = seedDefaultProfiles(agentDir);
+    expect(rerun).toEqual({ seeded: false, added: [] });
   });
 });
 

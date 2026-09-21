@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { agyActivityFromEvent } from "./agy.ts";
 import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
+import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
 import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
@@ -464,7 +465,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   };
 }
 
-function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi"; id?: string; text: string }) | undefined {
+function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok"; id?: string; text: string }) | undefined {
   if (event.type !== "backend_event") return undefined;
   const envelope = asRecord(event.data);
   const backendEvent = asRecord(envelope?.event);
@@ -473,6 +474,11 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const text = extractClaudeFinalText(backendEvent);
     const id = asString(asRecord(backendEvent.message)?.id);
     return text ? { kind: "claude", ...(id ? { id } : {}), text } : undefined;
+  }
+  if (envelope?.backend === "grok" && backendEvent.type === "assistant") {
+    const text = extractGrokFinalText(backendEvent);
+    const id = asString(asRecord(backendEvent.message)?.id);
+    return text ? { kind: "grok", ...(id ? { id } : {}), text } : undefined;
   }
   if (envelope?.backend === "codex") {
     const text = extractCodexFinalText(backendEvent);
@@ -503,6 +509,7 @@ function activityFromEvent(event: EvidenceEvent): string | undefined {
   if (envelope?.backend === "claude") return claudeActivityFromEvent(backendEvent);
   if (envelope?.backend === "codex") return codexActivityFromEvent(backendEvent);
   if (envelope?.backend === "agy") return agyActivityFromEvent(backendEvent);
+  if (envelope?.backend === "grok") return grokActivityFromEvent(backendEvent);
   return undefined;
 }
 

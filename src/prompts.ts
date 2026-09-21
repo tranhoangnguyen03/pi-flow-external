@@ -3,7 +3,7 @@ import { EXTERNAL_HARNESSES, type SubagentProfile } from "./types.ts";
 import { externalProfileRole, externalRoleAvailability } from "./profiles.ts";
 
 export const AGENT_PROMPT_SNIPPET =
-  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, or registered Pi harness role.";
+  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, or registered Pi harness role.";
 
 export const WORKFLOW_PROMPT_SNIPPET =
   "Run requested multi-agent orchestration with external roles; use external_help for syntax and saved workflows.";
@@ -15,7 +15,7 @@ export const EXTERNAL_RUNS_PROMPT_SNIPPET =
   "List, inspect (single or batch summary via runIds, up to 20), wait for, or cancel session-owned external runs; follow cursors for complete output. view: final returns only a verified terminal answer, empty until one exists.";
 
 // Only elide the "(harness only)" suffix when every configured harness
-// carries the role; a role available on all three CLIs but no pi harness
+// carries the role; a role available on all configured CLIs but no pi harness
 // still gets the suffix, so callers see the true availability rather than
 // a stale "no suffix means universal" assumption.
 function roleLabel(role: string, harnesses: string[], configuredHarnesses: readonly string[]): string {
