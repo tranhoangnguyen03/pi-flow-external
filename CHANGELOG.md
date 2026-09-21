@@ -4,6 +4,29 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.3.0-external.0] - 2026-09-21
+
+Unifies the run experience across direct `Agent`, `workflow`, and `external_runs` per issue #52: a shared projection, shared rendering, and a corrected model/human contract, rather than isolated renderer patches.
+
+### Added
+
+- `Agent`, `workflow`, and `external_runs` now share one normalized durable-agent projection (`src/core/run-projection.ts`) for identity/state/timing/output — a durable `list`/`inspect` row now carries the same nested `task`/`state`/`output` shape a live one already had, alongside its existing flat fields for compatibility.
+- `external_runs` registers its own `renderCall`/`renderResult` for the first time, covering `list`, single/batch `inspect`, `wait`, and `cancel` with the same reusable header/row presentation `Agent`/`workflow` already use (`src/core/run-render.ts`, shared with `/external runs`' own text formatting).
+- `external_runs wait` reports bounded live progress through its update channel while waiting — watched targets, completed/pending counts, and recent activity — on a fixed heartbeat independent of any single target settling; it stops on settlement, error, or interruption without ever cancelling watched work.
+- Workflow `agent()` accepts `description` as a compatible alias for `label`, matching direct `Agent`'s common task-name option; setting both to different values is rejected.
+- `WorkflowToolDetails` gained an additive `lifecycleStatus` field normalizing the legacy internal `"completed"` state word to the same vocabulary `Agent`'s `details.status` already uses (`"done"`), for a coordinating model reading either tool's details. The internal `status` field and its literal `"completed"` value are unchanged for existing readers (journal replay, rendering internals).
+- Documented ccstyle (`pi-cc-extensions`) host-renderer integration: the `excludeRenderers` setting is the supported way to preserve `Agent`/`workflow`/`external_runs`'s own rendering under that host (README "Host renderer integration").
+
+### Changed
+
+- `external_runs wait` no longer clips every settled outcome to a fixed 512-character `preview`. Each response now spends one shared byte budget (`limitBytes`, default 32768) across all settled outcomes in call order: a result that fits is returned complete under the new `result` field; one that does not is truncated to what remains with `resultTruncated: true`, alongside the existing `outputRef`/`diagnosticsRef` to read the rest. The old `preview` field is removed.
+- `WorkflowAgentSnapshot` field copying (`workflow/tool.ts`) now goes through shared helpers (`src/core/agent-snapshot.ts`) instead of an inline per-field copy. Fixes a real disclosure/evidence gap: a workflow child's `retries`, `retryOf`, and `permissionRequested` were never copied onto its snapshot at all (silently dropped the moment a retried/elevated child ran inside a workflow instead of as a direct `Agent` call), and `thinkingClamped` was dropped on the running-progress copy.
+- Corrected the workflow help's background example: `background` is a `workflow` tool call parameter, never a `meta` field. The previous example's `meta.background: true` was silently ignored and did not run the workflow in the background.
+
+### Fixed
+
+- `preview`'s hidden double-truncation: a full in-memory `outcome.result` under 512 characters was fine, but the exact bug reported in issue #52 (`external_runs wait` returning `kind: "agent"` with a clipped result) is now gone for any result that fits the shared budget.
+
 ## [2.2.0-external.0] - 2026-09-20
 
 ### Added

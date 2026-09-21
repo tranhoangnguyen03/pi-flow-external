@@ -20,7 +20,7 @@ describe("external_runs", () => {
     const tool = createExternalRunsTool({ registry, runsDirectory: () => runsDirectory }) as any;
     const ctx = { cwd: "/project", sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } } as any;
     const execute = (params: Record<string, unknown>, signal?: AbortSignal) => tool.execute("external-runs", params, signal, undefined, ctx);
-    return { execute, registry, runsDirectory, tool };
+    return { execute, registry, runsDirectory, tool, ctx };
   }
 
   async function completedRecord(runsDirectory: string, overrides: Record<string, unknown> = {}) {
@@ -178,6 +178,57 @@ describe("external_runs", () => {
     await expect(allWait).resolves.toMatchObject({ details: { outcomes: [{ runId: "wf_failed", status: "error" }], pending: ["run_two"] } });
     finishTwo("two");
     await Promise.allSettled([one.result]);
+  });
+
+  it("spends one shared result budget across every settled outcome in a wait response — complete text when it fits, truncated with continuation refs when it does not", async () => {
+    const { execute, registry } = setup();
+    const first = registry.start({ runId: "run_first", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "A".repeat(50) });
+    const second = registry.start({ runId: "run_second", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "B".repeat(100) });
+    await Promise.all([first.result, second.result]);
+
+    const waited = await execute({ action: "wait", runIds: ["run_first", "run_second"], limitBytes: 80 });
+    const outcomes = (waited as any).details.outcomes;
+    expect(outcomes[0]).toMatchObject({ runId: "run_first", result: "A".repeat(50), resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({
+      runId: "run_second",
+      result: "B".repeat(30),
+      resultTruncated: true,
+      outputRef: { runId: "run_second", view: "output" },
+      diagnosticsRef: { runId: "run_second", view: "diagnostics" },
+    });
+  });
+
+  it("emits bounded live progress via onUpdate while waiting, identifying watched targets, and stops updating once the wait settles without cancelling the watched work", async () => {
+    const { registry, tool, ctx } = setup();
+    let finish!: (value: string) => void;
+    const running = registry.start({ runId: "run_slow", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finish = resolve; }) });
+    registry.update("run_slow", { status: "running", description: "Slow task", lastActivityAt: Date.now(), activity: ["step one"] });
+
+    const updates: Array<{ details: Record<string, unknown> }> = [];
+    const waitPromise = tool.execute("call-wait", { action: "wait", runIds: ["run_slow"] }, undefined, (partial: { details: Record<string, unknown> }) => updates.push(partial), ctx);
+
+    // First update is emitted immediately once targets resolve, before any heartbeat tick.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(updates.length).toBeGreaterThanOrEqual(1);
+    expect(updates[0]!.details).toMatchObject({ action: "wait", mode: "all", live: true, pending: ["run_slow"] });
+    expect((updates[0]!.details.targets as Array<Record<string, unknown>>)[0]).toMatchObject({ runId: "run_slow", status: "running", description: "Slow task" });
+
+    // Bounded heartbeat: more than one update arrives while genuinely waiting,
+    // without the watcher ever cancelling or restarting the watched run.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const countBeforeSettlement = updates.length;
+    expect(countBeforeSettlement).toBeGreaterThan(1);
+    expect(registry.get("run_slow")?.state).toBe("running");
+
+    finish("done");
+    await waitPromise;
+    const countAtSettlement = updates.length;
+
+    // No further updates after settlement — the heartbeat is torn down, not
+    // merely slowed.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(updates.length).toBe(countAtSettlement);
+    await running.result;
   });
 
   it("interrupts a wait without cancelling work and validates every target before subscribing", async () => {

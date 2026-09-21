@@ -158,6 +158,15 @@ describe("permission tier argv mapping", () => {
     expect(normalizeAgentOptions({ max_budget_usd: 1.5 }).maxBudgetUsd).toBe(1.5);
   });
 
+  it("accepts workflow agent() description as a compatible alias for label", () => {
+    expect(normalizeAgentOptions({ description: "review the diff" }).label).toBe("review the diff");
+    expect(normalizeAgentOptions({ label: "review" }).label).toBe("review");
+    // Same value on both is fine (not a conflict).
+    expect(normalizeAgentOptions({ label: "review", description: "review" }).label).toBe("review");
+    // Conflicting values are rejected rather than silently preferring one.
+    expect(() => normalizeAgentOptions({ label: "review", description: "map" })).toThrow(/both label and description/);
+  });
+
   it("renders tier, denial, and budget disclosure tags on receipts", () => {
     const toText = (component: { render: (width: number) => string[] }) => (component.render(100) ?? []).join("\n");
     // Synthetic advisory-tier node: exercises the renderer's generic capability.

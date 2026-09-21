@@ -11,6 +11,8 @@ import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
+import { applySubagentProgressToWorkflowAgent, applySubagentResultToWorkflowAgent } from "../core/agent-snapshot.ts";
+import { normalizeRunStatus } from "../core/run-projection.ts";
 import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { createRunRecord } from "../core/run-record.ts";
@@ -70,6 +72,7 @@ function workflowError(
 ) {
   return workflowResult(text, {
     status: "error",
+    lifecycleStatus: "error",
     agentCount: 0,
     phases: [],
     agents: [],
@@ -81,6 +84,7 @@ function workflowError(
 function cloneSnapshot(snapshot: WorkflowToolDetails): WorkflowToolDetails {
   return {
     ...snapshot,
+    lifecycleStatus: normalizeRunStatus(snapshot.status),
     phases: [...snapshot.phases],
     plannedPhases: snapshot.plannedPhases?.map((phase) => ({ ...phase })),
     agents: snapshot.agents.map((agent) => ({ ...agent, activity: agent.activity ? [...agent.activity] : undefined })),
@@ -246,20 +250,7 @@ export function createWorkflowTool(
             const details = partial.details as SubagentToolDetails;
             const agent = snapshot.agents.find((item) => item.index === childIndex);
             if (agent && details.progress) {
-              agent.startedAt = details.progress.startedAt;
-              agent.endedAt = details.progress.endedAt;
-              agent.activity = [...details.progress.activity];
-              agent.activityCount = details.progress.activityCount;
-              agent.result = details.progress.result;
-              agent.error = details.progress.error;
-              agent.assistantOutput = details.progress.assistantOutput;
-              agent.processStartedAt = details.progress.processStartedAt;
-              agent.firstActivityAt = details.progress.firstActivityAt;
-              agent.lastActivityAt = details.progress.lastActivityAt;
-              agent.timedOut = details.progress.timedOut;
-              agent.usage = details.progress.usage;
-              agent.status = details.progress.status;
-              agent.context = details.context;
+              applySubagentProgressToWorkflowAgent(agent, details.progress);
               if (call.runRecord) options.registry.update(call.runRecord.runId, details.progress);
               emit();
             }
@@ -274,36 +265,7 @@ export function createWorkflowTool(
         const resultDetails = result.details as SubagentToolDetails;
         const agent = snapshot.agents.find((item) => item.index === childIndex);
         if (agent) {
-          const progress = resultDetails.progress;
-          agent.status = resultDetails.status;
-          agent.result = resultDetails.result;
-          agent.error = resultDetails.error;
-          agent.assistantOutput = resultDetails.assistantOutput;
-          agent.processStartedAt = progress?.processStartedAt;
-          agent.firstActivityAt = progress?.firstActivityAt;
-          agent.lastActivityAt = progress?.lastActivityAt;
-          agent.timedOut = resultDetails.timedOut;
-          agent.usage = resultDetails.usage;
-          agent.externalRunId = resultDetails.runId;
-          agent.recordPath = resultDetails.recordPath;
-          agent.backendEventCount = resultDetails.backendEventCount;
-          agent.nestedActivitySeen = resultDetails.nestedActivitySeen;
-          agent.nestedTimeoutExtended = resultDetails.nestedTimeoutExtended;
-          agent.effectiveTimeoutMs = resultDetails.effectiveTimeoutMs;
-          agent.recordingError = resultDetails.recordingError;
-          agent.permission = resultDetails.permission;
-          agent.permissionEnforced = resultDetails.permissionEnforced;
-          agent.permissionDenials = resultDetails.permissionDenials;
-          agent.maxBudgetUsd = resultDetails.maxBudgetUsd;
-          agent.sessionId = resultDetails.sessionId;
-          agent.resumedFrom = resultDetails.resumedFrom;
-          agent.context = resultDetails.context;
-          if (progress) {
-            agent.startedAt = progress.startedAt;
-            agent.endedAt = progress.endedAt;
-            agent.activity = [...progress.activity];
-            agent.activityCount = progress.activityCount;
-          }
+          applySubagentResultToWorkflowAgent(agent, resultDetails);
           emit();
         }
         if (resultDetails.status !== "done") {
@@ -751,7 +713,7 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
   const access = details.status === "running" ? "external host access · " : "";
   container.addChild(
     new Text(
-      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${details.status} · ${access}${counts}`)}`,
+      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${normalizeRunStatus(details.status)} · ${access}${counts}`)}`,
       0,
       0,
     ),
