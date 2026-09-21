@@ -257,7 +257,9 @@ Workflows show access once at the workflow level, retain done/active/queued/fail
 
 Stock Pi renders every tool's own `renderCall`/`renderResult` directly, so the cards above work with no configuration.
 
-A host that globally restyles tool output — such as the installed [`pi-cc-extensions`](https://www.npmjs.com/package/pi-cc-extensions) "ccstyle" package — may intercept tool rendering and substitute its own generic card and raw "Tool Output" modal instead, which duplicates or reformats the JSON already shown above. ccstyle supports an explicit escape hatch for exactly this: its `excludeRenderers` setting (in `~/.pi/agent/pi-cc-extensions.json` or its own `/config`-style settings panel) names tools whose own `renderCall`/`renderResult` should be preserved instead of restyled. Add all three run tools:
+**Compatibility caveat — pi-cc / ccstyle:** our live progress renderers are not compatible with the default rendering overrides in [`pi-cc-extensions`](https://www.npmjs.com/package/pi-cc-extensions). Manual testing showed workflow and wait progress replaced by a generic `Pending…` display while Agent retained its dedicated renderer. Expanded generic output can also duplicate raw JSON. This is a display limitation, not evidence that the underlying run has stopped.
+
+To preserve this extension's renderers, add its three tool names to pi-cc's `excludeRenderers` setting in `~/.pi/agent/pi-cc-extensions.json`. Merge these entries into your existing configuration; do not replace other settings or exclusions:
 
 ```json
 {
@@ -265,7 +267,7 @@ A host that globally restyles tool output — such as the installed [`pi-cc-exte
 }
 ```
 
-This is a supported host configuration, not a workaround: ccstyle only restores a tool's own renderer when both (a) the tool name is listed in `excludeRenderers` and (b) the tool actually defines `renderCall`/`renderResult` (or `renderShell: "self"`) — true for all three tools this package registers. Without the config entry, ccstyle's default behavior is to override them, which is why `Agent` alone previously looked consistent (an earlier ccstyle version special-cased it) while `workflow` and `external_runs` did not. Editing ccstyle's installed files is not a supported or necessary fix — this configuration is.
+Restart Pi after changing the configuration. Exclusions use **tool names**, not the extension's package name. All three tools above provide custom renderers. This is pi-cc's supported renderer-preservation mechanism; do not edit its installed package files. End-to-end progress rendering with these exclusions still needs confirmation in your installed pi-cc version. If it continues to show only `Pending…`, disable pi-cc when you need our live progress display. Full compatibility with pi-cc's default overrides is not claimed.
 
 ## Background runs and supervision
 
