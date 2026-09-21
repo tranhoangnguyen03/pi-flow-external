@@ -33,6 +33,7 @@ import type {
   SubagentUsage,
   ThinkingClamp,
 } from "../types.ts";
+import { selectorHarness } from "../profiles.ts";
 import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
@@ -262,6 +263,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           cwd: params.ctx.cwd,
           timeoutMs: params.timeoutMs,
           profile: params.profile,
+          harness: selectorHarness(params.profile),
           permission: permission.tier,
           ...(elevated ? { permissionRequested: requestedTier } : {}),
           ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
@@ -277,6 +279,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         description: params.description,
         subagentType: params.profile.name,
         backend: params.profile.backend,
+        harness: selectorHarness(params.profile),
         status: "error",
         error,
       });
@@ -561,6 +564,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description: params.description,
       subagentType: params.profile.name,
       backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
       status: "error",
       error: "No model is selected",
     });
@@ -591,6 +595,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "error",
       error,
     });
@@ -606,6 +611,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "error",
       error,
     });
@@ -649,6 +655,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     description,
     subagentType,
     backend: profile.backend,
+    harness: selectorHarness(profile),
     enabled: progressEnabled,
     onProgress,
     executionStartedAt: params.executionStartedAt,
@@ -843,6 +850,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "done",
       result,
       usage,
@@ -872,6 +880,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status,
       error: message,
       usage,

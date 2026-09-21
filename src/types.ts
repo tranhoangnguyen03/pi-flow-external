@@ -82,6 +82,8 @@ export interface WorkflowAgentSnapshot {
   phase?: string;
   subagentType?: string;
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   startedAt?: number;
   queuedAt?: number;
@@ -106,6 +108,8 @@ export interface WorkflowAgentSnapshot {
   recordingError?: string;
   /** Resolved permission tier for this run. */
   permission?: PermissionTier;
+  /** Tier explicitly requested by the caller when it differs from the resolved tier. */
+  permissionRequested?: PermissionTier;
   /** False when the tier is advisory on this backend (instruction, not enforcement). */
   permissionEnforced?: boolean;
   /** Permission denials reported by the backend (claude plan/acceptEdits runs). */
@@ -118,11 +122,23 @@ export interface WorkflowAgentSnapshot {
   resumedFrom?: string;
   /** Set when a pi child's requested thinking level was clamped by model capability. */
   thinkingClamped?: ThinkingClamp;
+  /** Attempts retried for this run (agy infra failures retry once). */
+  retries?: number;
+  /** Error message of the retried-away first attempt, for transparency. */
+  retryOf?: string;
 }
 
 export interface WorkflowToolDetails {
   name: string;
   status: "running" | "completed" | "error" | "aborted";
+  /**
+   * `status` normalized to the same vocabulary `Agent`'s `SubagentToolDetails.status`
+   * already uses ("done" rather than the legacy internal "completed"), so a
+   * coordinating model reading either tool's details sees one lifecycle
+   * vocabulary. Additive: `status` itself is unchanged for existing readers
+   * (journal/replay/rendering internals) that depend on the literal "completed".
+   */
+  lifecycleStatus?: SubagentRunStatus;
   outcome?: "succeeded" | ChildRunOutcome;
   agentCount: number;
   phases: string[];
@@ -163,6 +179,8 @@ export interface SubagentProgressNode {
   description: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   startedAt: number;
   queuedAt?: number;
@@ -215,6 +233,8 @@ export interface SubagentToolDetails {
   description: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   result?: string;
   error?: string;

@@ -1,10 +1,15 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionContext, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { deriveRunTiming, getRunRecord, inspectRun, listRunRecords, type RunInspectionView, type RunRecordListItem, type RunTiming } from "./core/run-inspection.ts";
+import { getRunRecord, inspectRun, listRunRecords, type RunInspectionView, type RunRecordListItem } from "./core/run-inspection.ts";
 import { RunRegistry, type RegisteredRunEntry, type RegisteredRunOutcome } from "./core/run-registry.ts";
+import { projectDurableAgent, projectLiveAgent, projectWorkflowRun } from "./core/run-projection.ts";
+import { formatRunRow, formatWaitTargetRow } from "./core/run-render.ts";
+import { renderOutputText } from "./core/subagent-render.ts";
+import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { EXTERNAL_RUNS_PROMPT_SNIPPET } from "./prompts.ts";
 import type { WorkflowToolDetails } from "./types.ts";
 import { getSessionWorkflowDir, listWorkflowJournals, loadWorkflowJournal, type LoadedWorkflowJournal } from "./workflow/journal.ts";
@@ -51,7 +56,7 @@ const externalRunsParameters = Type.Object({
   limitBytes: Type.Optional(Type.Integer({
     minimum: 4,
     maximum: 65536,
-    description: "Max bytes per inspect page, including the summary view; follow nextCursor for the remainder.",
+    description: "Max bytes per inspect page, including the summary view; follow nextCursor for the remainder. For wait, this is the total result budget shared across every settled outcome in the response (default 32768): a result that fits is returned complete, one that does not is truncated with resultTruncated:true and outputRef/diagnosticsRef for the rest.",
   })),
   workflowRunId: Type.Optional(Type.String({
     description: "list filter: children of this wf_... workflow only.",
@@ -114,88 +119,41 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * `entry` is a live RunRegistry entry (resolved via `registry.get(runId)`),
- * so — unlike anything read through `run-inspection.ts`'s durable-evidence
- * readers — it is independently confirmed by the registry, not merely a
- * record whose status field happens to read "running". This is the ONLY
- * condition under which `deriveRunTiming`'s `live: true` (now-relative
- * elapsedMs/activityAgeMs) may be used.
+ * Legacy flat shape for `list`'s live-agent rows, kept for existing
+ * consumers, built on the same shared `projectLiveAgent` single/batch
+ * `inspect` already use — no independent field extraction from
+ * `entry.observation` here anymore.
  */
-function liveEntryFinalAvailable(entry: RegisteredRunEntry): boolean {
-  return entry.outcome?.status === "done" && entry.outcome?.result !== undefined;
-}
-
-function liveEntryTiming(entry: RegisteredRunEntry, observation: Record<string, unknown> | undefined): RunTiming {
-  return deriveRunTiming({
-    queuedAt: numberValue(observation?.queuedAt),
-    executionStartedAt: numberValue(observation?.executionStartedAt),
-    processStartedAt: numberValue(observation?.processStartedAt),
-    firstActivityAt: numberValue(observation?.firstActivityAt),
-    lastActivityAt: numberValue(observation?.lastActivityAt),
-    finishedAt: entry.outcome?.settledAt,
-  }, entry.state === "running");
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function liveAgentSummary(entry: RegisteredRunEntry) {
-  const observation = record(entry.observation);
-  const assistantOutput = record(observation?.assistantOutput);
-  return {
-    runId: entry.runId,
-    kind: "agent",
-    live: entry.state === "running",
-    task: { description: clip(typeof observation?.description === "string" ? observation.description : undefined), backend: observation?.backend },
-    state: {
-      // A settled entry.outcome is the registry's own authoritative
-      // conclusion, set exactly once by RunRegistry.settle(); prefer it over
-      // observation.status (an ambient, unvalidated `unknown`-typed passthrough
-      // that could in principle lag behind or diverge from the settled result)
-      // whenever it exists, falling back to observation.status only pre-settlement.
-      status: entry.outcome?.status ?? (typeof observation?.status === "string" ? observation.status : "running"),
-      outcome: entry.outcome?.outcome,
-      queuedAt: observation?.queuedAt,
-      startedAt: observation?.startedAt,
-      processStartedAt: observation?.processStartedAt,
-      firstActivityAt: observation?.firstActivityAt,
-      lastActivityAt: observation?.lastActivityAt,
-      activityCount: observation?.activityCount,
-      endedAt: observation?.endedAt,
-      error: clip(entry.outcome?.error ?? (typeof observation?.error === "string" ? observation.error : undefined)),
-    },
-    timing: liveEntryTiming(entry, observation),
-    output: {
-      available: entry.outcome?.result !== undefined || Array.isArray(assistantOutput?.messages),
-      status: entry.state === "running" ? "preliminary" : entry.outcome?.outcome === "succeeded" ? "final" : "interrupted",
-      finalAvailable: liveEntryFinalAvailable(entry),
-    },
-  };
-}
-
 function listedAgent(entry: RegisteredRunEntry) {
-  const observation = record(entry.observation);
+  const projection = projectLiveAgent(entry);
   return {
-    runId: entry.runId,
-    status: entry.outcome?.status ?? (typeof observation?.status === "string" ? observation.status : "running"),
-    outcome: entry.outcome?.outcome,
-    description: clip(typeof observation?.description === "string" ? observation.description : undefined),
-    outputAvailable: entry.outcome?.result !== undefined || record(observation?.assistantOutput) !== undefined,
-    finalAvailable: liveEntryFinalAvailable(entry),
-    timing: liveEntryTiming(entry, observation),
-    live: entry.state === "running",
-    ...(entry.outcome?.settledAt !== undefined ? { settledAt: entry.outcome.settledAt } : {}),
-    ...(entry.outcome?.error ? { error: clip(entry.outcome.error) } : {}),
+    ...projection,
+    status: projection.state.status,
+    outcome: projection.state.outcome,
+    description: projection.task.description,
+    outputAvailable: projection.output.available,
+    finalAvailable: projection.output.finalAvailable,
+    ...(projection.state.settledAt !== undefined ? { settledAt: projection.state.settledAt } : {}),
+    ...(projection.state.error ? { error: projection.state.error } : {}),
     ...(entry.workflowRunId ? { workflowRunId: entry.workflowRunId } : {}),
   };
 }
 
+/**
+ * Legacy flat `RunRecordListItem` fields (`status`, `outcome`, `description`,
+ * ...) are kept at the top level for existing `list` consumers, but every
+ * historical agent row now also carries the same nested `task`/`state`/
+ * `output` shape a live one already has (`projectDurableAgent`, shared with
+ * the durable branch of `resolveRunSummaryEntry` below) — the exact shape
+ * drift the design calls out is gone, without breaking a caller reading the
+ * flat fields.
+ */
 function historicalAgent(item: RunRecordListItem) {
+  const projection = projectDurableAgent(item);
   return {
     ...item,
-    status: item.integrity === "complete" ? item.status : "interrupted_or_uncertain",
-    live: false,
+    ...projection,
+    status: projection.state.status,
   };
 }
 
@@ -216,22 +174,22 @@ function workflowFinalState(entry: RegisteredRunEntry | undefined, journal: Load
 function liveSummary(entry: RegisteredRunEntry, allChildren = false): { runId: string; [key: string]: unknown } {
   if (entry.kind === "workflow") {
     const observation = entry.observation as WorkflowToolDetails | undefined;
-    return {
+    const status = entry.state === "running" ? "running" : entry.outcome?.status ?? "error";
+    const projection = projectWorkflowRun({
       runId: entry.runId,
-      kind: entry.kind,
+      live: entry.state === "running",
+      name: observation?.name,
+      source: observation?.source,
+      status,
+      outcome: entry.outcome?.outcome ?? observation?.outcome,
+      error: entry.outcome?.error,
+      agentCount: observation?.agentCount,
+      resultAvailable: entry.outcome?.result !== undefined,
+      finalAvailable: workflowFinalState(entry, undefined).finalAvailable,
+    });
+    return {
+      ...projection,
       workflowRunId: entry.workflowRunId,
-      task: observation ? { name: clip(observation.name), source: observation.source } : undefined,
-      state: {
-        status: entry.state === "running" ? "running" : entry.outcome?.status,
-        outcome: entry.outcome?.outcome ?? observation?.outcome,
-        error: entry.outcome?.error,
-        agentCount: observation?.agentCount,
-      },
-      output: {
-        available: entry.outcome?.result !== undefined,
-        status: entry.state === "running" ? "preliminary" : entry.outcome?.status === "done" ? "final" : "interrupted",
-        finalAvailable: workflowFinalState(entry, undefined).finalAvailable,
-      },
       children: (allChildren ? observation?.agents : observation?.agents.slice(0, 50))?.map((agent) => ({ runId: agent.externalRunId, label: clip(agent.label), status: agent.status })),
     };
   }
@@ -240,16 +198,20 @@ function liveSummary(entry: RegisteredRunEntry, allChildren = false): { runId: s
 
 function journalSummary(journal: LoadedWorkflowJournal, allChildren = false) {
   const status = journal.status === "running" ? "interrupted_or_uncertain" : journal.status;
-  return {
+  const projection = projectWorkflowRun({
     runId: journal.runId,
-    kind: "workflow",
-    task: { name: clip(journal.name), source: journal.source },
-    state: { status, outcome: journal.outcome, error: journal.error, agentCount: journal.children.length },
-    output: {
-      available: journal.result !== undefined,
-      status: journal.status === "done" ? "final" : "interrupted",
-      finalAvailable: workflowFinalState(undefined, journal).finalAvailable,
-    },
+    live: false,
+    name: journal.name,
+    source: journal.source,
+    status,
+    outcome: journal.outcome,
+    error: journal.error,
+    agentCount: journal.children.length,
+    resultAvailable: journal.result !== undefined,
+    finalAvailable: workflowFinalState(undefined, journal).finalAvailable,
+  });
+  return {
+    ...projection,
     children: (allChildren ? journal.children : journal.children.slice(0, 50)).map((child) => ({
       runId: child.runId,
       label: clip(child.label),
@@ -307,27 +269,28 @@ async function resolveRunSummaryEntry(
   if (entry?.kind === "workflow" || historical) {
     const observation = entry ? entry.observation as WorkflowToolDetails | undefined : undefined;
     const status = entry
-      ? (entry.state === "running" ? "running" : entry.outcome?.status)
+      ? (entry.state === "running" ? "running" : entry.outcome?.status ?? "error")
       : (historical!.status === "running" ? "interrupted_or_uncertain" : historical!.status);
     const { finalAvailable } = workflowFinalState(entry, historical);
-    return {
+    const projection = projectWorkflowRun({
       runId,
-      kind: "workflow",
       live: entry ? entry.state === "running" : false,
-      task: compact({ name: entry ? observation?.name : historical!.name, source: entry ? observation?.source : historical!.source }),
-      state: compact({
-        status,
-        outcome: entry ? (entry.outcome?.outcome ?? observation?.outcome) : historical!.outcome,
-        error: entry ? entry.outcome?.error : historical!.error,
-        agentCount: entry ? observation?.agentCount : historical!.children.length,
-      }),
-      timing: {},
-      output: {
-        available: entry ? entry.outcome?.result !== undefined : historical!.result !== undefined,
-        finalAvailable,
-      },
-      ...refs,
-    };
+      name: entry ? observation?.name : historical!.name,
+      source: entry ? observation?.source : historical!.source,
+      status,
+      outcome: entry ? (entry.outcome?.outcome ?? observation?.outcome) : historical!.outcome,
+      error: entry ? entry.outcome?.error : historical!.error,
+      agentCount: entry ? observation?.agentCount : historical!.children.length,
+      resultAvailable: entry ? entry.outcome?.result !== undefined : historical!.result !== undefined,
+      finalAvailable,
+    });
+    // Deliberately the SAME top-level key set as an agent projection
+    // (runId/kind/live/task/state/timing/output plus refs) — no
+    // `workflowRunId`, no unbounded `children` — so a batch caller consuming
+    // a mixed live/durable/agent/workflow target set never has to branch on
+    // which kind produced an entry (see the "same keyset across all four
+    // kinds" contract test in test/run-contract.test.ts).
+    return { ...projection, ...refs };
   }
   // A wf_... ID that failed to resolve (no live entry, no journal) is
   // definitely unknown — RUN_ID_PATTERN in run-inspection.ts only ever
@@ -335,26 +298,10 @@ async function resolveRunSummaryEntry(
   // would misreport it as an invalid-format ID rather than "unknown".
   if (isWorkflowId) throw new Error("Run is unknown or unavailable in this session");
 
-  if (entry) return { ...liveAgentSummary(entry), ...refs };
+  if (entry) return { ...projectLiveAgent(entry), ...refs };
   const durable = await getRunRecord(runsDirectory, runId);
   assertOwnedRecord(durable, sessionId, project);
-  return {
-    runId,
-    kind: "agent",
-    live: false,
-    task: compact({ description: durable.description, backend: durable.backend, project: durable.project, parentSessionId: durable.parentSessionId, workflowRunId: durable.workflowRunId }),
-    state: compact({
-      status: durable.integrity === "complete" ? durable.status : "interrupted_or_uncertain",
-      outcome: durable.outcome,
-      queuedAt: durable.queuedAt,
-      settledAt: durable.settledAt,
-      error: durable.error,
-      integrity: durable.integrity,
-    }),
-    timing: durable.timing,
-    output: { available: durable.outputAvailable, finalAvailable: durable.finalAvailable },
-    ...refs,
-  };
+  return { ...projectDurableAgent(durable), ...refs };
 }
 
 function batchCursorScope(sessionId: string, project: string): string {
@@ -447,25 +394,236 @@ function utf8Page(text: string, offset: number, limit: number): { text: string; 
   return { text: text.slice(offset, end), ...(end < text.length ? { nextOffset: end } : {}) };
 }
 
-async function previewOutcome(outcome: RegisteredRunOutcome, runsDirectory: string): Promise<Record<string, unknown>> {
-  let preview: string | undefined;
-  if (outcome.result !== undefined) {
-    preview = typeof outcome.result === "string" ? outcome.result : JSON.stringify(outcome.result);
-  } else if (outcome.kind === "agent") {
-    const page = await inspectRun({ runsDirectory, runId: outcome.runId, view: "output", limitBytes: 512 });
-    preview = page.items.map((item) => item.text).join("") || undefined;
-  }
-  return {
+const DEFAULT_WAIT_RESULT_BUDGET = 32_768;
+
+/**
+ * Wait's collection budget is a single pool shared across every settled
+ * outcome in one response, spent in REQUESTED order (the caller's `runId`/
+ * `runIds` order — see `collectOutcomes`, which sorts settled outcomes back
+ * into that order before spending), never the order targets happened to
+ * settle in: two calls with the same targets and the same final states
+ * spend the budget the same way regardless of which one raced to settle
+ * first. A result that fits in what remains is returned complete; one that
+ * does not is truncated to exactly what remains, and `resultTruncated: true`
+ * plus the existing `outputRef`/`diagnosticsRef` name where to continue.
+ */
+async function collectOutcome(outcome: RegisteredRunOutcome, runsDirectory: string, remainingBudget: number): Promise<{ entry: Record<string, unknown>; spent: number }> {
+  const base = {
     runId: outcome.runId,
     kind: outcome.kind,
     status: outcome.status,
     outcome: outcome.outcome,
     ...(outcome.settledAt !== undefined ? { settledAt: outcome.settledAt } : {}),
     ...(outcome.error ? { error: clip(outcome.error) } : {}),
-    ...(preview ? { preview: preview.length > 512 ? `${preview.slice(0, 511)}…` : preview } : {}),
     outputRef: { runId: outcome.runId, view: "output" },
     diagnosticsRef: { runId: outcome.runId, view: "diagnostics" },
   };
+  let full: string | undefined;
+  if (outcome.result !== undefined) {
+    // Already in memory — free to compute regardless of remaining budget;
+    // only the slicing/spend below is budget-gated.
+    full = typeof outcome.result === "string" ? outcome.result : JSON.stringify(outcome.result);
+  } else if (outcome.kind === "agent" && remainingBudget > 0) {
+    // A disk read is real I/O: never perform one once the shared budget is
+    // already exhausted, since its result could not be used anyway.
+    const page = await inspectRun({ runsDirectory, runId: outcome.runId, view: "output", limitBytes: Math.min(65536, remainingBudget) });
+    full = page.items.map((item) => item.text).join("") || undefined;
+    // inspectRun's own page can itself be a bounded prefix of more output on
+    // disk (nextCursor) even though `full` came back no longer than
+    // remainingBudget — that must still count as truncated, or a caller
+    // would wrongly read `resultTruncated: false` as "this is everything".
+    if (page.nextCursor !== undefined) {
+      return { entry: { ...base, result: full ?? "", resultTruncated: true }, spent: full ? Buffer.byteLength(full) : 0 };
+    }
+  }
+  if (full === undefined) {
+    // An agent outcome with no in-memory result and no budget left to read
+    // its evidence from disk is flagged truncated (not silently empty) so
+    // the caller follows outputRef instead of assuming there is nothing.
+    const skippedRead = outcome.kind === "agent" && outcome.result === undefined && remainingBudget <= 0;
+    return { entry: skippedRead ? { ...base, resultTruncated: true } : base, spent: 0 };
+  }
+  if (remainingBudget <= 0) return { entry: { ...base, resultTruncated: true }, spent: 0 };
+  const page = utf8Page(full, 0, remainingBudget);
+  return { entry: { ...base, result: page.text, resultTruncated: page.nextOffset !== undefined }, spent: Buffer.byteLength(page.text) };
+}
+
+/** Spends one shared byte budget across every settled outcome, in the caller's requested order (see `collectOutcome`). */
+async function collectOutcomes(outcomes: RegisteredRunOutcome[], runsDirectory: string, limitBytes: number | undefined): Promise<Record<string, unknown>[]> {
+  let remaining = Math.max(4, Math.min(65536, limitBytes ?? DEFAULT_WAIT_RESULT_BUDGET));
+  const projected: Record<string, unknown>[] = [];
+  for (const outcome of outcomes) {
+    const { entry, spent } = await collectOutcome(outcome, runsDirectory, remaining);
+    projected.push(entry);
+    remaining -= spent;
+  }
+  return projected;
+}
+
+/**
+ * A live, bounded snapshot of one wait target for `onUpdate` progress and the
+ * final response's `targets` field alike — the same shape whether the target
+ * has already settled or is still being observed, so a coordinating model
+ * (or a renderer) never has to branch on which.
+ */
+function waitTargetSnapshot(target: { runId: string; kind: "agent" | "workflow"; terminal?: RegisteredRunOutcome }, registry: RunRegistry): Record<string, unknown> {
+  if (target.terminal) {
+    return { runId: target.runId, kind: target.kind, status: target.terminal.status, outcome: target.terminal.outcome };
+  }
+  const entry = registry.get(target.runId);
+  const observation = record(entry?.observation);
+  if (target.kind === "workflow") {
+    const workflow = observation as unknown as { name?: unknown; agentCount?: unknown } | undefined;
+    return compact({
+      runId: target.runId,
+      kind: "workflow",
+      status: "running",
+      description: typeof workflow?.name === "string" ? clip(workflow.name) : undefined,
+      agentCount: typeof workflow?.agentCount === "number" ? workflow.agentCount : undefined,
+    });
+  }
+  return compact({
+    runId: target.runId,
+    kind: "agent",
+    status: typeof observation?.status === "string" ? observation.status : "running",
+    description: clip(typeof observation?.description === "string" ? observation.description : undefined),
+    lastActivityAt: typeof observation?.lastActivityAt === "number" ? observation.lastActivityAt : undefined,
+    activity: Array.isArray(observation?.activity) ? observation.activity.slice(-1) : undefined,
+  });
+}
+
+const MAX_RENDERED_ROWS = 8;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function textFromToolResult(toolResult: { content: Array<{ type: string; text?: string }> }): string {
+  return toolResult.content.flatMap((item) => item.type === "text" && typeof item.text === "string" ? [item.text] : []).join("\n");
+}
+
+/**
+ * `external_runs`'s own call/result renderer — this tool previously had none
+ * (see docs/plans/2026-09-21-unified-run-experience-design.md), so a host
+ * that globally restyles unrendered tool output (e.g. installed ccstyle)
+ * had nothing to preserve. Registering these hooks is necessary but not
+ * sufficient by itself: a host with such an override must also be told to
+ * keep hands off this tool (see README's host-integration section on
+ * `excludeRenderers`).
+ */
+function renderExternalRunsCall(args: Record<string, unknown>, theme: Theme): Text {
+  const action = typeof args.action === "string" ? args.action : "list";
+  let detail: string;
+  if (action === "wait") {
+    const ids = Array.isArray(args.runIds) ? args.runIds : args.runId ? [args.runId] : [];
+    detail = `waiting for ${ids.length} task(s) · mode ${typeof args.mode === "string" ? args.mode : "all"}`;
+  } else if (action === "cancel") {
+    detail = `cancel ${String(args.runId ?? "")}`;
+  } else if (action === "inspect") {
+    const target = Array.isArray(args.runIds) ? `${args.runIds.length} run(s) (batch)` : String(args.runId ?? "");
+    detail = `inspect ${target} · ${typeof args.view === "string" ? args.view : "summary"}`;
+  } else {
+    detail = `list${typeof args.workflowRunId === "string" ? ` · workflow ${args.workflowRunId}` : ""}`;
+  }
+  return new Text(`${theme.bold("External Runs")} ${theme.fg("dim", detail)}`, 0, 0);
+}
+
+function renderWaitResult(details: Record<string, unknown>, theme: Theme, expanded: boolean): Container {
+  const container = new Container();
+  const targets = Array.isArray(details.targets) ? details.targets.filter(isRecord) : [];
+  const outcomes = Array.isArray(details.outcomes) ? details.outcomes.filter(isRecord) : [];
+  const pending = Array.isArray(details.pending) ? details.pending : [];
+  const live = details.live === true;
+  const totalTargets = targets.length || outcomes.length + pending.length;
+  const header = live
+    ? `Waiting for ${pending.length} of ${totalTargets} task(s) · ${outcomes.length} complete`
+    : `Wait complete · ${outcomes.length} settled${pending.length ? ` · ${pending.length} still pending` : ""}`;
+  container.addChild(new Text(theme.bold(header), 0, 0));
+  const rows = targets.length ? targets : outcomes;
+  const shown = rows.slice(0, MAX_RENDERED_ROWS);
+  for (const row of shown) container.addChild(new Text(`  ${theme.fg("muted", formatWaitTargetRow(row))}`, 0, 0));
+  if (rows.length > shown.length) container.addChild(new Text(`  ${theme.fg("muted", `... ${rows.length - shown.length} more`)}`, 0, 0));
+  if (expanded && !live) {
+    for (const outcome of outcomes) {
+      if (typeof outcome.result !== "string" || !outcome.result) continue;
+      container.addChild(new Text(`  ${theme.bold(`Output · ${String(outcome.runId)}`)}`, 0, 0));
+      container.addChild(renderOutputText(outcome.result, 2));
+      if (outcome.resultTruncated) {
+        container.addChild(new Text(`  ${theme.fg("dim", `Truncated · external_runs inspect ${String(outcome.runId)} for full output`)}`, 0, 0));
+      }
+    }
+  }
+  return container;
+}
+
+function renderListResult(details: Record<string, unknown>, theme: Theme, expanded: boolean): Container {
+  const container = new Container();
+  const workflows = Array.isArray(details.workflows) ? details.workflows.filter(isRecord) : [];
+  const runs = Array.isArray(details.runs) ? details.runs.filter(isRecord) : [];
+  container.addChild(new Text(theme.bold(`External runs · ${workflows.length} workflow(s) · ${runs.length} run(s)`), 0, 0));
+  const rows = [...workflows.map((item) => formatRunRow("Workflow", item)), ...runs.map((item) => formatRunRow("Run", item))];
+  const shown = expanded ? rows : rows.slice(0, MAX_RENDERED_ROWS);
+  for (const row of shown) container.addChild(new Text(`  ${theme.fg("muted", row)}`, 0, 0));
+  if (rows.length > shown.length) container.addChild(new Text(`  ${theme.fg("muted", `... ${rows.length - shown.length} more · /external runs`)}`, 0, 0));
+  if (typeof details.nextCursor === "string" || typeof details.nextWorkflowCursor === "string") {
+    container.addChild(new Text(`  ${theme.fg("dim", "More available · pass cursor/workflowCursor, or /external runs")}`, 0, 0));
+  }
+  return container;
+}
+
+function renderBatchInspectResult(details: Record<string, unknown>, theme: Theme): Container {
+  const container = new Container();
+  const entries = Array.isArray(details.entries) ? details.entries.filter(isRecord) : [];
+  container.addChild(new Text(theme.bold(`Inspecting ${entries.length} run(s)`), 0, 0));
+  for (const entry of entries) {
+    container.addChild(new Text(`  ${theme.fg("muted", formatRunRow(entry.kind === "workflow" ? "Workflow" : "Run", entry))}`, 0, 0));
+  }
+  if (typeof details.nextCursor === "string") {
+    container.addChild(new Text(`  ${theme.fg("dim", "More available · follow nextCursor")}`, 0, 0));
+  }
+  return container;
+}
+
+const PREVIEW_CHARS = 2_000;
+
+function renderSingleInspectResult(details: Record<string, unknown>, theme: Theme, expanded: boolean): Container {
+  const container = new Container();
+  const runId = typeof details.runId === "string" ? details.runId : "run";
+  const view = typeof details.view === "string" ? details.view : "summary";
+  container.addChild(new Text(`${theme.bold(`Inspecting ${runId}`)} ${theme.fg("dim", view)}`, 0, 0));
+  const items = Array.isArray(details.items) ? details.items.filter(isRecord) : undefined;
+  const text = typeof details.text === "string"
+    ? details.text
+    : items?.map((item) => typeof item.text === "string" ? item.text : "").join("");
+  if (text) {
+    const preview = expanded || text.length <= PREVIEW_CHARS ? text : `${text.slice(0, PREVIEW_CHARS)}\n… ${text.length - PREVIEW_CHARS} more characters`;
+    if (view === "output" || view === "final") {
+      container.addChild(renderOutputText(preview, 2));
+    } else {
+      container.addChild(new Text(preview.split("\n").map((line) => `  ${line}`).join("\n"), 0, 0));
+    }
+  }
+  if (view === "final" && details.finalAvailable === false) {
+    container.addChild(new Text(`  ${theme.fg("muted", "No verified final answer is available yet.")}`, 0, 0));
+  }
+  if (typeof details.nextCursor === "string") {
+    container.addChild(new Text(`  ${theme.fg("dim", "More available · follow nextCursor")}`, 0, 0));
+  }
+  return container;
+}
+
+function renderCancelResult(details: Record<string, unknown>, theme: Theme): Text {
+  return new Text(`${theme.bold("External Runs")} ${theme.fg("muted", `${String(details.runId)} → ${String(details.status)}`)}`, 0, 0);
+}
+
+function renderExternalRunsResult(toolResult: { content: Array<{ type: string; text?: string }>; details: unknown }, theme: Theme, expanded: boolean) {
+  const details = isRecord(toolResult.details) ? toolResult.details : {};
+  if (Array.isArray(details.targets) || Array.isArray(details.outcomes)) return renderWaitResult(details, theme, expanded);
+  if (Array.isArray(details.workflows) || Array.isArray(details.runs)) return renderListResult(details, theme, expanded);
+  if (Array.isArray(details.entries)) return renderBatchInspectResult(details, theme);
+  if (typeof details.view === "string") return renderSingleInspectResult(details, theme, expanded);
+  if (typeof details.status === "string" && typeof details.runId === "string") return renderCancelResult(details, theme);
+  return new Text(textFromToolResult(toolResult), 0, 0);
 }
 
 export function createExternalRunsTool(
@@ -477,7 +635,7 @@ export function createExternalRunsTool(
     description: "List, inspect (single or batched summaries), wait for, or cancel session-owned external runs.",
     promptSnippet: EXTERNAL_RUNS_PROMPT_SNIPPET,
     parameters: externalRunsParameters,
-    async execute(_toolCallId, params: ExternalRunsParams, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: ExternalRunsParams, signal, onUpdate, ctx) {
       const { sessionId, project } = scope(ctx);
       const runsDirectory = options.runsDirectory();
 
@@ -626,7 +784,7 @@ export function createExternalRunsTool(
         const durable = await getRunRecord(runsDirectory, params.runId);
         if (!entry) assertOwnedRecord(durable, sessionId, project);
         if (view === "summary") {
-          const source = entry ? liveAgentSummary(entry) : historicalAgent(durable!);
+          const source = entry ? projectLiveAgent(entry) : historicalAgent(durable!);
           const text = JSON.stringify(source);
           const offset = params.cursor ? decodeProjectionCursor(params.cursor, params.runId, view, text) : 0;
           const portion = utf8Page(text, offset, Math.max(4, Math.min(65536, params.limitBytes ?? 32768)));
@@ -721,17 +879,61 @@ export function createExternalRunsTool(
         (mode === "any" && outcomes.length > 0)
         || pending.length === 0
         || outcomes.some((outcome) => outcome.status !== "done" && known.some((target) => target.kind === "workflow" && target.runId === outcome.runId));
-      while (!shouldReturn()) {
-        const waited = await options.registry.wait(pending.map((target) => target.runId), "any", signal);
-        for (const outcome of waited.terminal) if (!outcomes.some((item) => item.runId === outcome.runId)) outcomes.push(outcome);
-        pending = pending.filter((target) => !outcomes.some((outcome) => outcome.runId === target.runId));
+
+      // Bounded live observation while waiting: a fixed-cadence heartbeat,
+      // not a subscription per registry event, so a single long-running
+      // target still produces intermediate updates instead of silence.
+      // Cleared on every exit path (normal return, thrown abort) so it never
+      // outlives this call, and it only ever reads the registry — it cannot
+      // mutate run state, restart, or cancel anything being watched.
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      const emitWaitProgress = (live: boolean) => {
+        if (!onUpdate) return;
+        const targets = known.map((target) => waitTargetSnapshot(target, options.registry));
+        const text = `Waiting for ${pending.length} of ${known.length} task(s); ${outcomes.length} complete.`;
+        onUpdate(result(text, { action: "wait", mode, live, targets, outcomes, pending: pending.map((target) => target.runId) }));
+      };
+      try {
+        if (onUpdate) {
+          emitWaitProgress(true);
+          heartbeat = setInterval(() => emitWaitProgress(true), SPINNER_INTERVAL_MS);
+          heartbeat.unref?.();
+        }
+        while (!shouldReturn()) {
+          const waited = await options.registry.wait(pending.map((target) => target.runId), "any", signal);
+          for (const outcome of waited.terminal) if (!outcomes.some((item) => item.runId === outcome.runId)) outcomes.push(outcome);
+          pending = pending.filter((target) => !outcomes.some((outcome) => outcome.runId === target.runId));
+          emitWaitProgress(true);
+        }
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
       }
-      const projected = await Promise.all(outcomes.map((outcome) => previewOutcome(outcome, runsDirectory)));
-      return result(JSON.stringify({ outcomes: projected, pending: pending.map((target) => target.runId) }), {
-        mode,
-        outcomes: projected,
-        pending: pending.map((target) => target.runId),
+      // `outcomes` accumulated in SETTLEMENT order (whichever target's
+      // `registry.wait` resolved first), not the caller's requested order —
+      // reorder back to `known`'s order (the deduplicated `runId`/`runIds`
+      // request order) before spending the shared budget, so collection is
+      // deterministic from the caller's perspective rather than a race.
+      const outcomeByRunId = new Map(outcomes.map((outcome) => [outcome.runId, outcome] as const));
+      const orderedOutcomes = known.flatMap((target) => {
+        const outcome = outcomeByRunId.get(target.runId);
+        return outcome ? [outcome] : [];
       });
+      const projected = await collectOutcomes(orderedOutcomes, runsDirectory, params.limitBytes);
+      const finalPending = pending.map((target) => target.runId);
+      return result(JSON.stringify({ outcomes: projected, pending: finalPending }), {
+        action: "wait",
+        mode,
+        live: false,
+        targets: known.map((target) => waitTargetSnapshot(target, options.registry)),
+        outcomes: projected,
+        pending: finalPending,
+      });
+    },
+    renderCall(args, theme) {
+      return renderExternalRunsCall(args, theme);
+    },
+    renderResult(toolResult, { expanded }, theme) {
+      return renderExternalRunsResult(toolResult, theme, expanded);
     },
   });
 }

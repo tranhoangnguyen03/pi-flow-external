@@ -16,6 +16,7 @@ import {
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
 import { abortChildTree } from "./process-tree.ts";
 
@@ -320,6 +321,7 @@ export async function spawnCodexSubagent(params: {
     description: params.description,
     subagentType,
     backend: params.profile.backend,
+    harness: selectorHarness(params.profile),
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
     executionStartedAt: params.executionStartedAt,
@@ -525,6 +527,7 @@ export async function spawnCodexSubagent(params: {
       description: params.description,
       subagentType,
       backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
       status: "done",
       result,
       usage: latestUsage,
@@ -551,6 +554,7 @@ export async function spawnCodexSubagent(params: {
       description: params.description,
       subagentType,
       backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
       status,
       error: message,
       usage: latestUsage,
