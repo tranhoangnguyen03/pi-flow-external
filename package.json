@@ -1,7 +1,7 @@
 {
   "name": "@tranhoangnguyen0310/pi-flow-external",
-  "version": "2.3.1-external.0",
-  "description": "External Claude Code, Codex CLI, Antigravity, and Grok Build CLI delegation for pi.",
+  "version": "2.4.0-external.0",
+  "description": "External Claude Code, Codex CLI, Antigravity, Grok Build CLI, and Muse Code delegation for pi.",
   "type": "module",
   "main": "./index.ts",
   "exports": "./index.ts",
@@ -29,7 +29,8 @@
     "claude",
     "agy",
     "antigravity",
-    "grok"
+    "grok",
+    "muse"
   ],
   "license": "MIT",
   "scripts": {

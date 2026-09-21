@@ -12,6 +12,7 @@ const defaults = {
   codex: { model: "gpt-5.6-sol", thinking: "high" },
   agy: { model: "gemini-3.7-flash-high", thinking: "high" },
   grok: { model: "grok-4.6", thinking: "high" },
+  muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
   // No fixed model/thinking default: a named pi harness pins its own model and
   // thinking in the caller's real harnesses.json; --harness names which one.
   pi: {},
@@ -61,7 +62,7 @@ function parseArgs(argv) {
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
-  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, or pi");
+  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, or pi");
   if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real harnesses.json");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
   if (options.workflow && options.interrupt) throw new Error("--workflow and --interrupt are separate checks");
@@ -74,7 +75,7 @@ function parseArgs(argv) {
   if (!options.routingSmoke && (rootModelProvided || rootThinkingProvided)) {
     throw new Error("--root-model and --root-thinking only apply to --routing-smoke");
   }
-  // Only claude/codex/agy/grok get an isolated, disposable agent dir by
+  // Only claude/codex/agy/grok/muse get an isolated, disposable agent dir by
   // default: this script writes their temporary profile file into it itself,
   // so isolation is safe and desirable. This default is unconditional — an
   // inherited PI_CODING_AGENT_DIR from the caller's shell is deliberately
@@ -99,7 +100,7 @@ function parseArgs(argv) {
 function help() {
   console.log(`Usage: npm run e2e -- [options]
 
-  --backend <claude|codex|agy|grok|pi>  external backend (default: codex)
+  --backend <claude|codex|agy|grok|muse|pi>  external backend (default: codex)
   --harness <name>              required with --backend pi: a pi-* harness already registered in your own real harnesses.json
   --model <id>                  child model (backend default when omitted; ignored for pi, which pins its own)
   --thinking <level>            child thinking (default: high; ignored for pi, which pins its own)
@@ -607,14 +608,28 @@ async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, t
  * grok receipt should therefore always carry a real sessionId and a known,
  * non-estimated, non-zero cost; other backends keep whatever cost semantics
  * their own tests already cover and are not asserted here.
+ *
+ * Muse reports a real, resumable sessionId (verified: a second real
+ * `exec --session-id` call recalled a fact only told to the first) but has
+ * never been observed to report usage/cost on any run; a successful receipt
+ * should therefore carry a sessionId while usage stays honestly unknown
+ * rather than a fabricated zero-known or estimated cost.
  */
 function assertReceiptSemantics(options, summary) {
-  if (options.backend !== "grok") return;
-  assert(typeof summary?.sessionId === "string" && summary.sessionId.length > 0, `Grok receipt missing a non-empty sessionId: ${JSON.stringify(summary)}`);
-  const usage = summary?.usage;
-  assert(usage?.costKnown === true, `Grok receipt usage.costKnown was not true: ${JSON.stringify(usage)}`);
-  assert(usage?.costEstimated === false, `Grok receipt usage.costEstimated was not false: ${JSON.stringify(usage)}`);
-  assert(typeof usage?.cost === "number" && usage.cost > 0, `Grok receipt usage.cost was not a positive number: ${JSON.stringify(usage)}`);
+  if (options.backend === "grok") {
+    assert(typeof summary?.sessionId === "string" && summary.sessionId.length > 0, `Grok receipt missing a non-empty sessionId: ${JSON.stringify(summary)}`);
+    const usage = summary?.usage;
+    assert(usage?.costKnown === true, `Grok receipt usage.costKnown was not true: ${JSON.stringify(usage)}`);
+    assert(usage?.costEstimated === false, `Grok receipt usage.costEstimated was not false: ${JSON.stringify(usage)}`);
+    assert(typeof usage?.cost === "number" && usage.cost > 0, `Grok receipt usage.cost was not a positive number: ${JSON.stringify(usage)}`);
+    return;
+  }
+  if (options.backend === "muse") {
+    assert(typeof summary?.sessionId === "string" && summary.sessionId.length > 0, `Muse receipt missing a non-empty sessionId: ${JSON.stringify(summary)}`);
+    const usage = summary?.usage;
+    assert(usage?.costKnown === false, `Muse receipt usage.costKnown was not false (unknown, not fabricated): ${JSON.stringify(usage)}`);
+    assert(usage?.costEstimated === false, `Muse receipt usage.costEstimated was not false: ${JSON.stringify(usage)}`);
+  }
 }
 
 async function runDeterministic(options) {

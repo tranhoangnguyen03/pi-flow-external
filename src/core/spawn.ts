@@ -24,6 +24,7 @@ import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent, isTransientAgyFailure } from "./agy.ts";
 import { spawnGrokSubagent } from "./grok.ts";
+import { museHasNestedAgentActivity, spawnMuseSubagent } from "./muse.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -141,6 +142,10 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
     const update = asRecord(event.step_update);
     return event.event === "step_update" && (update?.step_type === "tool" || update?.step_type === "subagent") &&
       (isNestedToolName(update.tool_name) || asRecord(update.subagent_info) !== undefined);
+  }
+
+  if (backend === "muse") {
+    return museHasNestedAgentActivity(event);
   }
 
   return false;
@@ -540,6 +545,27 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
   }
   if (params.profile.backend === "grok") {
     return spawnGrokSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+      permission: params.permission,
+      resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
+    });
+  }
+  if (params.profile.backend === "muse") {
+    return spawnMuseSubagent({
       toolCallId: params.toolCallId,
       description: params.description,
       prompt: params.prompt,

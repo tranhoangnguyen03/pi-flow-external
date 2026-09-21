@@ -99,7 +99,7 @@ describe("profile creator", () => {
 
   it("rejects an invalid backend in compileProfile with the full list of supported backends", () => {
     expect(() => compileProfile({ ...profile, backend: "invalid-backend" as any, name: "invalid-backend-reviewer" }))
-      .toThrow("Profile backend must be claude, codex, agy, grok, or a registered pi-* harness name.");
+      .toThrow("Profile backend must be claude, codex, agy, grok, muse, or a registered pi-* harness name.");
   });
 
   it("installs only after a successful smoke test", async () => {

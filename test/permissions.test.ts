@@ -54,6 +54,12 @@ describe("permission tier argv mapping", () => {
     expect(buildPermissionArgs("danger", "grok")).toEqual(["--sandbox", "off", "--permission-mode", "bypassPermissions"]);
   });
 
+  it("maps every tier onto native muse approval/sandbox flags", () => {
+    expect(buildPermissionArgs("readonly", "muse")).toEqual(["--disable-approval", "--disable-write", "--disable-shell"]);
+    expect(buildPermissionArgs("edit", "muse")).toEqual(["--disable-approval"]);
+    expect(buildPermissionArgs("danger", "muse")).toEqual(["--yolo"]);
+  });
+
   it("threads tiers and budget through buildClaudeArgs", () => {
     const base = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, permission: "edit" });
     expect(base).toContain("--permission-mode");
@@ -237,6 +243,22 @@ describe("tier enforcement resolution", () => {
     expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
   });
 
+  it("resolves muse as enforced at every tier with an accurate approval/sandbox caveat", () => {
+    const readonly = resolvePermission("readonly", "muse");
+    expect(readonly.enforced).toBe(true);
+    expect(readonly.caveat).toContain("disables approval");
+    expect(readonly.caveat).toContain("shell execution");
+
+    const edit = resolvePermission("edit", "muse");
+    expect(edit.enforced).toBe(true);
+    expect(edit.caveat).toContain("sandbox stays enabled");
+
+    const danger = resolvePermission("danger", "muse");
+    expect(danger.enforced).toBe(true);
+    expect(danger.caveat).toBeUndefined();
+    expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
+  });
+
   it("drops non-finite budgets instead of emitting them as CLI flags", () => {
     const args = buildClaudeArgs({
       profile: profile("claude"),
@@ -285,7 +307,7 @@ describe("effective permission tier resolution", () => {
 
   it("takes the least restrictive profile floor and request, using defaults only without a profile tier", () => {
     const tiers = ["readonly", "edit", "danger"] as const;
-    for (const backend of ["claude", "codex", "grok", "pi"] as const) {
+    for (const backend of ["claude", "codex", "grok", "muse", "pi"] as const) {
       for (const [i, permission] of tiers.entries()) {
         const profile = { name: "custom-reviewer", description: "", backend, permission };
         expect(resolveEffectivePermissionTier(undefined, profile)).toBe(permission);
@@ -339,6 +361,18 @@ describe("effective permission tier resolution", () => {
     expect(resolveEffectivePermissionTier("edit", grokImplementer)).toBe("danger");
     expect(resolveEffectivePermissionTier("readonly", grokImplementer)).toBe("danger");
     expect(resolveEffectivePermissionTier("danger", grokImplementer)).toBe("danger");
+  });
+
+  it("keeps muse execution profiles at their danger floor", () => {
+    const museImplementer: SubagentProfile = {
+      name: "muse-implementer",
+      description: "implement",
+      backend: "muse",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", museImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", museImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("danger", museImplementer)).toBe("danger");
   });
 
   it("elevates pi execution profiles to danger floor when edit tier is requested", () => {

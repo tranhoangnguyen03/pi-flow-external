@@ -196,9 +196,15 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     const tool = session.getToolDefinition("Agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
     const first = tool.execute("first", { description: "First", prompt: "hold", role: "worker", harness: "codex" }, undefined, undefined, context);
+    // Same real-spawned-process readiness pattern (poll for a side-effect file
+    // the child writes after actually starting) and the same 5s budget used
+    // everywhere else in the suite for it (agent-contract/profile-creator/
+    // workflow tests); this one was previously an outlier at 3s, tight enough
+    // to flake under full-suite parallel process-spawn contention even though
+    // the child actually starts in under 1s when run in isolation.
     await vi.waitFor(
       () => expect(existsSync(spawnCountPath) && readFileSync(spawnCountPath, "utf8") === "1").toBe(true),
-      { timeout: 3_000 },
+      { timeout: 5_000 },
     );
 
     const controller = new AbortController();
