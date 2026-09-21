@@ -9,7 +9,7 @@ import {
 import { Container, Text } from "@earendil-works/pi-tui";
 import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
-import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
+import { isActiveSubagentStatus, isCompletedSubagentStatus, renderOutputText, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { applySubagentProgressToWorkflowAgent, applySubagentResultToWorkflowAgent } from "../core/agent-snapshot.ts";
 import { normalizeRunStatus } from "../core/run-projection.ts";
@@ -20,7 +20,7 @@ import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
+import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile, selectorHarness } from "../profiles.ts";
 import { loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
@@ -352,11 +352,13 @@ export function createWorkflowTool(
             // in-place before returning (it only yields at its first await,
             // limiter.acquire()), so this update is guaranteed to land before
             // any real progress observation from execution.
+            const queuedProfile = profiles.get(call.subagentType);
             options.registry.update(runRecord.runId, {
               status: "queued",
               queuedAt: Date.parse(runRecord.queuedAt),
               description: call.label,
-              backend: profiles.get(call.subagentType)?.backend,
+              backend: queuedProfile?.backend,
+              harness: queuedProfile ? selectorHarness(queuedProfile) : undefined,
             });
             return registered.result;
           },
@@ -405,6 +407,7 @@ export function createWorkflowTool(
                 prompt: event.prompt,
                 profile: event.subagentType,
                 backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
                 queuedAt: new Date(queuedAt).toISOString(),
               },
             });
@@ -414,7 +417,8 @@ export function createWorkflowTool(
               label: event.label,
               phase: event.phase,
               subagentType: event.subagentType,
-              backend: profiles.get(event.subagentType)?.backend,
+              backend: profile?.backend,
+              harness: profile ? selectorHarness(profile) : undefined,
               status: "queued",
               externalRunId: runRecord.runId,
               recordPath: runRecord.directory,
@@ -428,6 +432,7 @@ export function createWorkflowTool(
             await journalWriter?.appendAgentQueued(event);
           },
           onAgentStart: (event) => {
+            const profile = profiles.get(event.subagentType);
             let agent = snapshot.agents.find((item) => item.index === event.index);
             if (!agent) {
               agent = {
@@ -435,7 +440,8 @@ export function createWorkflowTool(
                 label: event.label,
                 phase: event.phase,
                 subagentType: event.subagentType,
-                backend: profiles.get(event.subagentType)?.backend,
+                backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
                 status: event.cached ? "done" : "running",
                 activity: [],
                 activityCount: 0,
@@ -463,7 +469,8 @@ export function createWorkflowTool(
                 queuedAt: agent.queuedAt,
                 executionStartedAt: event.executionStartedAt,
                 description: event.label,
-                backend: profiles.get(event.subagentType)?.backend,
+                backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
               });
             }
             emit();
@@ -737,9 +744,16 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
 
   if (expanded && details.status !== "running") {
     if (details.result !== undefined) {
-      const output = typeof details.result === "string" ? details.result : JSON.stringify(details.result, null, 2);
+      const isTextAnswer = typeof details.result === "string";
+      const output = isTextAnswer ? details.result as string : JSON.stringify(details.result, null, 2);
       const preview = output.length > 4_000 ? `${output.slice(0, 4_000)}\n… ${output.length - 4_000} more characters` : output;
-      container.addChild(new Text(`  ${theme.bold("Final output")}\n${preview.split("\n").map((line) => `  ${line}`).join("\n")}`, 0, 0));
+      container.addChild(new Text(`  ${theme.bold("Final output")}`, 0, 0));
+      // A text answer renders as Markdown (see subagent-render.ts's shared
+      // renderOutputText); a structured (object/array/etc) result stays
+      // formatted data, never Markdown-interpreted prose, per this issue's
+      // "render structured workflow results as formatted data without
+      // inventing a prose answer" contract.
+      container.addChild(isTextAnswer ? renderOutputText(preview, 2) : new Text(preview.split("\n").map((line) => `  ${line}`).join("\n"), 0, 0));
     }
     if (details.runId) {
       container.addChild(new Text(`  ${theme.fg("dim", `Workflow evidence ${details.runId}`)}`, 0, 0));

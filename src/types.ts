@@ -82,6 +82,8 @@ export interface WorkflowAgentSnapshot {
   phase?: string;
   subagentType?: string;
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   startedAt?: number;
   queuedAt?: number;
@@ -177,6 +179,8 @@ export interface SubagentProgressNode {
   description: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   startedAt: number;
   queuedAt?: number;
@@ -229,6 +233,8 @@ export interface SubagentToolDetails {
   description: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
+  /** Resolved harness name (registered pi-* config, or equal to backend for agy/claude/codex). Persisted explicitly — never reparsed from subagentType/label. */
+  harness?: string;
   status: SubagentRunStatus;
   result?: string;
   error?: string;

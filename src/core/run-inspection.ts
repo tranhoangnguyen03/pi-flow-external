@@ -69,6 +69,10 @@ export interface RunRecordListItem {
   error?: string;
   description?: string;
   backend?: string;
+  /** Resolved profile/subagentType name, when persisted in run-record metadata. Never reparsed from other fields. */
+  profile?: string;
+  /** Resolved harness (registered pi-* config, or equal to backend for agy/claude/codex), when persisted in run-record metadata. */
+  harness?: string;
   project?: string;
   parentSessionId?: string;
   workflowRunId?: string;
@@ -340,6 +344,8 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
     ...(boundedString(terminal?.error) ? { error: boundedString(terminal?.error) } : {}),
     ...(boundedString(metadata?.description) ? { description: boundedString(metadata?.description) } : {}),
     ...(asString(metadata?.backend) ? { backend: asString(metadata?.backend) } : {}),
+    ...(metadataProfileName(metadata) ? { profile: metadataProfileName(metadata) } : {}),
+    ...(metadataHarness(metadata) ? { harness: metadataHarness(metadata) } : {}),
     ...(asString(metadata?.project) ? { project: asString(metadata?.project) } : {}),
     ...(asString(metadata?.parentSessionId) ? { parentSessionId: asString(metadata?.parentSessionId) } : {}),
     ...(asString(metadata?.workflowRunId) ? { workflowRunId: asString(metadata?.workflowRunId) } : {}),
@@ -422,7 +428,8 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
     task: compactObject({
       description: boundedString(metadata?.description),
       backend: metadata?.backend,
-      profile: typeof metadata?.profile === "string" ? metadata.profile : asRecord(metadata?.profile)?.name,
+      profile: metadataProfileName(metadata),
+      harness: metadataHarness(metadata),
       project: boundedString(metadata?.project),
       parentSessionId: metadata?.parentSessionId,
       workflowRunId: metadata?.workflowRunId,
@@ -815,6 +822,31 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Resolved profile/subagentType name from persisted run-record metadata.
+ * `metadata.profile` has shipped in two shapes historically: a plain string
+ * (the direct `Agent`/workflow-child metadata this package writes today) and
+ * a full profile object (spawn.ts's own fallback record creation, used when
+ * a caller does not pre-create its own run record). Both are read here, in
+ * ONE place, so `readListItem` and `summaryProjection` cannot independently
+ * drift on how they unpack it.
+ */
+function metadataProfileName(metadata: Record<string, unknown> | undefined): string | undefined {
+  return typeof metadata?.profile === "string" ? metadata.profile : asString(asRecord(metadata?.profile)?.name);
+}
+
+/**
+ * Resolved harness (registered pi-* config, or equal to backend for
+ * agy/claude/codex) from persisted run-record metadata: an explicit
+ * `metadata.harness` field when present (every current call site writes
+ * one), falling back to the embedded profile object's own `harness` field
+ * for the historical spawn.ts fallback shape. Never reparsed/guessed from
+ * `profile`/`subagentType`'s name string.
+ */
+function metadataHarness(metadata: Record<string, unknown> | undefined): string | undefined {
+  return asString(metadata?.harness) ?? asString(asRecord(metadata?.profile)?.harness);
 }
 
 function isNotFound(error: unknown): boolean {

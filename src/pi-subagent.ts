@@ -21,6 +21,7 @@ import {
   getSubagentProfiles,
   mergeSynthesizedPiProfiles,
   resolveExternalProfile,
+  selectorHarness,
 } from "./profiles.ts";
 import { getConfiguredHarnessNames, loadHarnessConfigs } from "./harnesses.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
@@ -419,6 +420,7 @@ function createAgentTool(
           description: params.description,
           subagentType,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           status: "error",
           error,
         });
@@ -448,10 +450,11 @@ function createAgentTool(
           prompt: briefing.prompt,
           profile: profile.name,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           queuedAt: new Date(queuedAt).toISOString(),
         },
       });
-      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend);
+      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend, selectorHarness(profile));
       progress.context = briefing.context;
       progress.queuedAt = queuedAt;
       progress.runId = runRecord.runId;
@@ -486,6 +489,7 @@ function createAgentTool(
             description: params.description,
             subagentType,
             backend: profile.backend,
+            harness: selectorHarness(profile),
             status,
             error: message,
             progress: run.progress,
@@ -573,6 +577,7 @@ function createAgentTool(
           description: params.description,
           subagentType,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           status: "queued",
           runId: runRecord.runId,
           recordPath: runRecord.directory,

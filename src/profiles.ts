@@ -206,8 +206,14 @@ export interface ExternalAgentSelection {
   subagentType?: string;
 }
 
-/** The name a profile is selected by: an external harness, or a pi-* config. */
-function selectorHarness(profile: SubagentProfile): string {
+/**
+ * The name a profile is selected by: an external harness, or a pi-* config.
+ * Exported as the single authoritative "effective harness" resolution — the
+ * same computation run-record metadata, live progress nodes, and workflow
+ * child snapshots persist as `harness`, so that field is never reparsed or
+ * guessed from a profile/subagentType name elsewhere.
+ */
+export function selectorHarness(profile: SubagentProfile): string {
   return profile.harness ?? profile.backend;
 }
 

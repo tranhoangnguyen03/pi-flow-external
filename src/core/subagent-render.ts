@@ -1,5 +1,5 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text, TruncatedText, type Component } from "@earendil-works/pi-tui";
 import { getBackendAgentLabel } from "./display.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
@@ -9,6 +9,45 @@ export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
 const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
 const OUTPUT_DISPLAY_PREVIEW_CHARS = 4_000;
 export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
+
+/**
+ * Renders a text answer as Markdown when a host theme is available, falling
+ * back to plain text otherwise — never throwing. `getMarkdownTheme()` reads
+ * a process-global theme singleton that only interactive-mode startup
+ * initializes (`initTheme()`); a headless/RPC render, an uninitialized test
+ * harness, or any other caller without that startup step must still produce
+ * a readable row instead of crashing the tool card. This is the single
+ * shared "render a result body" primitive for `Agent` (subagent-render.ts),
+ * `workflow` (its own final-output block), and `external_runs`'s output/
+ * final views — the last mile of the shared-rendering fix for issue #52's
+ * "still plain Text for output rather than rendered Markdown" gap.
+ */
+class SafeMarkdown implements Component {
+  private readonly markdown: Markdown;
+  private readonly fallback: Text;
+
+  constructor(text: string, paddingX: number, paddingY: number) {
+    this.fallback = new Text(text, paddingX, paddingY);
+    this.markdown = new Markdown(text, paddingX, paddingY, getMarkdownTheme());
+  }
+
+  render(width: number): string[] {
+    try {
+      return this.markdown.render(width);
+    } catch {
+      return this.fallback.render(width);
+    }
+  }
+
+  invalidate(): void {
+    this.markdown.invalidate();
+    this.fallback.invalidate();
+  }
+}
+
+export function renderOutputText(text: string, paddingX = 0, paddingY = 0): Component {
+  return new SafeMarkdown(text, paddingX, paddingY);
+}
 
 export interface RenderableSubagentNode {
   context?: ParentContextReceipt;
@@ -281,7 +320,8 @@ export function renderSubagentNode(
       ? `${output.slice(0, OUTPUT_DISPLAY_PREVIEW_CHARS)}\n… ${output.length - OUTPUT_DISPLAY_PREVIEW_CHARS} more characters`
       : output;
     const label = node.status === "done" ? "Final output" : "Interrupted output";
-    container.addChild(new Text(`${indent}  ${theme.bold(label)}\n${preview.split("\n").map((line) => `${indent}  ${line}`).join("\n")}`, 0, 0));
+    container.addChild(new Text(`${indent}  ${theme.bold(label)}`, 0, 0));
+    container.addChild(renderOutputText(preview, indent.length + 2));
   }
   const runId = node.runId ?? node.externalRunId;
   if (runId) {

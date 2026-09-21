@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as runInspection from "../src/core/run-inspection.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
@@ -196,6 +197,52 @@ describe("external_runs", () => {
       outputRef: { runId: "run_second", view: "output" },
       diagnosticsRef: { runId: "run_second", view: "diagnostics" },
     });
+  });
+
+  it("never reads a target's evidence from disk once the shared wait budget is already exhausted", async () => {
+    const { execute, runsDirectory } = setup();
+    // Both records are durable-only (no live registry entry), so `wait`
+    // resolves them through getRunRecord/terminalRecord, whose synthesized
+    // outcome deliberately carries no in-memory `.result` — collecting their
+    // text always requires an inspectRun (disk) read, the exact path that
+    // must be skipped once the shared budget runs out.
+    const first = await completedRecord(runsDirectory, { description: "First" });
+    const second = await completedRecord(runsDirectory, { description: "Second" });
+    const inspectRunSpy = vi.spyOn(runInspection, "inspectRun");
+
+    // limitBytes is sized to fully consume "answer" (6 bytes) plus envelope
+    // room, leaving nothing for a second read.
+    const waited = await execute({ action: "wait", runIds: [first.runId, second.runId], limitBytes: 6 });
+    const outcomes = (waited as any).details.outcomes;
+    expect(outcomes[0]).toMatchObject({ runId: first.runId, result: "answer", resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({ runId: second.runId, resultTruncated: true });
+    expect(outcomes[1].result).toBeUndefined();
+    // Exactly one disk read: the first target, which still had budget. The
+    // second target's evidence was never touched once the budget hit zero.
+    expect(inspectRunSpy).toHaveBeenCalledTimes(1);
+    expect(inspectRunSpy).toHaveBeenCalledWith(expect.objectContaining({ runId: first.runId }));
+    inspectRunSpy.mockRestore();
+  });
+
+  it("spends the wait budget in requested order, not settlement order — the same targets and final states spend the budget identically regardless of which one raced to settle first", async () => {
+    const { execute, registry } = setup();
+    let finishA!: (value: string) => void;
+    let finishB!: (value: string) => void;
+    registry.start({ runId: "run_ordered_a", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finishA = resolve; }) });
+    registry.start({ runId: "run_ordered_b", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finishB = resolve; }) });
+
+    const waited = execute({ action: "wait", runIds: ["run_ordered_a", "run_ordered_b"], limitBytes: 60 });
+    // "b" (requested second) settles first, and with a longer result than
+    // "a" — a settlement-order spend would give "b" first claim on the
+    // budget instead of "a".
+    finishB("B".repeat(50));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    finishA("A".repeat(50));
+    const outcomes = (await waited as any).details.outcomes;
+    // Requested order preserved regardless of settlement race: run_ordered_a
+    // is spent first and gets the full budget it fits in.
+    expect(outcomes[0]).toMatchObject({ runId: "run_ordered_a", result: "A".repeat(50), resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({ runId: "run_ordered_b", result: "B".repeat(10), resultTruncated: true });
   });
 
   it("emits bounded live progress via onUpdate while waiting, identifying watched targets, and stops updating once the wait settles without cancelling the watched work", async () => {
