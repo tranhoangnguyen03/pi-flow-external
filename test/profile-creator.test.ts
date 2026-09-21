@@ -97,6 +97,11 @@ describe("profile creator", () => {
       .toThrow('Profile name must start with "claude-".');
   });
 
+  it("rejects an invalid backend in compileProfile with the full list of supported backends", () => {
+    expect(() => compileProfile({ ...profile, backend: "invalid-backend" as any, name: "invalid-backend-reviewer" }))
+      .toThrow("Profile backend must be claude, codex, agy, grok, or a registered pi-* harness name.");
+  });
+
   it("installs only after a successful smoke test", async () => {
     const agentDir = await makeAgentDir();
     const finalPath = join(agentDir, "subagents", `${profile.name}.md`);

@@ -23,6 +23,7 @@ import {
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent, isTransientAgyFailure } from "./agy.ts";
+import { spawnGrokSubagent } from "./grok.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -114,7 +115,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function isNestedToolName(value: unknown): boolean {
   if (typeof value !== "string") return false;
-  return ["agent", "spawn_agent", "invoke_subagent", "send_input", "resume_agent", "wait_agent", "close_agent"]
+  return ["agent", "spawn_agent", "spawn_subagent", "invoke_subagent", "send_input", "resume_agent", "wait_agent", "close_agent"]
     .includes(value.trim().toLowerCase().replaceAll("-", "_"));
 }
 
@@ -122,7 +123,7 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
   const event = asRecord(value);
   if (!event) return false;
 
-  if (backend === "claude") {
+  if (backend === "claude" || backend === "grok") {
     const message = asRecord(event.message);
     return event.type === "assistant" && Array.isArray(message?.content) && message.content.some((content) => {
       const block = asRecord(content);
@@ -530,6 +531,27 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       outputSchema: params.outputSchema,
       permission: params.permission,
       maxBudgetUsd: params.maxBudgetUsd,
+      resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
+    });
+  }
+  if (params.profile.backend === "grok") {
+    return spawnGrokSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+      permission: params.permission,
       resumeSessionId: params.resumeSessionId,
       executionStartedAt: params.executionStartedAt,
     });

@@ -13,5 +13,8 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
   if (backend === "agy") {
     return "Antigravity";
   }
+  if (backend === "grok") {
+    return "Grok CLI";
+  }
   return "Agent";
 }

@@ -46,7 +46,7 @@ describe("external_help unknown harness filter", () => {
     await withAgentDir(agentDir, async () => {
       const tool = makeTool();
       await expect(tool.execute("call-1", { topic: "roles", harness: "not-a-real-harness" }, undefined, undefined, fakeCtx(agentDir)))
-        .rejects.toThrow(/Unknown harness "not-a-real-harness"\. Configured harnesses: agy, claude, codex\./);
+        .rejects.toThrow(/Unknown harness "not-a-real-harness"\. Configured harnesses: agy, claude, codex, grok\./);
     });
   });
 
@@ -69,7 +69,7 @@ describe("external_help unknown harness filter", () => {
     await withAgentDir(agentDir, async () => {
       const tool = makeTool();
       await expect(tool.execute("call-3", { topic: "permissions", harness: "pi-missing" }, undefined, undefined, fakeCtx(agentDir)))
-        .rejects.toThrow(/Configured harnesses: agy, claude, codex, pi-deepseek\./);
+        .rejects.toThrow(/Configured harnesses: agy, claude, codex, grok, pi-deepseek\./);
     });
   });
 
