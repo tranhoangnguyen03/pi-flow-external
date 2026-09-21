@@ -12,14 +12,20 @@ import type { SubagentBackend, SubagentProfile } from "./types.ts";
  * Role bodies themselves live in default-roles.ts, the one canonical source
  * also used to synthesize the same six roles for named Pi harness configs.
  */
-const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy"];
-const BACKEND_LABELS: Record<string, string> = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity" };
+const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok"];
+const BACKEND_LABELS: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  agy: "Antigravity",
+  grok: "Grok CLI",
+};
 
 /**
  * Bump the suffix when the default roster changes so upgrades re-seed the new
  * set (still never overwriting files the user already has).
  */
-const SEED_MARKER = ".pi-flow-defaults-seeded-v1";
+const SEED_MARKER_V1 = ".pi-flow-defaults-seeded-v1";
+const SEED_MARKER_V2 = ".pi-flow-defaults-seeded-v2";
 
 export function defaultProfileNames(): string[] {
   return DEFAULT_BACKENDS.flatMap((backend) => Object.keys(DEFAULT_ROLES).map((role) => `${backend}-${role}`));
@@ -54,12 +60,18 @@ export interface SeedResult {
  */
 export function seedDefaultProfiles(agentDir: string): SeedResult {
   const dir = join(agentDir, "subagents");
-  const marker = join(dir, SEED_MARKER);
-  if (existsSync(marker)) return { seeded: false, added: [] };
+  const markerV2 = join(dir, SEED_MARKER_V2);
+  if (existsSync(markerV2)) return { seeded: false, added: [] };
   mkdirSync(dir, { recursive: true });
 
+  const markerV1 = join(dir, SEED_MARKER_V1);
+  const isV1 = existsSync(markerV1);
+  const candidateNames = isV1
+    ? defaultProfileNames().filter((name) => name.startsWith("grok-"))
+    : defaultProfileNames();
+
   const added: string[] = [];
-  for (const name of defaultProfileNames()) {
+  for (const name of candidateNames) {
     const path = join(dir, `${name}.md`);
     if (existsSync(path)) continue;
     const profile = buildDefaultProfile(name);
@@ -67,6 +79,10 @@ export function seedDefaultProfiles(agentDir: string): SeedResult {
     writeFileSync(path, compileProfile(profile), { encoding: "utf8", flag: "wx", mode: 0o600 });
     added.push(name);
   }
-  writeFileSync(marker, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    writeFileSync(markerV2, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
+  }
   return { seeded: true, added };
 }

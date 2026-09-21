@@ -108,6 +108,22 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         backend,
         caveat: tier === "danger" ? undefined : "runs unsandboxed; tier advisory only",
       };
+    case "grok":
+      // --sandbox is a real kernel-level sandbox on the grok CLI, enforced at
+      // every tier; its network-blocking guarantee is Linux-only, so the
+      // readonly caveat discloses that rather than overstating cross-platform
+      // enforcement. edit's --sandbox workspace limits writes to the cwd.
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat:
+          tier === "readonly"
+            ? "kernel sandbox; network blocking is Linux-only"
+            : tier === "edit"
+              ? "writes limited to workspace"
+              : undefined,
+      };
     case "pi":
       // A curated builtins-only tool surface bounds which tool *names* exist
       // (see spawn.ts's pi branch); it is a real, truthful tool-level
@@ -149,6 +165,10 @@ export function buildPermissionArgs(
       // hard-denies read-only tools like read_url_content, so we always pass the
       // bypass flag and treat readonly/edit as advisory profile-body instructions.
       return ["--dangerously-skip-permissions"];
+    case "grok":
+      if (tier === "readonly") return ["--sandbox", "read-only", "--permission-mode", "bypassPermissions"];
+      if (tier === "edit") return ["--sandbox", "workspace", "--permission-mode", "bypassPermissions"];
+      return ["--sandbox", "off", "--permission-mode", "bypassPermissions"];
     default:
       return [];
   }

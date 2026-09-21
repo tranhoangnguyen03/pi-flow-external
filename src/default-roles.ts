@@ -1,6 +1,6 @@
 /**
  * Canonical role bodies shared by every backend that ships the default
- * roster: the three external CLIs (claude/codex/agy, one file per role) and
+ * roster: the four external CLIs (claude/codex/agy/grok, one file per role) and
  * any registered named Pi harness config (synthesized in-memory per role,
  * see src/profiles.ts). This module is a dependency-free leaf: it must not
  * import from profiles.ts or defaults.ts, so both can import from here

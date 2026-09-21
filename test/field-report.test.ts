@@ -88,6 +88,30 @@ describe("field report", () => {
       JSON.stringify({ type: "backend_event" }),
     ].join("\n") + "\n");
 
+    const grokDirectory = await makeRunDirectory(baseDirectory, "run_grok");
+    await writeFile(join(grokDirectory, "summary.json"), JSON.stringify({
+      version: 1,
+      runId: "run_grok",
+      startedAt: "2026-08-21T00:05:00.000Z",
+      finishedAt: "2026-08-21T00:06:00.000Z",
+      eventCount: 3,
+      attemptedEventCount: 3,
+      writeErrorCount: 0,
+      summary: {
+        backend: "grok",
+        profile: "grok-reviewer",
+        status: "done",
+        durationMs: 60_000,
+        backendEventCount: 1,
+        usage: { input: 50, output: 10, cacheRead: 5, cost: 0.005, costKnown: true },
+      },
+    }));
+    await writeFile(join(grokDirectory, "events.ndjson"), [
+      { type: "run_started" },
+      { type: "backend_event" },
+      { type: "run_finished" },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+
     const malformedDirectory = await makeRunDirectory(baseDirectory, "run_malformed");
     await writeFile(join(malformedDirectory, "summary.json"), "{}\n");
 
@@ -97,20 +121,20 @@ describe("field report", () => {
     const report = JSON.parse(output);
 
     expect(report).toMatchObject({
-      runs: 4,
-      byStatus: { done: 2, incomplete: 2 },
-      byBackend: { codex: 1, agy: 1, claude: 1, unknown: 1 },
+      runs: 5,
+      byStatus: { done: 3, incomplete: 2 },
+      byBackend: { codex: 1, agy: 1, claude: 1, grok: 1, unknown: 1 },
       averageDurationMs: 60_000,
       incompleteRecords: 3,
       runsWithNoBackendEvents: 1,
       runsWithNestedActivity: 1,
       runsWithExtendedTimeout: 1,
       usage: {
-        input: 100,
-        output: 20,
-        cacheRead: 10,
-        cost: 0.01,
-        reportedCost: 0.01,
+        input: 150,
+        output: 30,
+        cacheRead: 15,
+        cost: 0.015,
+        reportedCost: 0.015,
         estimatedCost: 0,
         unknownCostRuns: 3,
       },

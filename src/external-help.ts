@@ -23,7 +23,7 @@ const externalHelpParameters = Type.Object({
   }),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, or a registered pi-* harness. Do not use with topic workflow.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, or a registered pi-* harness. Do not use with topic workflow.",
   })),
 });
 
@@ -46,6 +46,7 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
   agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
   claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
   codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
+  grok: "grok: readonly uses --sandbox read-only, edit uses --sandbox workspace, and danger uses --sandbox off, always alongside --permission-mode bypassPermissions. Enforced by a kernel sandbox, but network blocking is Linux-only; edit limits writes to the workspace. No execution-lane danger floor, since edit already permits shell.",
   pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project extensions, skills, or MCP tools load into the child. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
 };
 
@@ -53,7 +54,7 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
 function permissionHelpBackend(harness: string, configuredPiHarnesses: ReadonlySet<string>): ExternalHarness | "pi" {
   if ((EXTERNAL_HARNESSES as readonly string[]).includes(harness)) return harness as ExternalHarness;
   // Callers only reach here after validateHarnessFilter, so any name that is
-  // not one of the three external harnesses is guaranteed to be a registered
+  // not one of the external harnesses is guaranteed to be a registered
   // pi-* harness at this point — never an unrecognized string silently
   // treated as "pi".
   return "pi";
@@ -74,7 +75,7 @@ function permissionHelp(harness: string | undefined, configuredPiHarnesses: Read
  * Reject an unknown harness filter up front, listing the live configured
  * set, rather than letting it silently fall through to "pi" (permissions)
  * or an empty catalog (roles). "Configured" means what a caller could
- * actually select today: the three external CLIs plus any registered
+ * actually select today: the external CLIs plus any registered
  * pi-* harness — never a raw guess at what might exist.
  */
 function validateHarnessFilter(harness: string | undefined, configuredPiHarnesses: ReadonlySet<string>): void {

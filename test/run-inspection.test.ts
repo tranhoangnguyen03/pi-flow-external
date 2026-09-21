@@ -1,7 +1,7 @@
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRunRecord } from "../src/core/run-record.ts";
 import { inspectRun, listRunRecords } from "../src/core/run-inspection.ts";
 
@@ -90,6 +90,48 @@ describe("run evidence inspection", () => {
     await repeated.finish({ status: "done", result: "same answer", assistantOutput: { status: "final", messages: [{ id: "same", text: "same answer" }] } });
     expect((await inspectRun({ runsDirectory: root, runId: repeated.runId, view: "output" })).items)
       .toEqual([{ id: "same", text: "same answer" }]);
+  });
+
+  it("extracts grok assistant messages and activity from streamed events during inspection", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+      await record.event("backend_event", {
+        backend: "grok",
+        event: { type: "assistant", message: { id: "m1", content: [{ type: "text", text: "first finding" }] } },
+      });
+      // A tool_use-only assistant event produces no output text, but must
+      // still register as activity via grokActivityFromEvent — otherwise a
+      // grok child mid-tool-call would look stale to the parent.
+      vi.setSystemTime(new Date("2024-01-01T00:00:01.000Z"));
+      await record.event("backend_event", {
+        backend: "grok",
+        event: { type: "assistant", message: { id: "m2", content: [{ type: "tool_use", name: "read_file", input: { path: "src/index.ts" } }] } },
+      });
+      // The terminal "result" event is not re-projected as output (mirrors the
+      // claude gate): only "assistant" events project text here.
+      vi.setSystemTime(new Date("2024-01-01T00:00:02.000Z"));
+      await record.event("backend_event", {
+        backend: "grok",
+        event: { type: "result", subtype: "success", is_error: false, result: "canonical answer" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output" });
+    expect(page.outputStatus).toBe("preliminary");
+    expect(page.items).toEqual([{ id: "m1", text: "first finding" }]);
+
+    const summaryPage = await inspectRun({ runsDirectory: root, runId: record.runId, view: "summary" });
+    const projection = JSON.parse(summaryPage.items.map((item) => item.text).join(""));
+    expect(projection.state.firstActivityAt).toBe("2024-01-01T00:00:00.000Z");
+    // Advances to m2's timestamp, not m1's or the terminal result's: proof
+    // that grokActivityFromEvent (not just outputFromEvent) drives activity.
+    expect(projection.state.lastActivityAt).toBe("2024-01-01T00:00:01.000Z");
+    expect(projection.output).toEqual({ available: true, status: "preliminary", finalAvailable: false });
   });
 
   it("continues a single oversized message with a bound cursor", async () => {
