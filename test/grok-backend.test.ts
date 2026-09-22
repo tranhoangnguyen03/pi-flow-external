@@ -15,6 +15,7 @@ import {
   grokUsageToSubagentUsage,
   normalizeGrokReasoningEffort,
   spawnGrokSubagent,
+  diagnoseGrokSandboxError,
 } from "../src/core/grok.ts";
 import { inspectRun } from "../src/core/run-inspection.ts";
 import { MAX_STDOUT_LINE_CHARS } from "../src/core/stream.ts";
@@ -873,6 +874,103 @@ console.log(JSON.stringify({
       cursor = page.nextCursor;
     } while (cursor);
     expect(output).toBe("grok child done");
+    disposeSession(session);
+  });
+
+  it("does not attach sandbox diagnosis when stderr does not match both required markers", () => {
+    expect(diagnoseGrokSandboxError("grok: authentication token expired")).toBeUndefined();
+    expect(diagnoseGrokSandboxError("could not resolve runtime-socket deny path /var/run/docker.sock")).toBeUndefined();
+    expect(diagnoseGrokSandboxError("endpoint is a symlink")).toBeUndefined();
+  });
+
+  it("preserves requested readonly permission receipt and surfaces actionable diagnosis on runtime socket symlink failure", async () => {
+    const binDir = join(tempDir, "bin-grok-symlink-receipt");
+    mkdirSync(binDir, { recursive: true });
+
+    const invocationLogPath = join(tempDir, "grok-symlink-invocations.json");
+    const fakeGrokPath = join(binDir, "grok");
+    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+for await (const _chunk of process.stdin) {}
+const invocations = existsSync(${JSON.stringify(invocationLogPath)})
+  ? JSON.parse(readFileSync(${JSON.stringify(invocationLogPath)}, 'utf8'))
+  : [];
+invocations.push(process.argv.slice(2));
+writeFileSync(${JSON.stringify(invocationLogPath)}, JSON.stringify(invocations));
+
+process.stderr.write(
+  "warning: sandbox could not be applied: socket deny resolution failed: could not resolve runtime-socket deny path /var/run/docker.sock: endpoint is a symlink\\n" +
+  "error: could not apply the 'read-only' sandbox profile; see the warning above for the cause. Refusing to start with its protections missing.\\n"
+);
+process.exit(1);
+`);
+    chmodSync(fakeGrokPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, registration } = await createSession();
+    let rootContinuationContext: Context | undefined;
+    registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("Agent", {
+        description: "Grok read-only review",
+        role: "reviewer",
+        harness: "grok",
+        prompt: "Review PR changes.",
+      })], { stopReason: "toolUse" }),
+      (context) => {
+        rootContinuationContext = context;
+        return fauxAssistantMessage("acknowledged failure");
+      },
+    ]);
+
+    await session.prompt("Run review with Grok.");
+
+    // Exactly one invocation: never automatically retried
+    const invocations = JSON.parse(readFileSync(invocationLogPath, "utf8"));
+    expect(invocations).toHaveLength(1);
+    // Verified read-only sandbox args: never downgraded to off
+    expect(invocations[0]).toContain("--sandbox");
+    expect(invocations[0][invocations[0].indexOf("--sandbox") + 1]).toBe("read-only");
+    expect(invocations[0]).toContain("--permission-mode");
+    expect(invocations[0][invocations[0].indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+
+    const recordsRoot = join(agentDir, "pi-flow-external", "runs");
+    const runDirectories = readdirSync(recordsRoot);
+    expect(runDirectories).toHaveLength(1);
+    const recordDirectory = join(recordsRoot, runDirectories[0]!);
+    const summary = JSON.parse(readFileSync(join(recordDirectory, "summary.json"), "utf8"));
+
+    // Receipt preserves requested readonly permission tier and enforcement
+    expect(summary.summary).toMatchObject({
+      backend: "grok",
+      status: "error",
+      permission: { tier: "readonly", enforced: true },
+    });
+
+    // Summary error preserves full exact stderr and appends the actionable diagnostic hint
+    expect(summary.summary.error).toContain(
+      "warning: sandbox could not be applied: socket deny resolution failed: could not resolve runtime-socket deny path /var/run/docker.sock: endpoint is a symlink",
+    );
+    expect(summary.summary.error).toContain(
+      "error: could not apply the 'read-only' sandbox profile; see the warning above for the cause. Refusing to start with its protections missing.",
+    );
+    expect(summary.summary.error).toContain(
+      "Diagnostic: Grok sandbox initialization failed because a runtime socket deny path is a symlink.",
+    );
+    expect(summary.summary.error).toContain(
+      "Do not remove or alter the socket as a runner workaround.",
+    );
+    expect(summary.summary.error).toContain(
+      "pi-flow-external preserves requested sandbox permissions and will not automatically downgrade or retry with protections disabled.",
+    );
+    expect(summary.summary.error).toContain(
+      "Run on a compatible host or upgrade to an upstream Grok release that resolves socket symlinks.",
+    );
+
+    // Parent context message also received the failure with the exact stderr and hint
+    const continuationText = JSON.stringify(rootContinuationContext?.messages);
+    expect(continuationText).toContain("socket deny resolution failed");
+    expect(continuationText).toContain("Grok sandbox initialization failed because a runtime socket deny path is a symlink");
+
     disposeSession(session);
   });
 });

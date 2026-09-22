@@ -21,6 +21,7 @@ import { abortChildTree } from "./process-tree.ts";
 import { selectorHarness } from "../profiles.ts";
 
 const MUSE_COMMAND = "muse";
+const MUSE_PROVIDER = "meta";
 
 export type MuseReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -49,6 +50,38 @@ export function normalizeMuseReasoningEffort(thinkingLevel: ThinkingLevel | unde
   return undefined;
 }
 
+/**
+ * `muse exec --help` syntactically lists `none` as a valid `--reasoning-effort`
+ * value, but `--provider meta` rejects it at launch (verified against
+ * installed Muse Code 1.3.0: `--reasoning-effort none is not supported with
+ * --provider meta; choose minimal|low|medium|high|xhigh|max|ultra`, exit 2).
+ * `thinking: "off"` therefore has no representable effort for this provider —
+ * and it is not a rare edge case. `off` is the pinned `pi-agent-core` SDK's
+ * own session-level thinking default (`agent.js`/`agent-harness.js`/
+ * `session.js`), so any muse call whose profile leaves `thinking` unset
+ * inherits `"off"` from the parent session unless a user has explicitly
+ * raised it; `pi-subagent.ts`/`workflow/tool.ts` resolve
+ * `profile.thinking ?? <session thinking level>` before ever reaching
+ * {@link buildMuseArgs}, so a profile pinning `thinking: off` in its own
+ * frontmatter reaches this same check the same way. `buildMuseArgs` applies
+ * one more `thinkingLevel ?? profile.thinking` fallback of its own (for
+ * direct/test callers), so this is checked once on that fully merged,
+ * already-normalized value — inherited-default and profile-pinned `off`
+ * are indistinguishable by the time they get here, and both are rejected
+ * rather than one silently downgraded to `minimal` (a different, undisclosed
+ * reasoning level from what was actually requested or inherited).
+ */
+function assertMuseReasoningEffortSupported(effort: MuseReasoningEffort | undefined, profileName: string): void {
+  if (effort !== "none") {
+    return;
+  }
+  throw new Error(
+    `Muse profile "${profileName}" resolved thinking "off", which has no --reasoning-effort equivalent under --provider ${MUSE_PROVIDER} ` +
+      `(muse rejects "--reasoning-effort none"). Pin this Muse profile's thinking to minimal, low, medium, high, or xhigh, ` +
+      `or select a supported parent thinking level. An unset profile inherits the parent's level, which may still be off.`,
+  );
+}
+
 export function buildMuseArgs({
   promptFilePath,
   schemaFilePath,
@@ -66,7 +99,10 @@ export function buildMuseArgs({
   permission?: PermissionTier;
   resumeSessionId?: string;
 }): string[] {
-  const args: string[] = ["exec", "--json", "--provider", "meta", "--workspace", workspace, "--prompt-file", promptFilePath];
+  const effort = normalizeMuseReasoningEffort(thinkingLevel ?? profile.thinking);
+  assertMuseReasoningEffortSupported(effort, profile.name);
+
+  const args: string[] = ["exec", "--json", "--provider", MUSE_PROVIDER, "--workspace", workspace, "--prompt-file", promptFilePath];
   if (schemaFilePath) {
     args.push("--output-schema", schemaFilePath);
   }
@@ -77,7 +113,6 @@ export function buildMuseArgs({
   if (profile.model) {
     args.push("--model", profile.model);
   }
-  const effort = normalizeMuseReasoningEffort(thinkingLevel ?? profile.thinking);
   if (effort) {
     args.push("--reasoning-effort", effort);
   }

@@ -274,6 +274,29 @@ export function extractGrokError(event: Record<string, unknown>): string | undef
   return undefined;
 }
 
+/**
+ * Produces an actionable diagnosis when Grok's kernel sandbox refuses to start
+ * because a runtime socket deny path is a symlink.
+ *
+ * Preserves the exact stderr and explains:
+ * - Upstream Grok sandbox initialization failed because a runtime socket deny path is a symlink.
+ * - The socket must NOT be removed or altered as a runner workaround.
+ * - pi-flow-external preserves requested sandbox permissions and will never automatically downgrade
+ *   or retry with protections disabled.
+ * - Recommends running on a compatible host or upgrading to an upstream Grok release.
+ */
+export function diagnoseGrokSandboxError(stderr: string): string | undefined {
+  if (!stderr.includes("runtime-socket deny path") || !stderr.includes("endpoint is a symlink")) {
+    return undefined;
+  }
+  return (
+    "Grok sandbox initialization failed because a runtime socket deny path is a symlink. " +
+    "Do not remove or alter the socket as a runner workaround. " +
+    "pi-flow-external preserves requested sandbox permissions and will not automatically downgrade or retry with protections disabled. " +
+    "Run on a compatible host or upgrade to an upstream Grok release that resolves socket symlinks."
+  );
+}
+
 function getPreviewFromRecord(record: Record<string, unknown>): string {
   const candidates = [
     record.command,
@@ -560,8 +583,10 @@ export async function spawnGrokSubagent(params: {
     }
     if (closeResult.code !== 0) {
       const stderr = stderrBuffer.text().trim();
+      const diagnostic = diagnoseGrokSandboxError(stderr);
+      const diagnosticSuffix = diagnostic ? `\n\nDiagnostic: ${diagnostic}` : "";
       throw new Error(
-        `grok exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`,
+        `grok exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}${diagnosticSuffix}`,
       );
     }
 

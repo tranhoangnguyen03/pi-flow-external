@@ -113,14 +113,14 @@ describe("pi-subagent muse backend", () => {
       promptFilePath: "/tmp/prompt.txt",
       workspace: "/tmp/ws",
       profile,
-      thinkingLevel: "off",
+      thinkingLevel: "minimal",
       permission: "danger",
     });
     expect(normalArgs).toEqual([
       "exec", "--json", "--provider", "meta", "--workspace", "/tmp/ws", "--prompt-file", "/tmp/prompt.txt",
       "--yolo",
       "--model", "muse-spark-1.3-contributor",
-      "--reasoning-effort", "none",
+      "--reasoning-effort", "minimal",
     ]);
 
     const resumeArgs = buildMuseArgs({
@@ -165,6 +165,56 @@ describe("pi-subagent muse backend", () => {
     });
     expect(args).not.toContain("--model");
     expect(args).not.toContain("--reasoning-effort");
+  });
+
+  it("rejects an effective thinking level of off instead of building an unsupported --reasoning-effort none", () => {
+    // Profile-pinned: the profile's own frontmatter pins `thinking: off`
+    // explicitly (no per-call thinkingLevel override supplied here).
+    const profilePinnedOff: SubagentProfile = {
+      name: "muse-pinned-off",
+      description: "Muse worker pinned to off",
+      backend: "muse" as any,
+      thinking: "off",
+    };
+    expect(() =>
+      buildMuseArgs({
+        promptFilePath: "/tmp/prompt.txt",
+        workspace: "/tmp/ws",
+        profile: profilePinnedOff,
+        permission: "danger",
+      }),
+    ).toThrow(/muse-pinned-off.*reasoning-effort none/s);
+
+    // Session-inherited: the profile itself declares no thinking, but the
+    // resolved thinkingLevel arriving from the caller is "off" — exactly
+    // what pi-subagent.ts/workflow/tool.ts pass through when the parent
+    // session's own thinking level was never raised above the pi-agent-core
+    // SDK's own "off" default. Must be rejected identically.
+    const profileWithoutThinking: SubagentProfile = {
+      name: "muse-inherits-off",
+      description: "Muse worker",
+      backend: "muse" as any,
+    };
+    expect(() =>
+      buildMuseArgs({
+        promptFilePath: "/tmp/prompt.txt",
+        workspace: "/tmp/ws",
+        profile: profileWithoutThinking,
+        thinkingLevel: "off",
+        permission: "danger",
+      }),
+    ).toThrow(/minimal, low, medium, high, or xhigh/);
+
+    // Supported levels remain unaffected.
+    expect(() =>
+      buildMuseArgs({
+        promptFilePath: "/tmp/prompt.txt",
+        workspace: "/tmp/ws",
+        profile: profileWithoutThinking,
+        thinkingLevel: "minimal",
+        permission: "danger",
+      }),
+    ).not.toThrow();
   });
 
   it("extracts session id, final text, activity narration, and error from envelopes", () => {
@@ -553,6 +603,66 @@ console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reas
     expect(result.details.status).toBe("error");
     expect(result.details.error).toContain("muse failed: API error 402");
     expect(result.details.error).toContain("billing_error");
+  });
+
+  it("fails fast on profile-pinned off thinking without ever spawning the muse process", async () => {
+    // Deliberately no fake `muse` binary on PATH: if the rejection did not
+    // happen before spawn, this would fail with ENOENT instead of the
+    // actionable thinking-level error, proving the check runs pre-launch.
+    process.env.PATH = originalPathEnv ?? "";
+
+    const result = await spawnMuseSubagent({
+      toolCallId: "call_muse_off_thinking",
+      description: "Muse profile-pinned off thinking",
+      prompt: "Should never reach the muse binary.",
+      profile: {
+        name: "muse-pinned-off",
+        description: "Muse worker pinned to off",
+        backend: "muse" as any,
+        thinking: "off",
+      },
+      thinkingLevel: undefined,
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("muse-pinned-off");
+    expect(result.details.error).toContain("reasoning-effort none");
+    expect(result.details.error).toContain("minimal, low, medium, high, or xhigh");
+  });
+
+  it("fails fast on a session-inherited off thinkingLevel (the pi-agent-core SDK's own default) without ever spawning muse", async () => {
+    // Mirrors what pi-subagent.ts/workflow/tool.ts actually pass through:
+    // an unset profile.thinking plus a resolved thinkingLevel of "off",
+    // which is the pinned pi-agent-core session state's own default whenever
+    // no one has explicitly raised thinking above off.
+    process.env.PATH = originalPathEnv ?? "";
+
+    const result = await spawnMuseSubagent({
+      toolCallId: "call_muse_off_thinking_inherited",
+      description: "Muse session-inherited off thinking",
+      prompt: "Should never reach the muse binary.",
+      profile: {
+        name: "muse-inherits-off",
+        description: "Muse worker",
+        backend: "muse" as any,
+      },
+      thinkingLevel: "off",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+    });
+
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toContain("muse-inherits-off");
+    expect(result.details.error).toContain("reasoning-effort none");
+    expect(result.details.error).toContain("minimal, low, medium, high, or xhigh");
   });
 
   it("reports a nonzero muse exit code along with captured stderr", async () => {
