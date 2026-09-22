@@ -606,10 +606,8 @@ console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reas
   });
 
   it("fails fast on profile-pinned off thinking without ever spawning the muse process", async () => {
-    // Deliberately no fake `muse` binary on PATH: if the rejection did not
-    // happen before spawn, this would fail with ENOENT instead of the
-    // actionable thinking-level error, proving the check runs pre-launch.
-    process.env.PATH = originalPathEnv ?? "";
+    // An empty PATH prevents accidentally invoking the real provider if validation regresses.
+    process.env.PATH = "";
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_off_thinking",
@@ -640,7 +638,7 @@ console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reas
     // an unset profile.thinking plus a resolved thinkingLevel of "off",
     // which is the pinned pi-agent-core session state's own default whenever
     // no one has explicitly raised thinking above off.
-    process.env.PATH = originalPathEnv ?? "";
+    process.env.PATH = "";
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_off_thinking_inherited",

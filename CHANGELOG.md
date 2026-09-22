@@ -4,6 +4,14 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.4.1-external.0] - 2026-09-23
+
+### Fixed
+
+- Muse rejects effective `thinking: off` before process launch because its `meta` provider does not support `--reasoning-effort none`. The error explains supported profile/parent levels without silently changing reasoning (#60).
+- Grok runtime-socket symlink sandbox failures include actionable guidance while retaining the original error, requested permissions, and fail-closed behavior. No socket changes, retries, or sandbox downgrade (#61).
+- Added an offline test of the actual Pi `openai-completions` provider payload for optional tool selectors. Client optionality is preserved; the downstream model-facing conversion remains unresolved and tracked in #62. See `docs/tool-schema-compatibility.md`.
+
 ## [2.4.0-external.0] - 2026-09-21
 
 Adds `muse` as a fifth external CLI backend, delegating to Muse Code alongside Claude Code, Codex CLI, Antigravity, and Grok Build CLI. Investigation notes: `docs/plans/muse-backend-prep.md`; ex-ante design issue: none filed — additive backend addition following the same shape as the Grok backend.
