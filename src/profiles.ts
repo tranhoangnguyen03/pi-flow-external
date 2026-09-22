@@ -81,6 +81,24 @@ function parseMaxBudgetUsd(value: unknown): number | "invalid" | undefined {
   return "invalid";
 }
 
+interface ParsedCapabilitySet {
+  value?: string;
+  error?: string;
+}
+
+/**
+ * Unlike the other `parse*` helpers above, a malformed result here does not
+ * drop the whole profile (see the capabilitySetError field on SubagentProfile
+ * for why): it is threaded through as an error string instead of an "invalid"
+ * sentinel so the caller can keep the rest of the profile intact.
+ */
+function parseCapabilitySet(value: unknown): ParsedCapabilitySet {
+  if (typeof value === "string" && value.trim()) {
+    return { value: value.trim() };
+  }
+  return { error: `capabilitySet must be a non-empty string naming a piCapabilitySets entry (got ${JSON.stringify(value)}).` };
+}
+
 export function parseSubagentProfileContent(
   content: string,
   name: string,
@@ -108,6 +126,9 @@ export function parseSubagentProfileContent(
   const permission = parsePermission(parsed.frontmatter.permission);
   const maxBudgetUsd = parseMaxBudgetUsd(parsed.frontmatter.max_budget_usd);
   const owner = optionalString(parsed.frontmatter.owner);
+  const capabilitySet = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "capabilitySet")
+    ? parseCapabilitySet(parsed.frontmatter.capabilitySet)
+    : undefined;
 
   if (
     !description ||
@@ -131,6 +152,8 @@ export function parseSubagentProfileContent(
     permission,
     maxBudgetUsd,
     owner,
+    ...(capabilitySet?.value ? { capabilitySet: capabilitySet.value } : {}),
+    ...(capabilitySet?.error ? { capabilitySetError: capabilitySet.error } : {}),
   };
 }
 
@@ -271,18 +294,130 @@ function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: H
 }
 
 /**
+ * Literal `harness:` value marking a shared custom Pi role template: a
+ * `backend: pi` profile authored once and applied across every registered
+ * `pi-*` harness, instead of being duplicated per harness. This string is
+ * deliberately not a valid registered harness name (`isValidHarnessName`
+ * rejects the `*`), so a shared template can never satisfy
+ * `isExternalAgentProfile`'s registry-membership check and is never admitted
+ * as a directly-selectable native profile — it only exists as a template
+ * that `mergeSynthesizedPiProfiles` materializes into concrete
+ * `<harness>-<role>` entries.
+ */
+export const SHARED_PI_HARNESS_MARKER = "pi-*";
+
+/** File/selector convention for a shared template: `pi-<role>.md`. */
+const SHARED_PI_ROLE_PREFIX = "pi-";
+
+export function isSharedPiRoleTemplate(profile: SubagentProfile): boolean {
+  return profile.backend === "pi" && profile.harness === SHARED_PI_HARNESS_MARKER;
+}
+
+/** Extract the `<role>` suffix from a shared template's `pi-<role>` name. */
+export function sharedPiRoleName(name: string): string | undefined {
+  return name.startsWith(SHARED_PI_ROLE_PREFIX) && name.length > SHARED_PI_ROLE_PREFIX.length
+    ? name.slice(SHARED_PI_ROLE_PREFIX.length)
+    : undefined;
+}
+
+export interface SharedPiRoleTemplates {
+  /** Valid shared templates, keyed by role name. */
+  templates: Map<string, SubagentProfile>;
+  /** Human-readable reasons a candidate file was ignored. */
+  diagnostics: string[];
+}
+
+/**
+ * Scan an *unfiltered* profiles map (i.e. before `filterExternalAgentProfiles`
+ * has removed shared templates as non-selectable) for `harness: "pi-*"`
+ * profiles and validate them. A shared template must be named `pi-<role>.md`
+ * matching its marker, and must not pin `model`/`thinking`: the whole point
+ * is to run under whichever harness's own registered model/thinking
+ * materializes it, so a pinned value here would silently misapply one
+ * harness's model to every other harness. Invalid candidates are dropped
+ * with a diagnostic rather than failing the whole roster, mirroring
+ * `loadHarnessConfigs`'s migrate-on-read posture.
+ */
+export function extractSharedPiRoleProfiles(profiles: Map<string, SubagentProfile>): SharedPiRoleTemplates {
+  const templates = new Map<string, SubagentProfile>();
+  const diagnostics: string[] = [];
+  for (const profile of profiles.values()) {
+    if (!isSharedPiRoleTemplate(profile)) continue;
+    const role = sharedPiRoleName(profile.name);
+    if (!role) {
+      diagnostics.push(`Shared Pi role profile "${profile.name}" ignored: file must be named "pi-<role>.md" to match its "harness: ${SHARED_PI_HARNESS_MARKER}" marker.`);
+      continue;
+    }
+    if (profile.model !== undefined || profile.thinking !== undefined) {
+      diagnostics.push(`Shared Pi role profile "${profile.name}" ignored: it must not pin model or thinking — every registered pi-* harness supplies its own. Remove the override(s).`);
+      continue;
+    }
+    templates.set(role, profile);
+  }
+  return { templates, diagnostics };
+}
+
+/** Materialize a shared role template into a concrete `<harness>-<role>` profile pinned to that harness's registered model/thinking. */
+export function materializeSharedPiRoleProfile(role: string, harness: string, harnessConfig: HarnessConfig, template: SubagentProfile): SubagentProfile {
+  return {
+    name: `${harness}-${role}`,
+    description: template.description,
+    backend: "pi",
+    harness,
+    model: harnessConfig.model,
+    thinking: harnessConfig.thinking,
+    tools: template.tools,
+    systemPrompt: template.systemPrompt,
+    permission: template.permission,
+    maxBudgetUsd: template.maxBudgetUsd,
+    owner: template.owner,
+    capabilitySet: template.capabilitySet,
+    capabilitySetError: template.capabilitySetError,
+  };
+}
+
+const NO_SHARED_TEMPLATES: ReadonlyMap<string, SubagentProfile> = new Map();
+
+/**
  * Core reconciliation rule shared by the throwing (resolution-time) and
  * non-throwing (merge-time) call sites below: the harness registry stays
  * authoritative for model/thinking. A file that omits them inherits the
  * registry's values; a file that declares the same values is
  * redundant-but-consistent; a file that declares a *different* value is a
- * configuration conflict.
+ * configuration conflict. Also rejects a `capabilitySet` declared on a
+ * non-pi-backend profile as a conflict: it is a pi-only mechanism that an
+ * external CLI backend would silently ignore. And rejects a profile whose
+ * `capabilitySet` frontmatter was malformed (`capabilitySetError`, set by
+ * parseSubagentProfileContent) as a conflict too: that profile was
+ * deliberately kept in the roster instead of being dropped whole, so this is
+ * the one place its bad configuration actually blocks something, rather than
+ * silently vanishing and letting canonical/shared-template synthesis fill the
+ * role in behind its back.
  */
 export function computeReconciledPiProfile(
   profile: SubagentProfile,
   harnessConfigs: ReadonlyMap<string, HarnessConfig>,
 ): { profile: SubagentProfile; conflict?: string } {
-  if (profile.backend !== "pi" || !profile.harness) return { profile };
+  if (profile.capabilitySetError) {
+    return {
+      profile,
+      conflict: `Profile "${profile.name}" declares an invalid capabilitySet: ${profile.capabilitySetError} Fix the profile's frontmatter capabilitySet field, or remove it.`,
+    };
+  }
+  if (profile.backend !== "pi") {
+    // capabilitySet is a pi-only mechanism (skills/prompt templates resolved
+    // for an in-process pi child); an external CLI backend has no way to load
+    // it and would silently ignore the selection, so a declared capabilitySet
+    // on a non-pi profile is a configuration conflict, not a no-op.
+    if (profile.capabilitySet) {
+      return {
+        profile,
+        conflict: `Profile "${profile.name}" declares backend "${profile.backend}" and capabilitySet "${profile.capabilitySet}", but capabilitySet only applies to backend "pi" (in-process, curated-tools) profiles — the ${profile.backend} CLI has no mechanism to load skills/prompt templates and would silently ignore the selection. Remove capabilitySet from this profile or change its backend to "pi" with a registered harness.`,
+      };
+    }
+    return { profile };
+  }
+  if (!profile.harness) return { profile };
   const harnessConfig = harnessConfigs.get(profile.harness);
   if (!harnessConfig) {
     return {
@@ -334,6 +469,15 @@ export function reconcilePiProfileWithHarness(
  * /external's doctor/settings/profiles text. Real on-disk profiles are never
  * mutated; this returns a new map layering synthesized entries underneath.
  *
+ * `sharedRoleTemplates` (see `extractSharedPiRoleProfiles`) adds a middle
+ * precedence tier between a real on-disk override and canonical synthesis:
+ * for each registered harness and each role — canonical or custom — that
+ * harness doesn't already have its own `<harness>-<role>.md` file for, a
+ * shared `pi-<role>.md` template is materialized into a concrete profile
+ * pinned to that harness's model/thinking before falling back to the
+ * built-in canonical body. Precedence: harness-specific on-disk file >
+ * shared template > synthesized canonical.
+ *
  * Every existing on-disk `backend: pi` entry is also reconciled against its
  * declared harness's registered model/thinking here — not just newly
  * synthesized entries — because this merged map is read directly (not
@@ -357,17 +501,22 @@ export function reconcilePiProfileWithHarness(
 export function mergeSynthesizedPiProfiles(
   profiles: Map<string, SubagentProfile>,
   harnessConfigs: ReadonlyMap<string, HarnessConfig>,
+  sharedRoleTemplates: ReadonlyMap<string, SubagentProfile> = NO_SHARED_TEMPLATES,
 ): Map<string, SubagentProfile> {
   if (harnessConfigs.size === 0) return profiles;
   const merged = new Map<string, SubagentProfile>();
   for (const [name, profile] of profiles) {
     merged.set(name, computeReconciledPiProfile(profile, harnessConfigs).profile);
   }
+  const roles = new Set<string>([...defaultRoleNames(), ...sharedRoleTemplates.keys()]);
   for (const [harness, harnessConfig] of harnessConfigs) {
-    for (const role of defaultRoleNames()) {
+    for (const role of roles) {
       const key = `${harness}-${role}`;
       if (merged.has(key)) continue;
-      const synthesized = synthesizePiRoleProfile(role, harness, harnessConfig);
+      const template = sharedRoleTemplates.get(role);
+      const synthesized = template
+        ? materializeSharedPiRoleProfile(role, harness, harnessConfig, template)
+        : synthesizePiRoleProfile(role, harness, harnessConfig);
       if (synthesized) merged.set(key, synthesized);
     }
   }

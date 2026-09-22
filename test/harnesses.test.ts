@@ -19,9 +19,11 @@ import {
   getConfiguredHarnessNames,
   harnessesPath,
   installHarnessConfigWithSmokeTest,
+  isValidHarnessName,
   loadHarnessConfigs,
   VALID_THINKING_LEVELS,
 } from "../src/harnesses.ts";
+import { SHARED_PI_HARNESS_MARKER } from "../src/profiles.ts";
 
 const tempDirs: string[] = [];
 
@@ -140,6 +142,22 @@ describe("installHarnessConfigWithSmokeTest", () => {
     // No residual staged file left behind.
     const dirEntries = readFileSync(harnessesPath(agentDir), "utf8");
     expect(dirEntries).not.toContain(".staged");
+  });
+
+  it("never accepts the shared-role marker \"pi-*\" as a registrable harness name", async () => {
+    // Load-bearing for profiles.ts's shared-role feature: isExternalAgentProfile
+    // relies on SHARED_PI_HARNESS_MARKER being structurally unregistrable so a
+    // shared `pi-<role>.md` template can never satisfy registry membership and
+    // become directly selectable as if it were a real harness.
+    expect(isValidHarnessName(SHARED_PI_HARNESS_MARKER)).toBe(false);
+    const agentDir = tempAgentDir();
+    await expect(installHarnessConfigWithSmokeTest({
+      agentDir,
+      name: SHARED_PI_HARNESS_MARKER,
+      model: "deepseek/deepseek-chat",
+      smokeTest: async () => ({ ok: true }),
+    })).rejects.toThrow(/must match/);
+    expect(loadHarnessConfigs(agentDir).harnesses.size).toBe(0);
   });
 
   it("rejects an invalid name before any write", async () => {

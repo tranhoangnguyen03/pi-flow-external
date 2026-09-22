@@ -18,10 +18,13 @@ import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
+import { extractSharedPiRoleProfiles, filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
 import { loadHarnessConfigs } from "../harnesses.ts";
+import { resolveCapabilitySelection, type FrozenCapabilitySelection } from "../core/capabilities.ts";
+import { hashStableValue } from "./replay-cache.ts";
+import { resolveCapabilitySets, type PiCapabilitySet } from "../settings.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
+import { EXTERNAL_HARNESSES, type PermissionTier, type ResolvedCapabilities, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
 import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner, type WorkflowSubagentDescriptor } from "./types.ts";
@@ -41,9 +44,41 @@ export interface CreateWorkflowToolOptions {
   getDefaultPermission: () => PermissionTier;
   getDefaultHarness: (ctx: ExtensionContext) => string;
   getDefaultMaxBudgetUsd: () => number | undefined;
+  getPiCapabilitySets: () => Record<string, PiCapabilitySet>;
 }
 
-function toDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
+function isProjectTrusted(ctx: ExtensionContext): boolean {
+  try {
+    return ctx.isProjectTrusted();
+  } catch {
+    return false;
+  }
+}
+
+function toDescriptor(
+  profile: SubagentProfile,
+  resolvedCapabilities: ReadonlyMap<string, FrozenCapabilitySelection>,
+  capabilityResolutionErrors: ReadonlyMap<string, string>,
+): WorkflowSubagentDescriptor {
+  const capabilities = profile.capabilitySet
+    ? (() => {
+      const frozen = resolvedCapabilities.get(profile.capabilitySet);
+      if (frozen) {
+        return { set: frozen.set, skills: frozen.skills, promptTemplates: frozen.promptTemplates, contentHash: frozen.contentHash };
+      }
+      // The set failed to resolve (unknown name, or a missing skill/prompt
+      // template): still carry the declared set's identity here rather than
+      // omitting `capabilities` entirely, which would make this descriptor
+      // indistinguishable from a profile that never declared a capabilitySet
+      // at all, and would make two differently-broken sets fingerprint
+      // identically. Hashing the error message keeps the shape identical to
+      // a successful resolution while still widening the replay fingerprint
+      // whenever the failure reason changes.
+      const error = capabilityResolutionErrors.get(profile.capabilitySet)
+        ?? `capabilitySet "${profile.capabilitySet}" could not be resolved for profile "${profile.name}".`;
+      return { set: profile.capabilitySet, skills: [], promptTemplates: [], contentHash: hashStableValue({ unresolved: error }) };
+    })()
+    : undefined;
   return {
     backend: profile.backend,
     harness: profile.harness,
@@ -53,6 +88,7 @@ function toDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
     tools: profile.tools,
     permission: profile.permission,
     maxBudgetUsd: profile.maxBudgetUsd,
+    ...(capabilities ? { capabilities } : {}),
   };
 }
 
@@ -136,9 +172,11 @@ export function createWorkflowTool(
       // `profiles` map would leave every synthesized pi role without a model
       // entry, and runAgent's `usesPiBackend(profile) && !model` check would
       // then reject a call that resolveSubagentType already accepted.
+      const allProfiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
       const profiles = mergeSynthesizedPiProfiles(
-        filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry), new Set(harnessConfigs.keys())),
+        filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys())),
         harnessConfigs,
+        extractSharedPiRoleProfiles(allProfiles).templates,
       );
       const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
       const limiter = options.getLimiter();
@@ -167,6 +205,39 @@ export function createWorkflowTool(
         resumeAgentResults,
       } = prepared.value;
 
+      // Freeze one resolved capabilitySet snapshot for the whole run,
+      // mirroring the frozen profiles/models roster above: every distinct
+      // capabilitySet name referenced anywhere in the frozen roster is
+      // resolved and content-hashed exactly once, before any child launches.
+      // A resolution failure (unknown set name, or a selected resource that
+      // is not discoverable) is deliberately *not* thrown here for the whole
+      // run: mergeSynthesizedPiProfiles already establishes the precedent
+      // that one stale, unrelated profile must not break every workflow that
+      // never actually selects it (see its doc comment). The failure is
+      // instead recorded and only actually thrown from runAgent, below, the
+      // moment a call resolves to a profile that declares this broken set —
+      // still strictly before that specific child's prompt/session exists.
+      const projectTrusted = isProjectTrusted(ctx);
+      const { sets: capabilitySets } = resolveCapabilitySets(options.getPiCapabilitySets(), project, projectTrusted);
+      const capabilitySetNames = new Set<string>();
+      for (const profile of profiles.values()) {
+        if (profile.capabilitySet) capabilitySetNames.add(profile.capabilitySet);
+      }
+      const resolvedCapabilities = new Map<string, FrozenCapabilitySelection>();
+      const capabilityResolutionErrors = new Map<string, string>();
+      for (const name of capabilitySetNames) {
+        const capabilitySet = capabilitySets.get(name);
+        if (!capabilitySet) {
+          capabilityResolutionErrors.set(name, `Unknown capabilitySet "${name}" referenced by a profile in this run. Configured sets: ${[...capabilitySets.keys()].join(", ") || "none"}.`);
+          continue;
+        }
+        try {
+          resolvedCapabilities.set(name, await resolveCapabilitySelection({ cwd: project, agentDir: getAgentDir(), projectTrusted, set: name, capabilitySet }));
+        } catch (error) {
+          capabilityResolutionErrors.set(name, error instanceof Error ? error.message : String(error));
+        }
+      }
+
       const snapshot: WorkflowToolDetails = {
         name: metaName,
         status: "running",
@@ -191,6 +262,7 @@ export function createWorkflowTool(
       const executeWorkflow = async (runSignal: AbortSignal) => {
         let agentSeq = 0;
         const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
+        try {
         const profile = profiles.get(call.subagentType);
         if (!profile) {
           throw new Error(
@@ -200,6 +272,57 @@ export function createWorkflowTool(
         const model = models.get(call.subagentType);
         if (usesPiBackend(profile) && !model) {
           throw new Error(describeMissingModel(profile, ctx.modelRegistry));
+        }
+
+        // Re-verify the frozen capabilitySet selection right before this
+        // specific child executes: skills are lazy file reads (SKILL.md is
+        // read by the child itself, not snapshotted bytes we control), so the
+        // only correct freeze guarantee is "reject if content changed since
+        // this run started" rather than pretending to run frozen bytes.
+        let capabilities: ResolvedCapabilities | undefined;
+        if (profile.capabilitySet) {
+          const frozen = resolvedCapabilities.get(profile.capabilitySet);
+          if (!frozen) {
+            throw new Error(
+              capabilityResolutionErrors.get(profile.capabilitySet)
+              ?? `capabilitySet "${profile.capabilitySet}" could not be resolved for profile "${profile.name}".`,
+            );
+          }
+          const capabilitySet = capabilitySets.get(profile.capabilitySet)!;
+          const current = await resolveCapabilitySelection({
+            cwd: project,
+            agentDir: getAgentDir(),
+            projectTrusted,
+            set: profile.capabilitySet,
+            capabilitySet,
+          });
+          if (current.contentHash !== frozen.contentHash) {
+            throw new Error(
+              `capabilitySet "${profile.capabilitySet}" changed (selected skill/prompt-template content differs) since this workflow run started; refusing to run "${profile.name}" with drifted instructions. Start a new run to pick up the change.`,
+            );
+          }
+          // This re-check narrows but does not close the drift window: spawn.ts
+          // re-verifies again immediately before session construction, since a
+          // file can still change between this check and the actual load
+          // (queued on the shared concurrency limiter in between). Carry the
+          // frozen hash through as the authoritative expectation for that
+          // final check rather than `current`'s, since `current` was only
+          // ever used to detect drift *up to this point*, not as a new freeze.
+          capabilities = { set: frozen.set, skills: frozen.skills, promptTemplates: frozen.promptTemplates, contentHash: frozen.contentHash };
+        }
+
+        // Disclose the resolved selection on this child's own snapshot row
+        // now, before spawnSubagent launches it — mirroring the direct Agent
+        // tool's pre-launch intent-card disclosure (formatCapabilityDisclosure
+        // in pi-subagent.ts) rather than only attaching it after the child
+        // finishes, which would leave the live/expanded view blind to what a
+        // still-running child can read for its entire execution.
+        if (capabilities) {
+          const disclosedAgent = snapshot.agents.find((item) => item.index === call.index);
+          if (disclosedAgent) {
+            disclosedAgent.capabilities = capabilities;
+            emit();
+          }
         }
 
         // Structured output: native pi subagents get an injected schema-validated
@@ -242,6 +365,8 @@ export function createWorkflowTool(
           maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
           resumeRunId: call.resumeRunId,
           executionStartedAt: call.executionStartedAt,
+          projectTrusted,
+          capabilities,
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
             const agent = snapshot.agents.find((item) => item.index === childIndex);
@@ -272,6 +397,9 @@ export function createWorkflowTool(
           runRecord: call.runRecord,
         });
         const resultDetails = result.details as SubagentToolDetails;
+        // spawnSubagent already attaches the resolved capabilities to
+        // resultDetails (and to the persisted run record) before returning,
+        // so no post-hoc attachment is needed here.
         const agent = snapshot.agents.find((item) => item.index === childIndex);
         if (agent) {
           const progress = resultDetails.progress;
@@ -298,6 +426,7 @@ export function createWorkflowTool(
           agent.sessionId = resultDetails.sessionId;
           agent.resumedFrom = resultDetails.resumedFrom;
           agent.context = resultDetails.context;
+          agent.capabilities = resultDetails.capabilities;
           if (progress) {
             agent.startedAt = progress.startedAt;
             agent.endedAt = progress.endedAt;
@@ -333,6 +462,31 @@ export function createWorkflowTool(
           return capture.value;
         }
         return resultDetails.result ?? "";
+        } catch (error) {
+          // A failure resolving the profile/model/capabilitySet happens before
+          // spawnSubagent ever runs, so the durable RunRecord allocated at
+          // queue time (onAgentQueued, above) would otherwise never receive a
+          // run_finished event or summary.json — leaving it "incomplete"
+          // forever instead of a recognizable failure. finish() is idempotent
+          // (RunRecord.finish, src/core/run-record.ts), so calling it here
+          // unconditionally is safe even when spawnSubagent already finished
+          // this same record (e.g. a ChildRunError thrown after a completed
+          // run): the second call is a no-op and never overwrites the
+          // already-recorded receipt.
+          if (call.runRecord) {
+            const message = error instanceof Error ? error.message : String(error);
+            await call.runRecord.finish({
+              backend: profiles.get(call.subagentType)?.backend,
+              profile: call.subagentType,
+              description: call.label,
+              status: agentSignal?.aborted ? "aborted" : "error",
+              error: message,
+              queued: true,
+              backendStarted: false,
+            });
+          }
+          throw error;
+        }
         };
 
       // Spinner animation is driven here, by the runtime, not by a UI-render
@@ -414,7 +568,7 @@ export function createWorkflowTool(
           },
           describeSubagentType: (name) => {
             const profile = profiles.get(name);
-            return profile ? toDescriptor(profile) : undefined;
+            return profile ? toDescriptor(profile, resolvedCapabilities, capabilityResolutionErrors) : undefined;
           },
           getDefaultPermission: () => defaultPermission,
           resumeAgentResults,

@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
+import { extractSharedPiRoleProfiles, filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
 import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
@@ -46,7 +46,7 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
   agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
   claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
   codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
-  pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project extensions, skills, or MCP tools load into the child. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
+  pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project/user extensions or MCP tools ever load into the child. A profile's capabilitySet, if any, additionally loads exactly its named skills/prompt templates (text resources, not tools); everything else stays out, and project-scope selections load only when the project is trusted. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
 };
 
 /** Resolve a requested, already-validated harness name to its permission-semantics backend. */
@@ -132,12 +132,11 @@ export function createExternalHelpTool(
         validateHarnessFilter(params.harness, configuredPiHarnesses);
       }
       if (params.topic === "roles") {
+        const allProfiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
         const profiles = mergeSynthesizedPiProfiles(
-          filterExternalAgentProfiles(
-            filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry),
-            configuredPiHarnesses,
-          ),
+          filterExternalAgentProfiles(allProfiles, configuredPiHarnesses),
           harnessConfigs,
+          extractSharedPiRoleProfiles(allProfiles).templates,
         );
         text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), params.harness);
       } else if (params.topic === "permissions") {
