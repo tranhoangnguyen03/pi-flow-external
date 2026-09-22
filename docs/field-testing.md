@@ -2,16 +2,25 @@
 
 Real-provider checks consume tokens and normally run external CLIs in dangerous/no-approval modes. Claude uses `auto` permission mode instead when its effective UID is 0. Use them only in a trusted checkout. Receipts can contain prompts and source excerpts despite best-effort redaction.
 
+`npm run e2e` has two lanes. The default lane is deterministic and root-model-free: it builds an in-process Pi SDK session with a faux, never-prompted root model and calls the `Agent`/`workflow`/`external_runs` tool executors directly, so tool selection is never left to a live LLM decision — only the selected external backend's own child call (a real spawned CLI process, or, for `--backend pi`, a real in-process nested Pi child) is real. `--routing-smoke` is a separate, explicit lane that spawns a real `pi` CLI process with a real root model and asks it, in plain language, to pick the right tool; see [Natural-language routing smoke](#natural-language-routing-smoke) below. Only `--routing-smoke` needs root Pi authentication or `--root-model`/`--root-thinking`.
+
 ## Preparation
 
 ```bash
 cd /path/to/pi-flow-external
-export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-export ROOT_MODEL="openai-codex/gpt-5.6-sol"
-pi auth check --model "$ROOT_MODEL" --json
 claude --version
 codex --version
 agy --version
+grok --version
+muse --version
+```
+
+The default lane needs no root Pi authentication at all (its root model is a faux, never-prompted placeholder). Only `--routing-smoke` needs a working root model:
+
+```bash
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+export ROOT_MODEL="openai-codex/gpt-5.6-sol"
+pi auth check --model "$ROOT_MODEL" --json
 ```
 
 Root Pi authentication is separate from each delegated CLI.
@@ -24,20 +33,27 @@ Run only the backend affected during development:
 npm run e2e -- --backend claude
 npm run e2e -- --backend codex
 npm run e2e -- --backend agy
+npm run e2e -- --backend grok
+npm run e2e -- --backend muse
 ```
 
-Each run creates a collision-safe temporary profile and fixture, delegates once, requires the expected token, checks for one complete `done` receipt, verifies that the fixture stayed clean, and removes its temporary files.
+Each run creates a collision-safe (`randomUUID`-named) temporary profile and fixture in an isolated agent directory, calls the `Agent` tool executor directly with an explicit `role`/`harness`, requires the exact expected result in the child's real result, checks for one complete `done` receipt, verifies that the fixture stayed clean, and removes its temporary files. Isolation is unconditional: for every backend above, an inherited `PI_CODING_AGENT_DIR` (such as the one exported in [Preparation](#preparation)) is ignored unless you pass `--agent-dir` explicitly — only `--backend pi` and `--routing-smoke` ever default to your real agent directory, since they only read it and never write into it.
 
 Defaults:
 
 | Lane | Model | Thinking |
 |---|---|---|
-| Root Pi | `openai-codex/gpt-5.6-sol` | `high` |
 | Claude | `claude-sonnet-5` | `high` |
 | Codex | `gpt-5.6-sol` | `high` |
 | Agy | `gemini-3.7-flash-high` | `high` |
+| Grok | `grok-4.6` | `high` |
+| Muse | `muse-spark-1.3-contributor` | `high` |
 
-Override with `--model`, `--thinking`, `--root-model`, or `--root-thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary profile path printed by the runner.
+Override with `--model`/`--thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary profile path printed by the runner.
+
+Grok's `readonly`/`edit` tiers run under its own kernel sandbox (`--sandbox read-only`/`workspace`). On a macOS host where `/var/run/docker.sock` resolves to a symlink, sandbox startup can fail closed before the child even runs the prompt — that is expected fail-closed behavior, not a bug; verify enforcement on Linux, or adjust the host's Docker socket if you need to reproduce it locally on macOS.
+
+Muse's `meta` provider performs its own internal retries (observed up to 10 attempts with growing backoff on transient 503/504 errors) entirely inside the `muse` process; this is unrelated to and invisible from this extension's own no-auto-retry contract, and shows up only as activity narration (e.g. "retrying meta model stream in 60000ms (attempt 3/10)"). A run that never reports usage/cost is expected — Muse has never been observed to report either.
 
 ### Named Pi harness receipt
 
@@ -47,7 +63,7 @@ Run only when the pi runtime contract (§7 of the design), harness registry, or 
 npm run e2e -- --backend pi --harness pi-deepseek
 ```
 
-This lane never registers a harness or writes a temporary profile — canonical synthesis already provides the `worker` role for any registered harness — it only delegates to the harness you name and requires the same one complete `done` receipt.
+This lane reads your real agent directory (harnesses.json, subagents) but never writes a temporary profile there — canonical synthesis already provides the `worker` role for any registered harness — and never mutates it: the faux root model is registered only in-process, and the harness's own real model/auth resolve normally through your real `models.json`/`auth.json`. It delegates to the harness you name and requires the same one complete `done` receipt.
 
 ## Supervised workflow receipt
 
@@ -57,10 +73,12 @@ When workflow runtime, scheduling, supervision, or tool integration changes, run
 npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
 npm run e2e -- --backend agy --workflow
+npm run e2e -- --backend grok --workflow
+npm run e2e -- --backend muse --workflow
 npm run e2e -- --backend pi --harness pi-deepseek --workflow
 ```
 
-Each command declares `meta.apiVersion: 1`, starts a two-child workflow with `background: true`, waits for the selected workflow through `external_runs`, inspects its summary/output, requires two complete child receipts, and verifies the read-only fixture stayed clean. Forced multi-page cursor behavior remains covered by deterministic offline tests; this check exercises real workflow child handling without duplicating those semantics.
+Each command calls the `workflow` tool executor directly with a script declaring `meta.apiVersion: 1` and running two parallel `agent()` calls, blocking (`background: false`) rather than supervised through `external_runs` — workflow execution itself is what's under test here, not run-observability ceremony (the change-triggered background-run observability check below covers that separately). It requires the workflow to complete with two `done` child receipts, both results containing the expected token, and the read-only fixture staying clean.
 
 ## Change-triggered interruption and output check
 
@@ -70,15 +88,20 @@ When adapter cancellation, process-tree termination, partial output, or supervis
 npm run e2e -- --backend claude --interrupt
 npm run e2e -- --backend codex --interrupt
 npm run e2e -- --backend agy --interrupt
+npm run e2e -- --backend grok --interrupt
+npm run e2e -- --backend muse --interrupt
 ```
 
-The runner starts a background `Agent`, cancels its stable ID with an explicit reason, waits for its `cancelled` outcome, and asks `external_runs` for every available output and diagnostic page. A very early cancellation may legitimately have diagnostics but no assistant text; the durable receipt must still be `aborted`/`cancelled` with the exact reason. Do not retry a failure automatically. Use `--keep` for one deliberate evidence inspection, then remove the printed run root and temporary profile.
+The runner calls the `Agent` tool executor directly with `background: true`, polls `external_runs` until the run is observed `running`, cancels its stable ID with an explicit reason, waits for its `cancelled` outcome, and asks `external_runs` for every available output and diagnostic page. A very early cancellation may legitimately have diagnostics but no assistant text; the durable receipt must still be `aborted` with the exact reason. Do not retry a failure automatically. Use `--keep` for one deliberate evidence inspection, then remove the printed run root and temporary profile.
 
 ## Natural-language routing smoke
 
-When role discovery, tool descriptions, or coordinator guidance changes, run three fresh Pi sessions against the current checkout and a read-only fixture. Ask for two named harnesses to review, two named harnesses to research, and a task split between Pi plus two named harnesses. For each session, verify that each requested external harness produced one complete `done` receipt through `role` plus `harness`, no help/discovery call was needed for the built-in roles, and the fixture stayed unchanged.
+There are two levels of routing check:
 
-This is a qualitative trigger smoke, not a statistical regression comparison or a model-independent guarantee. It does not cover workflow routing or the omitted-`harness` default; use the workflow receipt above and a separate direct role request without `harness` for those paths.
+- `npm run e2e -- --routing-smoke --backend <claude|codex|agy|grok|muse>` (optionally `--workflow`/`--interrupt`) spawns a real `pi` CLI process with a real root model and gives it a single plain-language instruction naming the exact tool, role, and harness to call. It is a mechanical, automated check that the natural-language call-and-relay path (real root LLM → real tool call → real backend child) still works end to end. It requires real root Pi authentication (see Preparation) and is opt-in only — never the default backend gate — because the root model's tool-call decision is a live, provider-billed, non-deterministic step. `--root-model`/`--root-thinking` only apply here.
+- The broader, still-manual qualitative check below covers *discovery*, not just one named call: when role discovery, tool descriptions, or coordinator guidance changes, run three fresh Pi sessions against the current checkout and a read-only fixture. Ask for two named harnesses to review, two named harnesses to research, and a task split between Pi plus two named harnesses. For each session, verify that each requested external harness produced one complete `done` receipt through `role` plus `harness`, no help/discovery call was needed for the built-in roles, and the fixture stayed unchanged.
+
+Neither is a statistical regression comparison or a model-independent guarantee. Neither covers workflow routing or the omitted-`harness` default; use the workflow receipt above and a separate direct role request without `harness` for those paths.
 
 ## Change-triggered nested timeout check
 
@@ -125,10 +148,10 @@ Run only when project default-harness resolution changes. In a fresh Pi session 
 Before a runtime release:
 
 1. Run `npm run check`.
-2. Run all three direct backend receipts.
-3. Run all three supervised workflow receipts.
+2. Run all five direct backend receipts.
+3. Run all five supervised workflow receipts.
 4. Run interruption checks for adapters whose cancellation/output path changed.
-5. Run the natural-language routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
+5. Run `--routing-smoke` (mechanical) and the manual qualitative routing smoke only if role discovery, tool descriptions, or coordinator guidance changed.
 6. Run the nested timeout check only if nested detection or timeout behavior changed.
 7. Run the background-run observability check only if batch inspection, the `final` view, timing projection, or `/external runs` browsing changed.
 8. Remove temporary evidence and profiles.

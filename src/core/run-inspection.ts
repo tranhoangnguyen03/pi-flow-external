@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { agyActivityFromEvent } from "./agy.ts";
 import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
+import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
+import { museActivityFromEvent } from "./muse.ts";
 import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
@@ -69,6 +71,10 @@ export interface RunRecordListItem {
   error?: string;
   description?: string;
   backend?: string;
+  /** Resolved profile/subagentType name, when persisted in run-record metadata. Never reparsed from other fields. */
+  profile?: string;
+  /** Resolved harness (registered pi-* config, or equal to backend for agy/claude/codex), when persisted in run-record metadata. */
+  harness?: string;
   project?: string;
   parentSessionId?: string;
   workflowRunId?: string;
@@ -213,7 +219,11 @@ export async function inspectRun({
   const items: RunInspectionItem[] = [];
   let usedBytes = 0;
   let nextCursor: InspectionCursor | undefined;
-  let activeAgyId: string | undefined;
+  // agy and muse stream incremental deltas that must be concatenated onto the
+  // same growing item; every other kind's outputFromEvent already returns one
+  // complete message per event, so each becomes its own item.
+  const STREAMING_DELTA_KINDS = new Set(["agy", "muse"]);
+  let activeStreamingId: string | undefined;
   const scan = await scanCompleteLines(eventsPath, state.position, (line) => {
     const event = parseEvent(line.text, runId);
     if (!event) return "malformed";
@@ -231,9 +241,10 @@ export async function inspectRun({
       return "stop";
     }
     if (chunk.text) {
-      if (view === "output" && projected.kind === "agy" && activeAgyId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
+      const isStreamingDelta = STREAMING_DELTA_KINDS.has(projected.kind);
+      if (view === "output" && isStreamingDelta && activeStreamingId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
       else items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
-      activeAgyId = projected.kind === "agy" ? projected.id : undefined;
+      activeStreamingId = isStreamingDelta ? projected.id : undefined;
       usedBytes += Buffer.byteLength(chunk.text);
     }
     if (chunk.nextOffset < projected.text.length) {
@@ -340,6 +351,8 @@ async function readListItem(runsDirectory: string, runId: string): Promise<RunRe
     ...(boundedString(terminal?.error) ? { error: boundedString(terminal?.error) } : {}),
     ...(boundedString(metadata?.description) ? { description: boundedString(metadata?.description) } : {}),
     ...(asString(metadata?.backend) ? { backend: asString(metadata?.backend) } : {}),
+    ...(metadataProfileName(metadata) ? { profile: metadataProfileName(metadata) } : {}),
+    ...(metadataHarness(metadata) ? { harness: metadataHarness(metadata) } : {}),
     ...(asString(metadata?.project) ? { project: asString(metadata?.project) } : {}),
     ...(asString(metadata?.parentSessionId) ? { parentSessionId: asString(metadata?.parentSessionId) } : {}),
     ...(asString(metadata?.workflowRunId) ? { workflowRunId: asString(metadata?.workflowRunId) } : {}),
@@ -422,7 +435,8 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
     task: compactObject({
       description: boundedString(metadata?.description),
       backend: metadata?.backend,
-      profile: typeof metadata?.profile === "string" ? metadata.profile : asRecord(metadata?.profile)?.name,
+      profile: metadataProfileName(metadata),
+      harness: metadataHarness(metadata),
       project: boundedString(metadata?.project),
       parentSessionId: metadata?.parentSessionId,
       workflowRunId: metadata?.workflowRunId,
@@ -457,7 +471,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   };
 }
 
-function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi"; id?: string; text: string }) | undefined {
+function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok" | "muse"; id?: string; text: string }) | undefined {
   if (event.type !== "backend_event") return undefined;
   const envelope = asRecord(event.data);
   const backendEvent = asRecord(envelope?.event);
@@ -466,6 +480,11 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const text = extractClaudeFinalText(backendEvent);
     const id = asString(asRecord(backendEvent.message)?.id);
     return text ? { kind: "claude", ...(id ? { id } : {}), text } : undefined;
+  }
+  if (envelope?.backend === "grok" && backendEvent.type === "assistant") {
+    const text = extractGrokFinalText(backendEvent);
+    const id = asString(asRecord(backendEvent.message)?.id);
+    return text ? { kind: "grok", ...(id ? { id } : {}), text } : undefined;
   }
   if (envelope?.backend === "codex") {
     const text = extractCodexFinalText(backendEvent);
@@ -477,6 +496,14 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const text = (update?.step_type === "agent_response" || update?.step_type === "assistant") ? asString(update.text_delta) : undefined;
     const id = asString(update?.step_id);
     return text ? { kind: "agy", ...(id ? { id } : {}), text } : undefined;
+  }
+  if (envelope?.backend === "muse" && backendEvent.payload_type === "run.output.delta") {
+    // Deltas carry no id: every chunk within a run belongs to the same
+    // ongoing stream, so activeStreamingId's undefined===undefined match
+    // below concatenates them in order onto one growing item.
+    const payload = asRecord(backendEvent.payload);
+    const text = typeof payload?.text === "string" ? payload.text : undefined;
+    return text ? { kind: "muse", text } : undefined;
   }
   if (envelope?.backend === "pi" && backendEvent.type === "message_end") {
     const message = asRecord(backendEvent.message);
@@ -496,6 +523,8 @@ function activityFromEvent(event: EvidenceEvent): string | undefined {
   if (envelope?.backend === "claude") return claudeActivityFromEvent(backendEvent);
   if (envelope?.backend === "codex") return codexActivityFromEvent(backendEvent);
   if (envelope?.backend === "agy") return agyActivityFromEvent(backendEvent);
+  if (envelope?.backend === "grok") return grokActivityFromEvent(backendEvent);
+  if (envelope?.backend === "muse") return museActivityFromEvent(backendEvent);
   return undefined;
 }
 
@@ -815,6 +844,31 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Resolved profile/subagentType name from persisted run-record metadata.
+ * `metadata.profile` has shipped in two shapes historically: a plain string
+ * (the direct `Agent`/workflow-child metadata this package writes today) and
+ * a full profile object (spawn.ts's own fallback record creation, used when
+ * a caller does not pre-create its own run record). Both are read here, in
+ * ONE place, so `readListItem` and `summaryProjection` cannot independently
+ * drift on how they unpack it.
+ */
+function metadataProfileName(metadata: Record<string, unknown> | undefined): string | undefined {
+  return typeof metadata?.profile === "string" ? metadata.profile : asString(asRecord(metadata?.profile)?.name);
+}
+
+/**
+ * Resolved harness (registered pi-* config, or equal to backend for
+ * agy/claude/codex) from persisted run-record metadata: an explicit
+ * `metadata.harness` field when present (every current call site writes
+ * one), falling back to the embedded profile object's own `harness` field
+ * for the historical spawn.ts fallback shape. Never reparsed/guessed from
+ * `profile`/`subagentType`'s name string.
+ */
+function metadataHarness(metadata: Record<string, unknown> | undefined): string | undefined {
+  return asString(metadata?.harness) ?? asString(asRecord(metadata?.profile)?.harness);
 }
 
 function isNotFound(error: unknown): boolean {

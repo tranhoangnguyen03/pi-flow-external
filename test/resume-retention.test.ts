@@ -41,6 +41,28 @@ describe("resume resolution", () => {
     expect(resolved.error).toMatch(/same backend/);
   });
 
+  it("resolves a recorded grok session id and rejects resuming it from another backend", async () => {
+    const root = tempRoot();
+    const runsDir = join(root, "runs");
+    writeRecord(runsDir, "run_grok", { backend: "grok", sessionId: "grok-sess-1" });
+    const resolved = await resolveResume(runsDir, "run_grok", "grok");
+    expect(resolved.session).toEqual({ runId: "run_grok", sessionId: "grok-sess-1", backend: "grok" });
+
+    const mismatched = await resolveResume(runsDir, "run_grok", "claude");
+    expect(mismatched.error).toMatch(/same backend/);
+  });
+
+  it("resolves a recorded muse session id (verified against a real muse exec --session-id recall) and rejects resuming it from another backend", async () => {
+    const root = tempRoot();
+    const runsDir = join(root, "runs");
+    writeRecord(runsDir, "run_muse", { backend: "muse", sessionId: "muse-sess-1" });
+    const resolved = await resolveResume(runsDir, "run_muse", "muse");
+    expect(resolved.session).toEqual({ runId: "run_muse", sessionId: "muse-sess-1", backend: "muse" });
+
+    const mismatched = await resolveResume(runsDir, "run_muse", "claude");
+    expect(mismatched.error).toMatch(/same backend/);
+  });
+
   it("rejects unknown or incomplete records and malformed ids", async () => {
     const root = tempRoot();
     const runsDir = join(root, "runs");

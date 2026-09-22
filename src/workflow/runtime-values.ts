@@ -2,6 +2,12 @@ import { parseParentContext, type ParentContext } from "../core/parent-context.t
 
 export interface NormalizedAgentOptions {
   context?: ParentContext;
+  /**
+   * `description` is the common task-name option shared with the direct
+   * `Agent` tool; `label` is accepted as a compatible alias so existing
+   * scripts keep working. Providing both with conflicting values is
+   * rejected in `normalizeAgentOptions` rather than silently preferring one.
+   */
   label?: string;
   phase?: string;
   role?: string;
@@ -42,9 +48,14 @@ export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
   if (maxBudgetUsd !== undefined && (typeof maxBudgetUsd !== "number" || !Number.isFinite(maxBudgetUsd) || maxBudgetUsd < 0)) {
     throw new TypeError("agent max_budget_usd must be a finite non-negative number");
   }
+  const label = optionalString(options.label, "agent label");
+  const description = optionalString(options.description, "agent description");
+  if (label !== undefined && description !== undefined && label !== description) {
+    throw new TypeError("agent options cannot set both label and description to different values; description is a compatible alias for label");
+  }
   return {
     context: parseParentContext(options.context),
-    label: optionalString(options.label, "agent label"),
+    label: label ?? description,
     phase: optionalString(options.phase, "agent phase"),
     role: optionalString(options.role, "agent role"),
     harness: optionalString(options.harness, "agent harness"),

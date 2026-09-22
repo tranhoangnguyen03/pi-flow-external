@@ -529,6 +529,10 @@ setTimeout(() => {
 
     expect(result.details.status).toBe("aborted");
     expect(result.details.backend).toBe("claude");
+    // A profile with no explicit `harness` (the common case for external CLI
+    // profiles) still persists one: harness defaults to backend, never left
+    // unset for a caller reading this field.
+    expect(result.details.harness).toBe("claude");
     expect(result.details.error).toContain("aborted before prompt start");
     expect(signal.addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
     await new Promise((resolve) => setTimeout(resolve, 900));

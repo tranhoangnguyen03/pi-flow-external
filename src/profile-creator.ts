@@ -45,12 +45,12 @@ const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external agent profile, or one named Pi harness configuration, through an AI-assisted interview.
 
 Start by asking which of four things I want:
-1. A role profile for an existing external CLI harness (claude, codex, or agy).
+1. A role profile for an existing external CLI harness (claude, codex, agy, grok, or muse).
 2. A new named Pi harness configuration (a "pi-*" name pinning a provider/model and optional thinking level, run in-process rather than as a CLI).
 3. A role profile for one existing registered pi-* harness only.
 4. A shared role profile applied across every currently-registered pi-* harness, and any registered later.
 
-For branch 1 or 3: ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. For branch 1, recommend a backend (claude, codex, or agy) and explain briefly; for branch 3, confirm which already-registered pi-* harness this role targets. Suggest a lowercase <harness>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them for branch 1/3 profiles; otherwise omit them — for branch 3, model/thinking are inherited from the named harness and must not be overridden to a different value. When ready, summarize once and call ${PROFILE_TOOL_NAME}.
+For branch 1 or 3: ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. For branch 1, recommend a backend (claude, codex, agy, grok, or muse) and explain briefly; for branch 3, confirm which already-registered pi-* harness this role targets. Suggest a lowercase <harness>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them for branch 1/3 profiles; otherwise omit them — for branch 3, model/thinking are inherited from the named harness and must not be overridden to a different value. When ready, summarize once and call ${PROFILE_TOOL_NAME}.
 
 For branch 2: ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
 
@@ -61,7 +61,7 @@ Do not write files yourself and do not run Agent or workflow in any branch. The 
 const profileParameters = Type.Object({
   name: Type.String({ description: "Lowercase <harness>-<role> profile name, such as claude-security-reviewer or pi-deepseek-security-reviewer; the suffix becomes its role." }),
   description: Type.String({ description: "Concise profile description shown by external_help and in delegation intent." }),
-  backend: Type.String({ description: `External CLI backend (claude, codex, agy), a registered named pi-* harness, or the literal "${SHARED_PI_HARNESS_MARKER}" marker for a role shared across every registered pi-* harness.` }),
+  backend: Type.String({ description: `External CLI backend (claude, codex, agy, grok, muse), a registered named pi-* harness, or the literal "${SHARED_PI_HARNESS_MARKER}" marker for a role shared across every registered pi-* harness.` }),
   model: Type.Optional(Type.String({ description: `Optional backend model override. Omit to use the CLI default. For a pi-* backend, must match the harness's registered model if given at all. Must be omitted entirely for backend "${SHARED_PI_HARNESS_MARKER}".` })),
   thinking: Type.Optional(Type.String({ description: `Optional reasoning-effort override. Omit to use the current Pi level. For a pi-* backend, must match the harness's registered thinking if given at all. Must be omitted entirely for backend "${SHARED_PI_HARNESS_MARKER}".` })),
   systemPrompt: Type.String({ description: "Complete focused instructions for the external agent profile." }),
@@ -89,7 +89,7 @@ function optional(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-/** Is `backend` one of claude/codex/agy (a genuine external CLI selector)? */
+/** Is `backend` one of claude/codex/agy/grok/muse (a genuine external CLI selector)? */
 function isExternalHarnessBackend(value: string): value is (typeof EXTERNAL_HARNESSES)[number] {
   return (EXTERNAL_HARNESSES as readonly string[]).includes(value);
 }
@@ -118,7 +118,7 @@ export function compileProfile(profile: SubagentProfile): string {
   const isSharedTemplate = isSharedPiRoleTemplate(profile);
   const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined && !isSharedTemplate;
   if (!isExternalCli && !isPiHarnessProfile && !isSharedTemplate) {
-    throw new Error(`Profile backend must be claude, codex, agy, a registered pi-* harness name, or the shared "${SHARED_PI_HARNESS_MARKER}" marker.`);
+    throw new Error(`Profile backend must be claude, codex, agy, grok, muse, a registered pi-* harness name, or the shared "${SHARED_PI_HARNESS_MARKER}" marker.`);
   }
   if (isPiHarnessProfile && !isValidHarnessName(profile.harness!)) {
     throw new Error(`Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(profile.harness)}).`);
@@ -354,7 +354,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
                 // new profile's instructions or loading project instructions.
                 profile: { ...smokeProfile, systemPrompt: undefined },
                 // The pi backend's spawn runtime requires a pre-resolved model
-                // object, unlike claude/codex/agy which resolve their own model
+                // object, unlike claude/codex/agy/grok/muse which resolve their own model
                 // string internally; resolve it here so the smoke test actually
                 // exercises the harness's registered model instead of failing
                 // immediately with "No model is selected".

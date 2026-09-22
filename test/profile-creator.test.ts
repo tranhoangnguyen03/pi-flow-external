@@ -110,6 +110,11 @@ describe("profile creator", () => {
       .toThrow(/capabilitySet only applies to backend "pi"/);
   });
 
+  it("rejects an invalid backend in compileProfile with the full list of supported backends", () => {
+    expect(() => compileProfile({ ...profile, backend: "invalid-backend" as any, name: "invalid-backend-reviewer" }))
+      .toThrow('Profile backend must be claude, codex, agy, grok, muse, a registered pi-* harness name, or the shared "pi-*" marker.');
+  });
+
   it("installs only after a successful smoke test", async () => {
     const agentDir = await makeAgentDir();
     const finalPath = join(agentDir, "subagents", `${profile.name}.md`);

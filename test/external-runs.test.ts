@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as runInspection from "../src/core/run-inspection.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
@@ -20,7 +21,7 @@ describe("external_runs", () => {
     const tool = createExternalRunsTool({ registry, runsDirectory: () => runsDirectory }) as any;
     const ctx = { cwd: "/project", sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } } as any;
     const execute = (params: Record<string, unknown>, signal?: AbortSignal) => tool.execute("external-runs", params, signal, undefined, ctx);
-    return { execute, registry, runsDirectory, tool };
+    return { execute, registry, runsDirectory, tool, ctx };
   }
 
   async function completedRecord(runsDirectory: string, overrides: Record<string, unknown> = {}) {
@@ -178,6 +179,103 @@ describe("external_runs", () => {
     await expect(allWait).resolves.toMatchObject({ details: { outcomes: [{ runId: "wf_failed", status: "error" }], pending: ["run_two"] } });
     finishTwo("two");
     await Promise.allSettled([one.result]);
+  });
+
+  it("spends one shared result budget across every settled outcome in a wait response — complete text when it fits, truncated with continuation refs when it does not", async () => {
+    const { execute, registry } = setup();
+    const first = registry.start({ runId: "run_first", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "A".repeat(50) });
+    const second = registry.start({ runId: "run_second", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "B".repeat(100) });
+    await Promise.all([first.result, second.result]);
+
+    const waited = await execute({ action: "wait", runIds: ["run_first", "run_second"], limitBytes: 80 });
+    const outcomes = (waited as any).details.outcomes;
+    expect(outcomes[0]).toMatchObject({ runId: "run_first", result: "A".repeat(50), resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({
+      runId: "run_second",
+      result: "B".repeat(30),
+      resultTruncated: true,
+      outputRef: { runId: "run_second", view: "output" },
+      diagnosticsRef: { runId: "run_second", view: "diagnostics" },
+    });
+  });
+
+  it("never reads a target's evidence from disk once the shared wait budget is already exhausted", async () => {
+    const { execute, runsDirectory } = setup();
+    // Both records are durable-only (no live registry entry), so `wait`
+    // resolves them through getRunRecord/terminalRecord, whose synthesized
+    // outcome deliberately carries no in-memory `.result` — collecting their
+    // text always requires an inspectRun (disk) read, the exact path that
+    // must be skipped once the shared budget runs out.
+    const first = await completedRecord(runsDirectory, { description: "First" });
+    const second = await completedRecord(runsDirectory, { description: "Second" });
+    const inspectRunSpy = vi.spyOn(runInspection, "inspectRun");
+
+    // limitBytes is sized to fully consume "answer" (6 bytes) plus envelope
+    // room, leaving nothing for a second read.
+    const waited = await execute({ action: "wait", runIds: [first.runId, second.runId], limitBytes: 6 });
+    const outcomes = (waited as any).details.outcomes;
+    expect(outcomes[0]).toMatchObject({ runId: first.runId, result: "answer", resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({ runId: second.runId, resultTruncated: true });
+    expect(outcomes[1].result).toBeUndefined();
+    // Exactly one disk read: the first target, which still had budget. The
+    // second target's evidence was never touched once the budget hit zero.
+    expect(inspectRunSpy).toHaveBeenCalledTimes(1);
+    expect(inspectRunSpy).toHaveBeenCalledWith(expect.objectContaining({ runId: first.runId }));
+    inspectRunSpy.mockRestore();
+  });
+
+  it("spends the wait budget in requested order, not settlement order — the same targets and final states spend the budget identically regardless of which one raced to settle first", async () => {
+    const { execute, registry } = setup();
+    let finishA!: (value: string) => void;
+    let finishB!: (value: string) => void;
+    registry.start({ runId: "run_ordered_a", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finishA = resolve; }) });
+    registry.start({ runId: "run_ordered_b", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finishB = resolve; }) });
+
+    const waited = execute({ action: "wait", runIds: ["run_ordered_a", "run_ordered_b"], limitBytes: 60 });
+    // "b" (requested second) settles first, and with a longer result than
+    // "a" — a settlement-order spend would give "b" first claim on the
+    // budget instead of "a".
+    finishB("B".repeat(50));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    finishA("A".repeat(50));
+    const outcomes = (await waited as any).details.outcomes;
+    // Requested order preserved regardless of settlement race: run_ordered_a
+    // is spent first and gets the full budget it fits in.
+    expect(outcomes[0]).toMatchObject({ runId: "run_ordered_a", result: "A".repeat(50), resultTruncated: false });
+    expect(outcomes[1]).toMatchObject({ runId: "run_ordered_b", result: "B".repeat(10), resultTruncated: true });
+  });
+
+  it("emits bounded live progress via onUpdate while waiting, identifying watched targets, and stops updating once the wait settles without cancelling the watched work", async () => {
+    const { registry, tool, ctx } = setup();
+    let finish!: (value: string) => void;
+    const running = registry.start({ runId: "run_slow", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise<string>((resolve) => { finish = resolve; }) });
+    registry.update("run_slow", { status: "running", description: "Slow task", lastActivityAt: Date.now(), activity: ["step one"] });
+
+    const updates: Array<{ details: Record<string, unknown> }> = [];
+    const waitPromise = tool.execute("call-wait", { action: "wait", runIds: ["run_slow"] }, undefined, (partial: { details: Record<string, unknown> }) => updates.push(partial), ctx);
+
+    // First update is emitted immediately once targets resolve, before any heartbeat tick.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(updates.length).toBeGreaterThanOrEqual(1);
+    expect(updates[0]!.details).toMatchObject({ action: "wait", mode: "all", live: true, pending: ["run_slow"] });
+    expect((updates[0]!.details.targets as Array<Record<string, unknown>>)[0]).toMatchObject({ runId: "run_slow", status: "running", description: "Slow task" });
+
+    // Bounded heartbeat: more than one update arrives while genuinely waiting,
+    // without the watcher ever cancelling or restarting the watched run.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const countBeforeSettlement = updates.length;
+    expect(countBeforeSettlement).toBeGreaterThan(1);
+    expect(registry.get("run_slow")?.state).toBe("running");
+
+    finish("done");
+    await waitPromise;
+    const countAtSettlement = updates.length;
+
+    // No further updates after settlement — the heartbeat is torn down, not
+    // merely slowed.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(updates.length).toBe(countAtSettlement);
+    await running.result;
   });
 
   it("interrupts a wait without cancelling work and validates every target before subscribing", async () => {

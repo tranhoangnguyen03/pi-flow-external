@@ -48,6 +48,18 @@ describe("permission tier argv mapping", () => {
     expect(buildPermissionArgs("danger", "agy")).toEqual(["--dangerously-skip-permissions"]);
   });
 
+  it("maps every tier onto native grok sandbox flags plus the bypass permission mode", () => {
+    expect(buildPermissionArgs("readonly", "grok")).toEqual(["--sandbox", "read-only", "--permission-mode", "bypassPermissions"]);
+    expect(buildPermissionArgs("edit", "grok")).toEqual(["--sandbox", "workspace", "--permission-mode", "bypassPermissions"]);
+    expect(buildPermissionArgs("danger", "grok")).toEqual(["--sandbox", "off", "--permission-mode", "bypassPermissions"]);
+  });
+
+  it("maps every tier onto native muse approval/sandbox flags", () => {
+    expect(buildPermissionArgs("readonly", "muse")).toEqual(["--disable-approval", "--disable-write", "--disable-shell"]);
+    expect(buildPermissionArgs("edit", "muse")).toEqual(["--disable-approval"]);
+    expect(buildPermissionArgs("danger", "muse")).toEqual(["--yolo"]);
+  });
+
   it("threads tiers and budget through buildClaudeArgs", () => {
     const base = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, permission: "edit" });
     expect(base).toContain("--permission-mode");
@@ -158,6 +170,15 @@ describe("permission tier argv mapping", () => {
     expect(normalizeAgentOptions({ max_budget_usd: 1.5 }).maxBudgetUsd).toBe(1.5);
   });
 
+  it("accepts workflow agent() description as a compatible alias for label", () => {
+    expect(normalizeAgentOptions({ description: "review the diff" }).label).toBe("review the diff");
+    expect(normalizeAgentOptions({ label: "review" }).label).toBe("review");
+    // Same value on both is fine (not a conflict).
+    expect(normalizeAgentOptions({ label: "review", description: "review" }).label).toBe("review");
+    // Conflicting values are rejected rather than silently preferring one.
+    expect(() => normalizeAgentOptions({ label: "review", description: "map" })).toThrow(/both label and description/);
+  });
+
   it("renders tier, denial, and budget disclosure tags on receipts", () => {
     const toText = (component: { render: (width: number) => string[] }) => (component.render(100) ?? []).join("\n");
     // Synthetic advisory-tier node: exercises the renderer's generic capability.
@@ -206,6 +227,38 @@ describe("tier enforcement resolution", () => {
     expect(permissionLabel(resolvePermission("readonly", "claude"))).toContain("readonly");
   });
 
+  it("resolves grok as enforced at every tier with an accurate sandbox caveat", () => {
+    const readonly = resolvePermission("readonly", "grok");
+    expect(readonly.enforced).toBe(true);
+    expect(readonly.caveat).toContain("kernel sandbox");
+    expect(readonly.caveat).toContain("Linux-only");
+
+    const edit = resolvePermission("edit", "grok");
+    expect(edit.enforced).toBe(true);
+    expect(edit.caveat).toContain("workspace");
+
+    const danger = resolvePermission("danger", "grok");
+    expect(danger.enforced).toBe(true);
+    expect(danger.caveat).toBeUndefined();
+    expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
+  });
+
+  it("resolves muse as enforced at every tier with an accurate approval/sandbox caveat", () => {
+    const readonly = resolvePermission("readonly", "muse");
+    expect(readonly.enforced).toBe(true);
+    expect(readonly.caveat).toContain("disables approval");
+    expect(readonly.caveat).toContain("shell execution");
+
+    const edit = resolvePermission("edit", "muse");
+    expect(edit.enforced).toBe(true);
+    expect(edit.caveat).toContain("sandbox stays enabled");
+
+    const danger = resolvePermission("danger", "muse");
+    expect(danger.enforced).toBe(true);
+    expect(danger.caveat).toBeUndefined();
+    expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
+  });
+
   it("drops non-finite budgets instead of emitting them as CLI flags", () => {
     const args = buildClaudeArgs({
       profile: profile("claude"),
@@ -241,7 +294,7 @@ describe("effective permission tier resolution", () => {
     };
     expect(resolveEffectivePermissionTier("edit", implementer)).toBe("danger");
     expect(resolveEffectivePermissionTier("danger", implementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("readonly");
+    expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("danger");
     expect(resolveEffectivePermissionTier(undefined, implementer)).toBe("danger");
 
     const workerProfile: SubagentProfile = {
@@ -250,6 +303,21 @@ describe("effective permission tier resolution", () => {
       backend: "claude",
     };
     expect(resolveEffectivePermissionTier("edit", workerProfile)).toBe("danger");
+  });
+
+  it("takes the least restrictive profile floor and request, using defaults only without a profile tier", () => {
+    const tiers = ["readonly", "edit", "danger"] as const;
+    for (const backend of ["claude", "codex", "grok", "muse", "pi"] as const) {
+      for (const [i, permission] of tiers.entries()) {
+        const profile = { name: "custom-reviewer", description: "", backend, permission };
+        expect(resolveEffectivePermissionTier(undefined, profile)).toBe(permission);
+        for (const [j, request] of tiers.entries()) {
+          expect(resolveEffectivePermissionTier(request, profile)).toBe(tiers[Math.max(i, j)]);
+        }
+      }
+    }
+    expect(resolveEffectivePermissionTier("readonly", undefined)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", undefined, "edit")).toBe("edit");
   });
 
   it("elevates every agy tier to danger — agy runs unsandboxed", () => {
@@ -265,14 +333,14 @@ describe("effective permission tier resolution", () => {
     expect(resolveEffectivePermissionTier("danger", explorer)).toBe("danger");
   });
 
-  it("preserves edit tier for non-claude backends and non-execution profiles", () => {
+  it("honors the profile floor across backends while allowing higher requests", () => {
     const codexImplementer: SubagentProfile = {
       name: "codex-implementer",
       description: "implement",
       backend: "codex",
       permission: "danger",
     };
-    expect(resolveEffectivePermissionTier("edit", codexImplementer)).toBe("edit");
+    expect(resolveEffectivePermissionTier("edit", codexImplementer)).toBe("danger");
 
     const claudeExplorer: SubagentProfile = {
       name: "claude-explorer",
@@ -281,6 +349,30 @@ describe("effective permission tier resolution", () => {
       permission: "readonly",
     };
     expect(resolveEffectivePermissionTier("edit", claudeExplorer)).toBe("edit");
+  });
+
+  it("keeps grok execution profiles at their danger floor", () => {
+    const grokImplementer: SubagentProfile = {
+      name: "grok-implementer",
+      description: "implement",
+      backend: "grok",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", grokImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", grokImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("danger", grokImplementer)).toBe("danger");
+  });
+
+  it("keeps muse execution profiles at their danger floor", () => {
+    const museImplementer: SubagentProfile = {
+      name: "muse-implementer",
+      description: "implement",
+      backend: "muse",
+      permission: "danger",
+    };
+    expect(resolveEffectivePermissionTier("edit", museImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", museImplementer)).toBe("danger");
+    expect(resolveEffectivePermissionTier("danger", museImplementer)).toBe("danger");
   });
 
   it("elevates pi execution profiles to danger floor when edit tier is requested", () => {
@@ -292,7 +384,7 @@ describe("effective permission tier resolution", () => {
       permission: "danger",
     };
     expect(resolveEffectivePermissionTier("edit", piImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", piImplementer)).toBe("readonly");
+    expect(resolveEffectivePermissionTier("readonly", piImplementer)).toBe("danger");
 
     const piReviewer: SubagentProfile = {
       name: "pi-deepseek-reviewer",

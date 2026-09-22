@@ -23,7 +23,7 @@ const externalHelpParameters = Type.Object({
   }),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, or a registered pi-* harness. Do not use with topic workflow.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. Do not use with topic workflow.",
   })),
 });
 
@@ -46,6 +46,8 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
   agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
   claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
   codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
+  grok: "grok: readonly uses --sandbox read-only, edit uses --sandbox workspace, and danger uses --sandbox off, always alongside --permission-mode bypassPermissions. Enforced by a kernel sandbox, but network blocking is Linux-only; edit limits writes to the workspace. No execution-lane danger floor, since edit already permits shell.",
+  muse: "muse: readonly uses --disable-approval --disable-write --disable-shell (approval, non-shell writes, and shell execution all disabled), edit uses --disable-approval alone (the sandbox stays enabled by default; writes and shell remain available within it), and danger uses --yolo, which disables approval and the sandbox and additionally trusts this workspace (loads its skills/rules) for this run — a broader grant than an unsandboxed run alone. No execution-lane danger floor, since edit already permits shell within the sandbox. Native provider retries (up to 10 attempts) are disclosed via activity narration, not performed by this extension.",
   pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project/user extensions or MCP tools ever load into the child. A profile's capabilitySet, if any, additionally loads exactly its named skills/prompt templates (text resources, not tools); everything else stays out, and project-scope selections load only when the project is trusted. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
 };
 
@@ -53,7 +55,7 @@ const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
 function permissionHelpBackend(harness: string, configuredPiHarnesses: ReadonlySet<string>): ExternalHarness | "pi" {
   if ((EXTERNAL_HARNESSES as readonly string[]).includes(harness)) return harness as ExternalHarness;
   // Callers only reach here after validateHarnessFilter, so any name that is
-  // not one of the three external harnesses is guaranteed to be a registered
+  // not one of the external harnesses is guaranteed to be a registered
   // pi-* harness at this point — never an unrecognized string silently
   // treated as "pi".
   return "pi";
@@ -74,7 +76,7 @@ function permissionHelp(harness: string | undefined, configuredPiHarnesses: Read
  * Reject an unknown harness filter up front, listing the live configured
  * set, rather than letting it silently fall through to "pi" (permissions)
  * or an empty catalog (roles). "Configured" means what a caller could
- * actually select today: the three external CLIs plus any registered
+ * actually select today: the external CLIs plus any registered
  * pi-* harness — never a raw guess at what might exist.
  */
 function validateHarnessFilter(harness: string | undefined, configuredPiHarnesses: ReadonlySet<string>): void {
@@ -92,14 +94,21 @@ function workflowHelp(workflowsEnabled: boolean, workflows: ReturnType<typeof li
 
 Provide exactly one workflow source: name, scriptPath, or script. Every script starts with the literal current declaration export const meta = { apiVersion: 1, name, description }, calls agent() at least once, awaits every started call, and returns JSON-serializable data. Missing/unsupported API versions fail before any child launches. Project .pi/workflows are visible only when the project is trusted.
 
-APIs: agent(prompt, { label, role, harness, subagent_type, permission, max_budget_usd, resume, context, schema, phase }); parallel(thunks); pipeline(items, ...stages); phase(title); log(message). Globals: args and cwd. Agent options other than the profile selector are optional. Choose role/harness or legacy exact subagent_type, never both. Use unique labels and clear task prompts. An agent() succeeds with its value or throws ChildRunError { runId, outcome, message, outputRef, diagnosticsRef }; catch optional failures explicitly. Uncaught failures terminate the workflow and drain siblings. Helpers never convert failures to null. Context options: {mode:"none"} (default), {mode:"recent",turns:N} (positive integer, includes current user turn), or {mode:"full"} (available context after compaction). All children share invocation-time context/settings; earlier child results must still be passed explicitly. Context excludes thinking/system instructions and pending calls; images and snapshots over 1 MiB fail without truncation. Context sharing cannot be combined with resume. Use schema for results that control branching or aggregation. Imports, filesystem globals, Date APIs, and Math.random() are unavailable.
+APIs: agent(prompt, { description, label, role, harness, subagent_type, permission, max_budget_usd, resume, context, schema, phase }); parallel(thunks); pipeline(items, ...stages); phase(title); log(message). Globals: args and cwd. Agent options other than the profile selector are optional. "description" is the common task-name option shared with the direct Agent tool; "label" is a compatible alias — set only one, or both to the same value. Choose role/harness or legacy exact subagent_type, never both. Use unique descriptions/labels and clear task prompts. An agent() succeeds with its value or throws ChildRunError { runId, outcome, message, outputRef, diagnosticsRef }; catch optional failures explicitly. Uncaught failures terminate the workflow and drain siblings. Helpers never convert failures to null. Context options: {mode:"none"} (default), {mode:"recent",turns:N} (positive integer, includes current user turn), or {mode:"full"} (available context after compaction). All children share invocation-time context/settings; earlier child results must still be passed explicitly. Context excludes thinking/system instructions and pending calls; images and snapshots over 1 MiB fail without truncation. Context sharing cannot be combined with resume. Use schema for results that control branching or aggregation. Imports, filesystem globals, Date APIs, and Math.random() are unavailable.
 
 Background and supervision: blocking by default — an ordinary call waits for its child and returns the result, run everything this way unless the parent has other work to do first. Set background:true only when the parent can proceed before completion, then use external_runs on the returned stable run ID while session-owned work continues. Parallel same-harness work (e.g. three agy workers) runs concurrently under the shared maxConcurrentSubagents cap: call parallel([() => agent(...), ...]) in a workflow, or issue separate Agent calls with background:true in one turn, then external_runs wait/inspect/cancel. Awaiting agent() calls sequentially stays serial by construction. external_runs actions are list (optional workflowRunId/cursor/workflowCursor/limit), inspect (runId, view summary|output|diagnostics, optional opaque cursor/limitBytes), wait (runId or runIds, mode any|all), and cancel (runId, optional reason). Follow nextCursor/nextWorkflowCursor for complete results. Wait returns selected terminal outcomes and pending IDs, never cancels pending work, and returns an unsuccessful workflow early; interrupting wait stops only the wait. Cancelling a workflow stops active children, while cancelling one child is a catchable workflow error. Blocking-call interruption cancels that call; background work survives tool return but is cancelled on orderly owning-session shutdown. It is not a daemon: crashes leave unfinished evidence interrupted/uncertain, restart does not adopt work, and live steering is unavailable.
 
 Replay: resumeFromRunId works only with persisted scriptPath and starts an explicit new attempt. It reuses the longest unchanged prefix of successful child calls; the first changed/failed/cancelled/timed-out call and its suffix run again. Script recomposition is cheap, but child reruns can cost money or repeat side effects. There is no automatic repaired-script replay.
 
-Background example:
-export const meta = { apiVersion: 1, name: "review", description: "Map and review a repository", background: true };
+Background is a workflow tool call parameter ({ script, background: true }), never a meta field — meta.background is silently ignored and does not run the workflow in the background.
+
+Background example (same script as below; call the workflow tool with background:true):
+export const meta = { apiVersion: 1, name: "review", description: "Map and review a repository" };
+const [map, review] = await parallel([
+  () => agent("Map /absolute/repo read-only.", { label: "map", role: "explorer" }),
+  () => agent("Review /absolute/repo read-only.", { label: "review", role: "reviewer", harness: "codex" }),
+]);
+return { map, review };
 
 Foreground example:
 export const meta = { apiVersion: 1, name: "review", description: "Map and review a repository" };

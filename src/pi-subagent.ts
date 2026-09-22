@@ -22,6 +22,7 @@ import {
   getSubagentProfiles,
   mergeSynthesizedPiProfiles,
   resolveExternalProfile,
+  selectorHarness,
 } from "./profiles.ts";
 import { getConfiguredHarnessNames, loadHarnessConfigs } from "./harnesses.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
@@ -86,7 +87,7 @@ const agentToolParameters = Type.Object({
   })),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness override: agy, claude, codex, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
+    description: "Optional harness override: agy, claude, codex, grok, muse, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
   })),
   subagent_type: Type.Optional(Type.String({
     minLength: 1,
@@ -95,7 +96,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier override. Omit to use the profile's calibrated default (recommended). Enforcement varies by backend: codex uses its --sandbox axis, claude denies shell commands below danger, and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
+        "Optional permission tier request. Effective permissions take the higher of the profile floor and this request (readonly < edit < danger); a request cannot reduce the profile's authority. Omit to use the profile floor (recommended). Enforcement varies by backend: codex and grok use their --sandbox axis, claude denies shell commands below danger, muse disables approval/write/shell flags per tier (danger additionally trusts the workspace via --yolo), and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
     }),
   ),
   max_budget_usd: Type.Optional(
@@ -178,7 +179,7 @@ interface CreateAgentToolOptions {
 }
 
 const PROGRESS_STATUSES: SubagentProgressNode["status"][] = ["queued", "running", "done", "error", "aborted"];
-const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy"];
+const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy", "grok", "muse"];
 
 function shouldEnableProgress(ctx: ExtensionContext): boolean {
   if (!ctx.hasUI) {
@@ -401,7 +402,7 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, or registered Pi harness role.",
+    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     parameters: agentToolParameters,
     executionMode: "parallel",
@@ -469,6 +470,7 @@ function createAgentTool(
           description: params.description,
           subagentType,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           status: "error",
           error,
         });
@@ -534,10 +536,11 @@ function createAgentTool(
           prompt: briefing.prompt,
           profile: profile.name,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           queuedAt: new Date(queuedAt).toISOString(),
         },
       });
-      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend);
+      const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend, selectorHarness(profile));
       progress.context = briefing.context;
       progress.queuedAt = queuedAt;
       progress.runId = runRecord.runId;
@@ -572,6 +575,7 @@ function createAgentTool(
             description: params.description,
             subagentType,
             backend: profile.backend,
+            harness: selectorHarness(profile),
             status,
             error: message,
             progress: run.progress,
@@ -665,6 +669,7 @@ function createAgentTool(
           description: params.description,
           subagentType,
           backend: profile.backend,
+          harness: selectorHarness(profile),
           status: "queued",
           runId: runRecord.runId,
           recordPath: runRecord.directory,

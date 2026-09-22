@@ -1194,6 +1194,11 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     );
 
     expect(result.details.status).toBe("completed");
+    // Additive normalized field: a coordinating model reading either tool's
+    // details sees the same "done" vocabulary Agent's own details.status
+    // already uses, without workflow's internal "completed" state name
+    // changing for existing readers (journal/replay/rendering).
+    expect(result.details.lifecycleStatus).toBe("done");
     expect(result.details.result).toEqual({ resp: "CUSTOM_PI_WORKFLOW_OK" });
   });
 

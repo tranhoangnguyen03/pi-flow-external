@@ -55,7 +55,10 @@ export function resolveEffectivePermissionTier(
   profile: PermissionProfileRef | undefined,
   defaultTier: PermissionTier = "danger",
 ): PermissionTier {
-  const baseTier = requestedTier ?? profile?.permission ?? defaultTier;
+  // Profile permissions are a floor: parent requests can grant more, never less.
+  const floor = profile?.permission ?? defaultTier;
+  const tiers: readonly PermissionTier[] = ["readonly", "edit", "danger"];
+  const baseTier = tiers[Math.max(tiers.indexOf(floor), tiers.indexOf(requestedTier ?? floor))]!;
   if (profile?.backend === "agy") {
     // Get out of the way: agy's only unsandboxed headless mode is
     // --dangerously-skip-permissions, and its default sandbox denies even
@@ -108,6 +111,41 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         backend,
         caveat: tier === "danger" ? undefined : "runs unsandboxed; tier advisory only",
       };
+    case "grok":
+      // --sandbox is a real kernel-level sandbox on the grok CLI, enforced at
+      // every tier; its network-blocking guarantee is Linux-only, so the
+      // readonly caveat discloses that rather than overstating cross-platform
+      // enforcement. edit's --sandbox workspace limits writes to the cwd.
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat:
+          tier === "readonly"
+            ? "kernel sandbox; network blocking is Linux-only"
+            : tier === "edit"
+              ? "writes limited to workspace"
+              : undefined,
+      };
+    case "muse":
+      // --disable-approval/--disable-write/--disable-shell and --yolo are real,
+      // enforced flags (verified against real muse exec runs), not advisory
+      // instructions. danger's --yolo grants a broader trust than an
+      // unsandboxed run alone: it also trusts the workspace for this run
+      // (loads its skills/rules), disclosed in the full permission-help text
+      // rather than this terse caveat (matching permissionLabel's universal
+      // "unsandboxed external CLI" wording for every danger tier).
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat:
+          tier === "readonly"
+            ? "disables approval, non-shell writes, and shell execution"
+            : tier === "edit"
+              ? "sandbox stays enabled; only approval is bypassed"
+              : undefined,
+      };
     case "pi":
       // A curated builtins-only tool surface bounds which tool *names* exist
       // (see spawn.ts's pi branch); it is a real, truthful tool-level
@@ -149,6 +187,19 @@ export function buildPermissionArgs(
       // hard-denies read-only tools like read_url_content, so we always pass the
       // bypass flag and treat readonly/edit as advisory profile-body instructions.
       return ["--dangerously-skip-permissions"];
+    case "grok":
+      if (tier === "readonly") return ["--sandbox", "read-only", "--permission-mode", "bypassPermissions"];
+      if (tier === "edit") return ["--sandbox", "workspace", "--permission-mode", "bypassPermissions"];
+      return ["--sandbox", "off", "--permission-mode", "bypassPermissions"];
+    case "muse":
+      // Approval must always be bypassed headlessly, or exec would hang on an
+      // interactive prompt. readonly additionally strips non-shell writes and
+      // shell; edit leaves the (on-by-default) sandbox enabled with only
+      // approval bypassed; danger's --yolo disables approval and the sandbox
+      // and additionally trusts the workspace for this run.
+      if (tier === "readonly") return ["--disable-approval", "--disable-write", "--disable-shell"];
+      if (tier === "edit") return ["--disable-approval"];
+      return ["--yolo"];
     default:
       return [];
   }

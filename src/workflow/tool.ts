@@ -9,8 +9,10 @@ import {
 import { Container, Text } from "@earendil-works/pi-tui";
 import { resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
-import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode } from "../core/subagent-render.ts";
+import { isActiveSubagentStatus, isCompletedSubagentStatus, renderOutputText, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
+import { applySubagentProgressToWorkflowAgent, applySubagentResultToWorkflowAgent } from "../core/agent-snapshot.ts";
+import { normalizeRunStatus } from "../core/run-projection.ts";
 import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { createRunRecord } from "../core/run-record.ts";
@@ -18,7 +20,14 @@ import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
-import { extractSharedPiRoleProfiles, filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../profiles.ts";
+import {
+  extractSharedPiRoleProfiles,
+  filterExternalAgentProfiles,
+  getSubagentProfiles,
+  mergeSynthesizedPiProfiles,
+  resolveExternalProfile,
+  selectorHarness,
+} from "../profiles.ts";
 import { loadHarnessConfigs } from "../harnesses.ts";
 import { resolveCapabilitySelection, type FrozenCapabilitySelection } from "../core/capabilities.ts";
 import { hashStableValue } from "./replay-cache.ts";
@@ -106,6 +115,7 @@ function workflowError(
 ) {
   return workflowResult(text, {
     status: "error",
+    lifecycleStatus: "error",
     agentCount: 0,
     phases: [],
     agents: [],
@@ -117,6 +127,7 @@ function workflowError(
 function cloneSnapshot(snapshot: WorkflowToolDetails): WorkflowToolDetails {
   return {
     ...snapshot,
+    lifecycleStatus: normalizeRunStatus(snapshot.status),
     phases: [...snapshot.phases],
     plannedPhases: snapshot.plannedPhases?.map((phase) => ({ ...phase })),
     agents: snapshot.agents.map((agent) => ({ ...agent, activity: agent.activity ? [...agent.activity] : undefined })),
@@ -371,20 +382,7 @@ export function createWorkflowTool(
             const details = partial.details as SubagentToolDetails;
             const agent = snapshot.agents.find((item) => item.index === childIndex);
             if (agent && details.progress) {
-              agent.startedAt = details.progress.startedAt;
-              agent.endedAt = details.progress.endedAt;
-              agent.activity = [...details.progress.activity];
-              agent.activityCount = details.progress.activityCount;
-              agent.result = details.progress.result;
-              agent.error = details.progress.error;
-              agent.assistantOutput = details.progress.assistantOutput;
-              agent.processStartedAt = details.progress.processStartedAt;
-              agent.firstActivityAt = details.progress.firstActivityAt;
-              agent.lastActivityAt = details.progress.lastActivityAt;
-              agent.timedOut = details.progress.timedOut;
-              agent.usage = details.progress.usage;
-              agent.status = details.progress.status;
-              agent.context = details.context;
+              applySubagentProgressToWorkflowAgent(agent, details.progress);
               if (call.runRecord) options.registry.update(call.runRecord.runId, details.progress);
               emit();
             }
@@ -402,37 +400,7 @@ export function createWorkflowTool(
         // so no post-hoc attachment is needed here.
         const agent = snapshot.agents.find((item) => item.index === childIndex);
         if (agent) {
-          const progress = resultDetails.progress;
-          agent.status = resultDetails.status;
-          agent.result = resultDetails.result;
-          agent.error = resultDetails.error;
-          agent.assistantOutput = resultDetails.assistantOutput;
-          agent.processStartedAt = progress?.processStartedAt;
-          agent.firstActivityAt = progress?.firstActivityAt;
-          agent.lastActivityAt = progress?.lastActivityAt;
-          agent.timedOut = resultDetails.timedOut;
-          agent.usage = resultDetails.usage;
-          agent.externalRunId = resultDetails.runId;
-          agent.recordPath = resultDetails.recordPath;
-          agent.backendEventCount = resultDetails.backendEventCount;
-          agent.nestedActivitySeen = resultDetails.nestedActivitySeen;
-          agent.nestedTimeoutExtended = resultDetails.nestedTimeoutExtended;
-          agent.effectiveTimeoutMs = resultDetails.effectiveTimeoutMs;
-          agent.recordingError = resultDetails.recordingError;
-          agent.permission = resultDetails.permission;
-          agent.permissionEnforced = resultDetails.permissionEnforced;
-          agent.permissionDenials = resultDetails.permissionDenials;
-          agent.maxBudgetUsd = resultDetails.maxBudgetUsd;
-          agent.sessionId = resultDetails.sessionId;
-          agent.resumedFrom = resultDetails.resumedFrom;
-          agent.context = resultDetails.context;
-          agent.capabilities = resultDetails.capabilities;
-          if (progress) {
-            agent.startedAt = progress.startedAt;
-            agent.endedAt = progress.endedAt;
-            agent.activity = [...progress.activity];
-            agent.activityCount = progress.activityCount;
-          }
+          applySubagentResultToWorkflowAgent(agent, resultDetails);
           emit();
         }
         if (resultDetails.status !== "done") {
@@ -544,11 +512,13 @@ export function createWorkflowTool(
             // in-place before returning (it only yields at its first await,
             // limiter.acquire()), so this update is guaranteed to land before
             // any real progress observation from execution.
+            const queuedProfile = profiles.get(call.subagentType);
             options.registry.update(runRecord.runId, {
               status: "queued",
               queuedAt: Date.parse(runRecord.queuedAt),
               description: call.label,
-              backend: profiles.get(call.subagentType)?.backend,
+              backend: queuedProfile?.backend,
+              harness: queuedProfile ? selectorHarness(queuedProfile) : undefined,
             });
             return registered.result;
           },
@@ -597,6 +567,7 @@ export function createWorkflowTool(
                 prompt: event.prompt,
                 profile: event.subagentType,
                 backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
                 queuedAt: new Date(queuedAt).toISOString(),
               },
             });
@@ -606,7 +577,8 @@ export function createWorkflowTool(
               label: event.label,
               phase: event.phase,
               subagentType: event.subagentType,
-              backend: profiles.get(event.subagentType)?.backend,
+              backend: profile?.backend,
+              harness: profile ? selectorHarness(profile) : undefined,
               status: "queued",
               externalRunId: runRecord.runId,
               recordPath: runRecord.directory,
@@ -620,6 +592,7 @@ export function createWorkflowTool(
             await journalWriter?.appendAgentQueued(event);
           },
           onAgentStart: (event) => {
+            const profile = profiles.get(event.subagentType);
             let agent = snapshot.agents.find((item) => item.index === event.index);
             if (!agent) {
               agent = {
@@ -627,7 +600,8 @@ export function createWorkflowTool(
                 label: event.label,
                 phase: event.phase,
                 subagentType: event.subagentType,
-                backend: profiles.get(event.subagentType)?.backend,
+                backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
                 status: event.cached ? "done" : "running",
                 activity: [],
                 activityCount: 0,
@@ -655,7 +629,8 @@ export function createWorkflowTool(
                 queuedAt: agent.queuedAt,
                 executionStartedAt: event.executionStartedAt,
                 description: event.label,
-                backend: profiles.get(event.subagentType)?.backend,
+                backend: profile?.backend,
+                harness: profile ? selectorHarness(profile) : undefined,
               });
             }
             emit();
@@ -905,7 +880,7 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
   const access = details.status === "running" ? "external host access · " : "";
   container.addChild(
     new Text(
-      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${details.status} · ${access}${counts}`)}`,
+      `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${normalizeRunStatus(details.status)} · ${access}${counts}`)}`,
       0,
       0,
     ),
@@ -929,9 +904,16 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
 
   if (expanded && details.status !== "running") {
     if (details.result !== undefined) {
-      const output = typeof details.result === "string" ? details.result : JSON.stringify(details.result, null, 2);
+      const isTextAnswer = typeof details.result === "string";
+      const output = isTextAnswer ? details.result as string : JSON.stringify(details.result, null, 2);
       const preview = output.length > 4_000 ? `${output.slice(0, 4_000)}\n… ${output.length - 4_000} more characters` : output;
-      container.addChild(new Text(`  ${theme.bold("Final output")}\n${preview.split("\n").map((line) => `  ${line}`).join("\n")}`, 0, 0));
+      container.addChild(new Text(`  ${theme.bold("Final output")}`, 0, 0));
+      // A text answer renders as Markdown (see subagent-render.ts's shared
+      // renderOutputText); a structured (object/array/etc) result stays
+      // formatted data, never Markdown-interpreted prose, per this issue's
+      // "render structured workflow results as formatted data without
+      // inventing a prose answer" contract.
+      container.addChild(isTextAnswer ? renderOutputText(preview, 2) : new Text(preview.split("\n").map((line) => `  ${line}`).join("\n"), 0, 0));
     }
     if (details.runId) {
       container.addChild(new Text(`  ${theme.fg("dim", `Workflow evidence ${details.runId}`)}`, 0, 0));

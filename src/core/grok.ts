@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   assistantOutput,
@@ -13,13 +16,14 @@ import {
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
-import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
 import { abortChildTree } from "./process-tree.ts";
 
-const CLAUDE_COMMAND = "claude";
+const GROK_COMMAND = "grok";
 
-export interface ClaudeTokenUsage {
+export type GrokReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export interface GrokTokenUsage {
   inputTokens: number;
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
@@ -27,7 +31,9 @@ export interface ClaudeTokenUsage {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
@@ -35,55 +41,68 @@ function asFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 
-export function buildClaudeArgs({
+export function normalizeGrokReasoningEffort(thinkingLevel: ThinkingLevel | undefined): GrokReasoningEffort | undefined {
+  const normalized = thinkingLevel?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "off" || normalized === "minimal" || normalized === "low") {
+    return "low";
+  }
+  if (normalized === "medium") {
+    return "medium";
+  }
+  if (normalized === "high") {
+    return "high";
+  }
+  if (normalized === "xhigh") {
+    return "xhigh";
+  }
+  return undefined;
+}
+
+export function buildGrokArgs({
+  promptFilePath,
   profile,
   thinkingLevel,
   outputSchema,
   permission = "danger",
-  maxBudgetUsd,
   resumeSessionId,
-  effectiveUid = process.geteuid?.(),
 }: {
+  promptFilePath?: string;
   profile: SubagentProfile;
-  thinkingLevel: ThinkingLevel | undefined;
+  thinkingLevel?: ThinkingLevel;
   outputSchema?: unknown;
   permission?: PermissionTier;
-  maxBudgetUsd?: number;
   resumeSessionId?: string;
-  effectiveUid?: number;
 }): string[] {
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-  ];
+  const args: string[] = [];
+  if (promptFilePath) {
+    args.push("--prompt-file", promptFilePath);
+  }
+  if (outputSchema !== undefined && outputSchema !== null) {
+    args.push("--json-schema", typeof outputSchema === "string" ? outputSchema : JSON.stringify(outputSchema));
+  } else {
+    args.push("--output-format", "streaming-messages-json");
+  }
   if (resumeSessionId) {
     args.push("--resume", resumeSessionId);
   }
-  // Otherwise sessions persist in Claude Code's own local storage so a later
-  // call can --resume them; live-verified (plan doc A2). --no-session-persistence
-  // made every recorded session_id unresumable.
-  args.push(...buildPermissionArgs(permission, "claude", { effectiveUid }));
-  if (maxBudgetUsd !== undefined && Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0) {
-    args.push("--max-budget-usd", String(maxBudgetUsd));
-  }
+  args.push(...buildPermissionArgs(permission, "grok"));
   if (profile.systemPrompt) {
-    args.push("--append-system-prompt", profile.systemPrompt);
+    args.push("--system-prompt-override", profile.systemPrompt);
   }
   if (profile.model) {
-    args.push("--model", profile.model);
+    args.push("-m", profile.model);
   }
-  if (thinkingLevel) {
-    args.push("--effort", thinkingLevel);
-  }
-  if (outputSchema !== undefined && outputSchema !== null) {
-    args.push("--json-schema", JSON.stringify(outputSchema));
+  const effort = normalizeGrokReasoningEffort(thinkingLevel ?? profile.thinking);
+  if (effort) {
+    args.push("--reasoning-effort", effort);
   }
   return args;
 }
 
-export function parseClaudeJsonLine(line: string): Record<string, unknown> | undefined {
+export function parseGrokJsonLine(line: string): Record<string, unknown> | undefined {
   const trimmed = line.trim();
   if (!trimmed) {
     return undefined;
@@ -96,15 +115,15 @@ export function parseClaudeJsonLine(line: string): Record<string, unknown> | und
   }
 }
 
-function parseUsageRecord(value: unknown): ClaudeTokenUsage | undefined {
+function parseUsageRecord(value: unknown): GrokTokenUsage | undefined {
   const usage = asRecord(value);
   if (!usage) {
     return undefined;
   }
-  const inputTokens = asFiniteNumber(usage.input_tokens);
-  const cacheReadInputTokens = asFiniteNumber(usage.cache_read_input_tokens ?? 0);
-  const cacheCreationInputTokens = asFiniteNumber(usage.cache_creation_input_tokens ?? 0);
-  const outputTokens = asFiniteNumber(usage.output_tokens);
+  const inputTokens = asFiniteNumber(usage.input_tokens ?? usage.inputTokens);
+  const cacheReadInputTokens = asFiniteNumber(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0);
+  const cacheCreationInputTokens = asFiniteNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0);
+  const outputTokens = asFiniteNumber(usage.output_tokens ?? usage.outputTokens);
   if (
     inputTokens === undefined ||
     cacheReadInputTokens === undefined ||
@@ -116,12 +135,12 @@ function parseUsageRecord(value: unknown): ClaudeTokenUsage | undefined {
   return { inputTokens, cacheReadInputTokens, cacheCreationInputTokens, outputTokens };
 }
 
-function parseModelUsage(value: unknown): ClaudeTokenUsage | undefined {
+function parseModelUsage(value: unknown): GrokTokenUsage | undefined {
   const modelUsage = asRecord(value);
   if (!modelUsage) {
     return undefined;
   }
-  const totals: ClaudeTokenUsage = {
+  const totals: GrokTokenUsage = {
     inputTokens: 0,
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
@@ -133,10 +152,10 @@ function parseModelUsage(value: unknown): ClaudeTokenUsage | undefined {
     if (!usage) {
       continue;
     }
-    const inputTokens = asFiniteNumber(usage.inputTokens);
-    const cacheReadInputTokens = asFiniteNumber(usage.cacheReadInputTokens ?? 0);
-    const cacheCreationInputTokens = asFiniteNumber(usage.cacheCreationInputTokens ?? 0);
-    const outputTokens = asFiniteNumber(usage.outputTokens);
+    const inputTokens = asFiniteNumber(usage.inputTokens ?? usage.input_tokens);
+    const cacheReadInputTokens = asFiniteNumber(usage.cacheReadInputTokens ?? usage.cache_read_input_tokens ?? 0);
+    const cacheCreationInputTokens = asFiniteNumber(usage.cacheCreationInputTokens ?? usage.cache_creation_input_tokens ?? 0);
+    const outputTokens = asFiniteNumber(usage.outputTokens ?? usage.output_tokens);
     if (
       inputTokens === undefined ||
       cacheReadInputTokens === undefined ||
@@ -171,39 +190,32 @@ function sumModelUsageCost(value: unknown): number | undefined {
   return found ? total : undefined;
 }
 
-export function extractClaudeUsage(event: Record<string, unknown>): ClaudeTokenUsage | undefined {
-  if (event.type === "result") {
+export function extractGrokUsage(event: Record<string, unknown>): GrokTokenUsage | undefined {
+  if (event.type === "result" || event.stopReason !== undefined || event.stop_reason !== undefined) {
     return parseModelUsage(event.modelUsage) ?? parseUsageRecord(event.usage);
   }
-  if (event.type !== "assistant") {
-    return undefined;
+  if (event.type === "assistant") {
+    const message = asRecord(event.message);
+    return message ? parseUsageRecord(message.usage) : undefined;
   }
-  const message = asRecord(event.message);
-  return message ? parseUsageRecord(message.usage) : undefined;
+  return undefined;
 }
 
-export function extractClaudeCostUsd(event: Record<string, unknown>): number | undefined {
-  if (event.type !== "result") {
-    return undefined;
-  }
+export function extractGrokCostUsd(event: Record<string, unknown>): number | undefined {
   return asFiniteNumber(event.total_cost_usd) ?? sumModelUsageCost(event.modelUsage);
 }
 
-export function extractClaudeSessionId(event: Record<string, unknown>): string | undefined {
-  if (event.type !== "result") {
-    return undefined;
+export function extractGrokSessionId(event: Record<string, unknown>): string | undefined {
+  if (typeof event.session_id === "string" && event.session_id) {
+    return event.session_id;
   }
-  return typeof event.session_id === "string" && event.session_id ? event.session_id : undefined;
+  if (typeof event.sessionId === "string" && event.sessionId) {
+    return event.sessionId;
+  }
+  return undefined;
 }
 
-export function extractClaudePermissionDenials(event: Record<string, unknown>): number | undefined {
-  if (event.type !== "result" || !Array.isArray(event.permission_denials)) {
-    return undefined;
-  }
-  return event.permission_denials.length;
-}
-
-export function claudeUsageToSubagentUsage(usage: ClaudeTokenUsage, costUsd: number | undefined): SubagentUsage {
+export function grokUsageToSubagentUsage(usage: GrokTokenUsage, costUsd: number | undefined): SubagentUsage {
   const input = Math.max(0, usage.inputTokens);
   const cacheRead = Math.max(0, usage.cacheReadInputTokens);
   const cacheWrite = Math.max(0, usage.cacheCreationInputTokens);
@@ -221,7 +233,7 @@ export function claudeUsageToSubagentUsage(usage: ClaudeTokenUsage, costUsd: num
   };
 }
 
-function textFromClaudeContent(content: unknown): string | undefined {
+function textFromGrokContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -235,42 +247,29 @@ function textFromClaudeContent(content: unknown): string | undefined {
   return text ? text : undefined;
 }
 
-function structuredTextFromClaudeValue(value: unknown): string | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-export function extractClaudeFinalText(event: Record<string, unknown>): string | undefined {
+export function extractGrokFinalText(event: Record<string, unknown>): string | undefined {
   if (event.type === "result") {
     if (event.is_error === true) {
       return undefined;
     }
-    return (
-      structuredTextFromClaudeValue(event.structured_output) ??
-      (typeof event.result === "string" ? event.result : undefined)
-    );
+    return typeof event.result === "string" ? event.result : undefined;
   }
   if (event.type !== "assistant") {
     return undefined;
   }
   const message = asRecord(event.message);
-  return message ? textFromClaudeContent(message.content) : undefined;
+  return message ? textFromGrokContent(message.content) : undefined;
 }
 
-export function extractClaudeError(event: Record<string, unknown>): string | undefined {
-  if (event.type === "result" && event.is_error === true) {
+export function extractGrokError(event: Record<string, unknown>): string | undefined {
+  if (event.type === "result" && (event.is_error === true || event.subtype !== "success")) {
     const errors = Array.isArray(event.errors) ? event.errors : [];
     const first = errors.find((candidate) => typeof candidate === "string");
     const result = typeof event.result === "string" && event.result.trim() ? event.result.trim() : undefined;
-    const apiStatus = event.api_error_status !== undefined && event.api_error_status !== null
-      ? `API error ${String(event.api_error_status)}`
-      : undefined;
-    return `Claude failed: ${first ?? result ?? apiStatus ?? (typeof event.subtype === "string" ? event.subtype : "turn failed")}`;
+    return `Grok failed: ${first ?? result ?? (typeof event.subtype === "string" ? event.subtype : "turn failed")}`;
   }
   if (event.type === "error") {
-    return `Claude error: ${typeof event.message === "string" ? event.message : "unknown error"}`;
+    return `Grok error: ${typeof event.message === "string" ? event.message : "unknown error"}`;
   }
   return undefined;
 }
@@ -295,7 +294,7 @@ function getPreviewFromRecord(record: Record<string, unknown>): string {
   return input ? getPreviewFromRecord(input) : "";
 }
 
-export function claudeActivityFromEvent(event: Record<string, unknown>): string | undefined {
+export function grokActivityFromEvent(event: Record<string, unknown>): string | undefined {
   if (event.type === "assistant") {
     const message = asRecord(event.message);
     const content = message?.content;
@@ -310,20 +309,23 @@ export function claudeActivityFromEvent(event: Record<string, unknown>): string 
       }
     }
   }
-  const error = extractClaudeError(event);
+  const error = extractGrokError(event);
   return error ? error : undefined;
 }
 
-function emptyTokenUsage(): ClaudeTokenUsage {
+async function createGrokPromptFile(prompt: string): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-subagents-grok-prompt-"));
+  const promptPath = join(dir, "prompt.txt");
+  await writeFile(promptPath, prompt, "utf8");
   return {
-    inputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0,
-    outputTokens: 0,
+    path: promptPath,
+    cleanup: async () => {
+      await rm(dir, { recursive: true, force: true });
+    },
   };
 }
 
-export async function spawnClaudeSubagent(params: {
+export async function spawnGrokSubagent(params: {
   toolCallId: string;
   description: string;
   prompt: string;
@@ -339,7 +341,6 @@ export async function spawnClaudeSubagent(params: {
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
-  maxBudgetUsd?: number;
   resumeSessionId?: string;
   executionStartedAt?: number;
 }): Promise<AgentToolResult> {
@@ -350,76 +351,75 @@ export async function spawnClaudeSubagent(params: {
     description: params.description,
     subagentType,
     backend: params.profile.backend,
-    harness: selectorHarness(params.profile),
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
     executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
-  let latestRawUsage = emptyTokenUsage();
+
+  let latestRawUsage: GrokTokenUsage = {
+    inputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    outputTokens: 0,
+  };
   let latestCostUsd: number | undefined;
-  let latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
+  let latestUsage = grokUsageToSubagentUsage(latestRawUsage, latestCostUsd);
   let resultText = "";
   const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
-  let permissionDenials: number | undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
   let eventError: string | undefined;
   let oversizeError: string | undefined;
   let child: ChildProcess | undefined;
+  let promptFile: Awaited<ReturnType<typeof createGrokPromptFile>> | undefined;
   let abortHandler: (() => void) | undefined;
+  const isStructuredMode = params.outputSchema !== undefined && params.outputSchema !== null;
+  let structuredStdout = "";
 
-  const publishUsage = (usage: ClaudeTokenUsage | undefined, costUsd: number | undefined) => {
+  const publishUsage = (usage: GrokTokenUsage | undefined, costUsd: number | undefined) => {
     if (usage) {
       latestRawUsage = usage;
     }
     if (costUsd !== undefined) {
       latestCostUsd = costUsd;
     }
-    latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
+    latestUsage = grokUsageToSubagentUsage(latestRawUsage, latestCostUsd);
     if (progress) {
       progress.usage = latestUsage;
     }
     params.onUsage(latestUsage);
     emitter.emitSoon();
   };
+
   const handleEvent = (event: Record<string, unknown>) => {
     try {
       params.onBackendEvent?.(event);
     } catch {
       // Observation hooks must not change the backend result.
     }
-    // A result event ends a model turn, not the stream: when the child runs
-    // background agents, a task notification can run another turn and emit a
-    // later result. Process exit is the stream boundary; the latest result
-    // wins, and explicit error events stay fatal below.
     if (event.type === "result") {
       sawTerminalEvent = true;
-      terminalSucceeded = event.subtype === "success" && event.is_error === false;
+      const stopReason = event.stop_reason ?? event.stopReason;
+      terminalSucceeded = event.subtype === "success" && event.is_error === false && stopReason === "end_turn";
     }
-    const activity = claudeActivityFromEvent(event);
+    const activity = grokActivityFromEvent(event);
     if (activity) {
       emitter.addActivity(activity);
       emitter.emitSoon();
     }
-    const usage = extractClaudeUsage(event);
-    const cost = extractClaudeCostUsd(event);
+    const usage = extractGrokUsage(event);
+    const cost = extractGrokCostUsd(event);
     if (usage || cost !== undefined) {
       publishUsage(usage, cost);
     }
-    const text = extractClaudeFinalText(event);
-    const eventSessionId = extractClaudeSessionId(event);
+    const eventSessionId = extractGrokSessionId(event);
     if (eventSessionId) {
       sessionId = eventSessionId;
     }
-    const denials = extractClaudePermissionDenials(event);
-    if (denials !== undefined) {
-      // Latest result wins, consistent with text/usage/session fields: a
-      // background-agent follow-up turn re-reports rather than appends.
-      permissionDenials = denials;
-    }
+    const text = extractGrokFinalText(event);
     if (text !== undefined) {
       resultText = text;
       if (event.type === "assistant" && text.trim()) {
@@ -431,11 +431,11 @@ export async function spawnClaudeSubagent(params: {
         emitter.emitSoon();
       }
     }
-    const error = extractClaudeError(event);
+    const error = extractGrokError(event);
     if (error) {
       eventError ??= error;
     } else if (event.type === "result" && !terminalSucceeded) {
-      eventError ??= "claude terminal event did not affirm success";
+      eventError ??= "grok terminal event did not affirm success";
     }
   };
 
@@ -444,28 +444,39 @@ export async function spawnClaudeSubagent(params: {
       throw new Error("Subagent aborted before prompt start");
     }
 
-    const args = buildClaudeArgs({
+    promptFile = await createGrokPromptFile(taskPrompt);
+    if (params.signal?.aborted) {
+      throw new Error("Subagent aborted before prompt start");
+    }
+
+    const args = buildGrokArgs({
+      promptFilePath: promptFile.path,
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
       outputSchema: params.outputSchema,
       permission: params.permission,
-      maxBudgetUsd: params.maxBudgetUsd,
       resumeSessionId: params.resumeSessionId,
     });
 
-    const proc = spawn(CLAUDE_COMMAND, args, {
+    const proc = spawn(GROK_COMMAND, args, {
       cwd: params.ctx.cwd,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     child = proc;
+
     proc.once("spawn", () => {
       if (progress) progress.processStartedAt = Date.now();
-      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
+      try {
+        params.onProcessStart?.(proc.pid);
+      } catch {
+        // observation is best-effort
+      }
     });
+
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("claude stdin/stdout/stderr pipes were not available");
+      throw new Error("grok stdin/stdout/stderr pipes were not available");
     }
 
     abortHandler = () => {
@@ -481,22 +492,31 @@ export async function spawnClaudeSubagent(params: {
     proc.stdout.setEncoding("utf8");
     proc.stderr.setEncoding("utf8");
     proc.stdin.on("error", () => {
-      // If claude exits before reading stdin, the process close/error path below
-      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
+      // Avoid unhandled EPIPE if child exits before reading stdin
     });
 
     proc.stdout.on("data", (chunk) => {
+      if (isStructuredMode) {
+        structuredStdout += chunk;
+        if (structuredStdout.length > MAX_STDOUT_LINE_CHARS) {
+          oversizeError ??= `grok emitted a stdout payload over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
+          structuredStdout = "";
+          abortChildTree(proc);
+        }
+        return;
+      }
+
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
       if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
+        oversizeError ??= `grok emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
         stdoutBuffer = "";
         abortChildTree(proc);
         return;
       }
       for (const line of lines) {
-        const event = parseClaudeJsonLine(line);
+        const event = parseGrokJsonLine(line);
         if (event) {
           handleEvent(event);
         }
@@ -509,13 +529,13 @@ export async function spawnClaudeSubagent(params: {
 
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
+    proc.stdin.end();
 
     const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       proc.once("error", reject);
       proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseClaudeJsonLine(stdoutBuffer);
+        if (!isStructuredMode && stdoutBuffer.trim()) {
+          const event = parseGrokJsonLine(stdoutBuffer);
           if (event) {
             handleEvent(event);
           }
@@ -540,16 +560,73 @@ export async function spawnClaudeSubagent(params: {
     }
     if (closeResult.code !== 0) {
       const stderr = stderrBuffer.text().trim();
-      throw new Error(`claude exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
+      throw new Error(
+        `grok exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`,
+      );
     }
-    if (!sawTerminalEvent) {
-      throw new Error("claude exited without a terminal JSON event");
-    }
-    if (!terminalSucceeded) {
-      throw new Error("claude terminal event did not affirm success");
-    }
-    if (!resultText.trim()) {
-      throw new Error("claude reported completion without a final result");
+
+    if (isStructuredMode) {
+      const trimmedDoc = structuredStdout.trim();
+      if (!trimmedDoc) {
+        throw new Error("grok exited without a terminal JSON event");
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmedDoc);
+      } catch {
+        throw new Error("grok exited without a terminal JSON event");
+      }
+      const doc = asRecord(parsed);
+      if (!doc) {
+        throw new Error("grok exited without a terminal JSON event");
+      }
+
+      try {
+        params.onBackendEvent?.(doc);
+      } catch {
+        // Observation hooks must not change the backend result.
+      }
+
+      sawTerminalEvent = true;
+      const stopReason = doc.stopReason ?? doc.stop_reason;
+      terminalSucceeded = stopReason === "end_turn";
+      if (!terminalSucceeded) {
+        throw new Error("grok terminal event did not affirm success");
+      }
+
+      const eventSessionId = extractGrokSessionId(doc);
+      if (eventSessionId) {
+        sessionId = eventSessionId;
+      }
+      const usage = extractGrokUsage(doc);
+      const cost = extractGrokCostUsd(doc);
+      if (usage || cost !== undefined) {
+        publishUsage(usage, cost);
+      }
+
+      if (doc.structuredOutput === undefined || doc.structuredOutput === null) {
+        const structuredError =
+          (typeof doc.structuredOutputError === "string" && doc.structuredOutputError.trim()) ||
+          (typeof doc.error === "string" && doc.error.trim()) ||
+          (typeof doc.message === "string" && doc.message.trim()) ||
+          undefined;
+        throw new Error(
+          structuredError
+            ? `Grok structured output failed: ${structuredError}`
+            : "grok reported completion without a final result",
+        );
+      }
+      resultText = JSON.stringify(doc.structuredOutput);
+    } else {
+      if (!sawTerminalEvent) {
+        throw new Error("grok exited without a terminal JSON event");
+      }
+      if (!terminalSucceeded) {
+        throw new Error("grok terminal event did not affirm success");
+      }
+      if (!resultText.trim()) {
+        throw new Error("grok reported completion without a final result");
+      }
     }
 
     params.onUsage(latestUsage);
@@ -566,12 +643,10 @@ export async function spawnClaudeSubagent(params: {
       description: params.description,
       subagentType,
       backend: params.profile.backend,
-      harness: selectorHarness(params.profile),
       status: "done",
       result,
       usage: latestUsage,
       assistantOutput: output,
-      ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
     });
@@ -594,13 +669,11 @@ export async function spawnClaudeSubagent(params: {
       description: params.description,
       subagentType,
       backend: params.profile.backend,
-      harness: selectorHarness(params.profile),
       status,
       error: message,
       usage: latestUsage,
       assistantOutput: output,
       ...(sessionId ? { sessionId } : {}),
-      ...(permissionDenials !== undefined && permissionDenials > 0 ? { permissionDenials } : {}),
       ...(progress ? { progress } : {}),
     });
   } finally {
@@ -608,5 +681,6 @@ export async function spawnClaudeSubagent(params: {
     if (abortHandler) {
       params.signal?.removeEventListener("abort", abortHandler);
     }
+    await promptFile?.cleanup().catch(() => undefined);
   }
 }

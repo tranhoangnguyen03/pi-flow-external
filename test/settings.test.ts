@@ -15,6 +15,7 @@ import {
   resolveCtxDefaultHarness,
   resolveDefaultHarness,
 } from "../src/settings.ts";
+import { EXTERNAL_HARNESSES } from "../src/types.ts";
 
 const roots: string[] = [];
 function agentDir(): string {
@@ -145,6 +146,17 @@ describe("external settings", () => {
     const parsed = loadExternalSettings(root);
     expect(parsed.settings.defaultHarness).toBe("agy");
     expect(parsed.diagnostics.join(" ")).toMatch(/defaultHarness must be/);
+    // The listed harnesses must stay in sync with EXTERNAL_HARNESSES (e.g. grok), not a hardcoded string.
+    expect(parsed.diagnostics.join(" ")).toContain(EXTERNAL_HARNESSES.join(", "));
+  });
+
+  it("accepts grok as a global defaultHarness", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ ...DEFAULT_EXTERNAL_SETTINGS, defaultHarness: "grok" }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.defaultHarness).toBe("grok");
+    expect(parsed.diagnostics).toEqual([]);
   });
 
   it("reports malformed JSON without preventing startup", () => {

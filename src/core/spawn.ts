@@ -23,6 +23,8 @@ import {
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent, isTransientAgyFailure } from "./agy.ts";
+import { spawnGrokSubagent } from "./grok.ts";
+import { museHasNestedAgentActivity, spawnMuseSubagent } from "./muse.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -32,6 +34,7 @@ import type {
   SubagentUsage,
   ThinkingClamp,
 } from "../types.ts";
+import { selectorHarness } from "../profiles.ts";
 import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
@@ -130,7 +133,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function isNestedToolName(value: unknown): boolean {
   if (typeof value !== "string") return false;
-  return ["agent", "spawn_agent", "invoke_subagent", "send_input", "resume_agent", "wait_agent", "close_agent"]
+  return ["agent", "spawn_agent", "spawn_subagent", "invoke_subagent", "send_input", "resume_agent", "wait_agent", "close_agent"]
     .includes(value.trim().toLowerCase().replaceAll("-", "_"));
 }
 
@@ -138,7 +141,7 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
   const event = asRecord(value);
   if (!event) return false;
 
-  if (backend === "claude") {
+  if (backend === "claude" || backend === "grok") {
     const message = asRecord(event.message);
     return event.type === "assistant" && Array.isArray(message?.content) && message.content.some((content) => {
       const block = asRecord(content);
@@ -155,6 +158,10 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
     const update = asRecord(event.step_update);
     return event.event === "step_update" && (update?.step_type === "tool" || update?.step_type === "subagent") &&
       (isNestedToolName(update.tool_name) || asRecord(update.subagent_info) !== undefined);
+  }
+
+  if (backend === "muse") {
+    return museHasNestedAgentActivity(event);
   }
 
   return false;
@@ -281,6 +288,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           cwd: params.ctx.cwd,
           timeoutMs: params.timeoutMs,
           profile: params.profile,
+          harness: selectorHarness(params.profile),
           permission: permission.tier,
           ...(elevated ? { permissionRequested: requestedTier } : {}),
           ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
@@ -296,6 +304,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         description: params.description,
         subagentType: params.profile.name,
         backend: params.profile.backend,
+        harness: selectorHarness(params.profile),
         status: "error",
         error,
         ...(params.capabilities ? { capabilities: params.capabilities } : {}),
@@ -559,11 +568,54 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       executionStartedAt: params.executionStartedAt,
     });
   }
+  if (params.profile.backend === "grok") {
+    return spawnGrokSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+      permission: params.permission,
+      resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
+    });
+  }
+  if (params.profile.backend === "muse") {
+    return spawnMuseSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
+      thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+      permission: params.permission,
+      resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
+    });
+  }
   if (!params.model) {
     return textResult(`Subagent "${params.description}" (${params.profile.name}) failed: No model is selected.`, {
       description: params.description,
       subagentType: params.profile.name,
       backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
       status: "error",
       error: "No model is selected",
     });
@@ -621,6 +673,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "error",
       error,
     });
@@ -636,6 +689,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "error",
       error,
     });
@@ -679,6 +733,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     description,
     subagentType,
     backend: profile.backend,
+    harness: selectorHarness(profile),
     enabled: progressEnabled,
     onProgress,
     executionStartedAt: params.executionStartedAt,
@@ -910,6 +965,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status: "done",
       result,
       usage,
@@ -939,6 +995,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       description,
       subagentType,
       backend: profile.backend,
+      harness: selectorHarness(profile),
       status,
       error: message,
       usage,

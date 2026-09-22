@@ -27,12 +27,14 @@ export function createProgressNode(
   subagentType: SubagentType,
   status: SubagentProgressNode["status"] = "running",
   backend?: SubagentBackend,
+  harness?: string,
 ): SubagentProgressNode {
   return {
     id,
     description,
     subagentType,
     ...(backend ? { backend } : {}),
+    ...(harness ? { harness } : {}),
     status,
     startedAt: Date.now(),
     activity: [],
@@ -184,6 +186,7 @@ export interface ProgressEmitterOptions {
   description: string;
   subagentType: SubagentType;
   backend?: SubagentBackend;
+  harness?: string;
   enabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
   /** Execution-start boundary captured by the caller right after the shared concurrency limiter granted a slot. */
@@ -214,8 +217,8 @@ export interface ProgressEmitter {
  * hand-synchronized copies that silently drift.
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
-  const { toolCallId, description, subagentType, backend, enabled, onProgress } = options;
-  const progress = createProgressNode(toolCallId, description, subagentType, "running", backend);
+  const { toolCallId, description, subagentType, backend, harness, enabled, onProgress } = options;
+  const progress = createProgressNode(toolCallId, description, subagentType, "running", backend, harness);
   if (options.executionStartedAt !== undefined) {
     progress.executionStartedAt = options.executionStartedAt;
   }
@@ -239,6 +242,7 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
         description,
         subagentType,
         ...(backend ? { backend } : {}),
+        ...(harness ? { harness } : {}),
         status: progress.status,
         result: progress.result,
         error: progress.error,
