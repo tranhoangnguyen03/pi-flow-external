@@ -1,6 +1,6 @@
 {
   "name": "@tranhoangnguyen0310/pi-flow-external",
-  "version": "2.4.0-external.0",
+  "version": "2.5.0-external.0",
   "description": "External Claude Code, Codex CLI, Antigravity, Grok Build CLI, and Muse Code delegation for pi.",
   "type": "module",
   "main": "./index.ts",
