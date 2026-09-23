@@ -131,14 +131,20 @@ export function createExternalHelpTool(
     promptSnippet: EXTERNAL_HELP_PROMPT_SNIPPET,
     parameters: externalHelpParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.topic === "workflow" && params.harness) {
+      // A schema-conversion layer downstream of this tool's declaration may
+      // present `harness` as required even though it is only meaningful for
+      // topic roles/permissions (#62); a model forced to fill it in for a
+      // workflow-topic call typically sends an empty string. Treat that as
+      // omitted rather than an invalid filter.
+      const harness = params.harness?.trim() ? params.harness : undefined;
+      if (params.topic === "workflow" && harness) {
         throw new Error("external_help harness is only valid for roles or permissions.");
       }
       let text: string;
       const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
       const configuredPiHarnesses = new Set(harnessConfigs.keys());
       if (params.topic !== "workflow") {
-        validateHarnessFilter(params.harness, configuredPiHarnesses);
+        validateHarnessFilter(harness, configuredPiHarnesses);
       }
       if (params.topic === "roles") {
         const profiles = mergeSynthesizedPiProfiles(
@@ -148,9 +154,9 @@ export function createExternalHelpTool(
           ),
           harnessConfigs,
         );
-        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), params.harness);
+        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), harness);
       } else if (params.topic === "permissions") {
-        text = permissionHelp(params.harness, configuredPiHarnesses);
+        text = permissionHelp(harness, configuredPiHarnesses);
       } else {
         text = workflowHelp(options.workflowEnabled, listSavedWorkflows({
           agentDir: getAgentDir(),
@@ -160,7 +166,7 @@ export function createExternalHelpTool(
       }
       return {
         content: [{ type: "text" as const, text }],
-        details: { topic: params.topic, ...(params.harness ? { harness: params.harness } : {}) },
+        details: { topic: params.topic, ...(harness ? { harness } : {}) },
       };
     },
   });

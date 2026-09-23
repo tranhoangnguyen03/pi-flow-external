@@ -98,6 +98,26 @@ describe("external_help unknown harness filter", () => {
     });
   });
 
+  it("treats a blank harness as omitted rather than an invalid filter, matching the #62 forced-placeholder reproduction", async () => {
+    const agentDir = tempAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeTool();
+      // A downstream schema-conversion layer may present `harness` as
+      // required even on the workflow topic, where it is never valid
+      // (#62); a model forced to fill it in typically sends an empty
+      // string. That must not be rejected as an explicit filter.
+      const workflowResult = await tool.execute("call-7", { topic: "workflow", harness: "" }, undefined, undefined, fakeCtx(agentDir));
+      expect((workflowResult.content[0] as { text: string }).text).toContain("blocking by default");
+
+      // The same forced-blank placeholder on roles/permissions must not be
+      // rejected as an unknown harness filter either.
+      const rolesResult = await tool.execute("call-8", { topic: "roles", harness: "" }, undefined, undefined, fakeCtx(agentDir));
+      expect(rolesResult.details).toEqual({ topic: "roles" });
+      const permissionsResult = await tool.execute("call-9", { topic: "permissions", harness: "" }, undefined, undefined, fakeCtx(agentDir));
+      expect(permissionsResult.details).toEqual({ topic: "permissions" });
+    });
+  });
+
   it("states blocking default with explicit background opt-in and same-harness parallelism", async () => {
     const agentDir = tempAgentDir();
     await withAgentDir(agentDir, async () => {

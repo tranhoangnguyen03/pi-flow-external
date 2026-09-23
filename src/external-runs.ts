@@ -29,12 +29,12 @@ const externalRunsParameters = Type.Object({
     description: "list: page runs/workflows; inspect: read one run; wait: block until selected terminal outcomes; cancel: stop one run.",
   }),
   runId: Type.Optional(Type.String({
-    description: "Target run ID (run_... agent, wf_... workflow). Required for inspect/cancel/wait of a single run.",
+    description: "Single target run ID (run_... agent, wf_... workflow). Required for cancel, for wait/inspect of a single run, and for inspect view output/diagnostics/final on one run. Cannot be combined with a non-empty runIds on inspect.",
   })),
   runIds: Type.Optional(Type.Array(Type.String(), {
     minItems: 1,
     maxItems: MAX_TARGETS,
-    description: "wait: target set for mode any|all, up to 100, deduplicated; already-terminal targets return immediately. inspect: batch summary target set, up to 20, deduplicated, order preserved; cannot combine with runId, and view must stay summary.",
+    description: "The list target selector: wait targets any|all of up to 100, deduplicated, already-terminal targets return immediately. inspect batches summary-only entries for 1-20 targets, deduplicated, order preserved, including a single-entry list — for output/diagnostics/final view on one run, use runId instead. Cannot be combined with a non-empty runId on inspect.",
   })),
   view: Type.Optional(StringEnum(["summary", "output", "diagnostics", "final"] as const, {
     description: "inspect view: summary (state/timing/freshness/refs, default), output (assistant text plus canonical result, partial or final), diagnostics (tool activity/errors), final (only the verified canonical terminal answer, empty until a successful terminal boundary exists). Batch inspect (runIds) only supports summary.",
@@ -626,6 +626,33 @@ function renderExternalRunsResult(toolResult: { content: Array<{ type: string; t
   return new Text(textFromToolResult(toolResult), 0, 0);
 }
 
+/**
+ * Reconcile the `runId`/`runIds` selector pair for `inspect` only — the one
+ * action that already hard-rejects supplying both (`wait` treats a stray
+ * `runId` alongside `runIds` as a harmless one-element convenience, and
+ * `cancel` never reads `runIds` at all, so neither gets a new conflict
+ * check here). A schema-conversion layer downstream of this tool's
+ * declaration may present both mutually exclusive optional selectors as
+ * required (#62); a model forced to fill in the one it means to omit
+ * typically sends a blank string or an empty array. Neither can name an
+ * actual run, so treat that placeholder as omitted rather than a real
+ * conflict — this is narrower than guessing between two genuinely
+ * populated, disagreeing selectors, which still fails loudly exactly as
+ * before (including when both name the very same run: inspect has always
+ * rejected supplying the pair at all, on purpose).
+ */
+function normalizeInspectSelectors(params: ExternalRunsParams): ExternalRunsParams {
+  const runId = params.runId === undefined || params.runId.trim() === "" ? undefined : params.runId;
+  const runIds = runId !== undefined && (params.runIds === undefined || params.runIds.length === 0)
+    ? undefined
+    : params.runIds;
+  if (runId !== undefined && runIds !== undefined && runIds.length > 0) {
+    throw new Error("inspect accepts either runId or runIds, not both");
+  }
+  if (runId === params.runId && runIds === params.runIds) return params;
+  return { ...params, runId, runIds };
+}
+
 export function createExternalRunsTool(
   options: CreateExternalRunsToolOptions,
 ): ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails> {
@@ -636,6 +663,7 @@ export function createExternalRunsTool(
     promptSnippet: EXTERNAL_RUNS_PROMPT_SNIPPET,
     parameters: externalRunsParameters,
     async execute(_toolCallId, params: ExternalRunsParams, signal, onUpdate, ctx) {
+      if (params.action === "inspect") params = normalizeInspectSelectors(params);
       const { sessionId, project } = scope(ctx);
       const runsDirectory = options.runsDirectory();
 
@@ -670,7 +698,7 @@ export function createExternalRunsTool(
       }
 
       if (params.action === "inspect" && params.runIds !== undefined) {
-        if (params.runId !== undefined) throw new Error("inspect accepts either runId or runIds, not both");
+        // normalizeInspectSelectors already guarantees runId is unset here.
         if (params.view !== undefined && params.view !== "summary") throw new Error('Batch inspect (runIds) only supports view: "summary"');
         const runIds = [...new Set(params.runIds)];
         if (runIds.length === 0 || runIds.length > MAX_BATCH_INSPECT_TARGETS) {
