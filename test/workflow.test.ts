@@ -17,7 +17,7 @@ import {
   type WorkflowAgentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
-import { createWorkflowTool } from "../src/workflow/tool.ts";
+import { createWorkflowTool, toWorkflowSubagentDescriptor } from "../src/workflow/tool.ts";
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { prepareWorkflowToolSource } from "../src/workflow/source.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
@@ -345,6 +345,8 @@ describe("runWorkflow", () => {
     expect(await runOnce({ ...base, systemPrompt: "do y" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, tools: ["read", "grep"] })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, maxBudgetUsd: 2 })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, preset: "minimal" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, preset: "skills" })).not.toBe(await runOnce({ ...base, preset: "minimal" }));
   });
 
   it("reflects the resolved effectivePermission (not just the raw request) in the fingerprint", async () => {
@@ -1075,6 +1077,32 @@ describe("saved workflow registry", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("workflow frozen Pi descriptor", () => {
+  it("carries the registration preset for Pi profiles and omits it for CLI profiles", () => {
+    const skills = toWorkflowSubagentDescriptor({
+      name: "pi-deepseek-reviewer",
+      description: "x",
+      backend: "pi",
+      harness: "pi-deepseek",
+      preset: "skills",
+    });
+    const legacy = toWorkflowSubagentDescriptor({
+      name: "pi-deepseek-reviewer",
+      description: "x",
+      backend: "pi",
+      harness: "pi-deepseek",
+    });
+    const claude = toWorkflowSubagentDescriptor({
+      name: "claude-reviewer",
+      description: "x",
+      backend: "claude",
+    });
+    expect(skills.preset).toBe("skills");
+    expect(legacy.preset).toBe("minimal");
+    expect(claude.preset).toBeUndefined();
   });
 });
 

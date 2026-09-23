@@ -15,6 +15,14 @@ export type ThinkingLevel = string;
  */
 export type PermissionTier = "readonly" | "edit" | "danger";
 
+/**
+ * Resource preset stored on a named Pi harness registration.
+ * `minimal` leaves skills unloaded. `skills` loads installed skills.
+ * An absent field on a legacy registration is `minimal`.
+ */
+export const PI_RESOURCE_PRESETS = ["minimal", "skills"] as const;
+export type PiResourcePreset = (typeof PI_RESOURCE_PRESETS)[number];
+
 export interface SubagentProfile {
   /** Invalid/disabled catalog entries block selection instead of exposing a fallback. */
   configurationError?: string;
@@ -31,6 +39,11 @@ export interface SubagentProfile {
   harness?: string;
   model?: string;
   thinking?: ThinkingLevel;
+  /**
+   * Named Pi harness resource preset, copied from the registration.
+   * The registration is authoritative. Absence at execution is `minimal`.
+   */
+  preset?: PiResourcePreset;
   tools?: string[];
   systemPrompt?: string;
   /** Default USD budget cap for calls using this profile; the call parameter wins. */

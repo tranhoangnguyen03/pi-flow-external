@@ -139,7 +139,7 @@ function formatHarnessesLine(harnessConfigs: ReadonlyMap<string, import("./harne
   if (harnessConfigs.size === 0) return "Pi harnesses: none configured";
   const entries = [...harnessConfigs]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking})`);
+    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking} · ${config.preset ?? "minimal"})`);
   return `Pi harnesses: ${entries.join(", ")}`;
 }
 
@@ -234,7 +234,7 @@ function backendAuthority(backend: string, permission: string): string {
     return `agy accepts only autonomous danger (--dangerously-skip-permissions) and rejects ${permission === "danger" ? "readonly and edit" : permission}. The call uses ${permission}. Run only in trusted repositories.`;
   }
   if (backend === "pi") {
-    return `Pi SDK child · host access · curated tools · call tier ${permission}. The tool list is not an OS sandbox; danger-tier bash is as exposed as on any external CLI. Installed skills load; extensions and prompt templates do not.`;
+    return `Pi SDK child · host access · curated tools · call tier ${permission}. The tool list is not an OS sandbox; danger-tier bash is as exposed as on any external CLI. The harness preset is minimal (skills stay unloaded) or skills (installed skills load; project skills require a trusted project). Extensions and prompt templates stay unloaded.`;
   }
   if (backend === "claude") {
     return `Claude headless permission mode · call tier ${permission}. readonly and edit deny Bash headlessly. Role names do not raise the tier.`;
@@ -280,7 +280,7 @@ function roleInspectText(options: ExternalCommandOptions, ctx: CommandContextLik
     `Source: ${exact.source ?? "built-in"}`,
     ...(exact.configurationError ? [`Configuration error: ${exact.configurationError}`] : []),
     `Harness: ${exact.harness ?? exact.backend} · backend ${exact.backend}`,
-    `Model: ${exact.model ?? "harness default"} · thinking ${exact.thinking ?? "inherited"} · call permission ${options.settings.settings.defaultPermission} unless the call sets one`,
+    `Model: ${exact.model ?? "harness default"} · thinking ${exact.thinking ?? "inherited"}${exact.backend === "pi" ? ` · preset ${exact.preset ?? "minimal"}` : ""} · call permission ${options.settings.settings.defaultPermission} unless the call sets one`,
     backendAuthority(exact.backend === "pi" ? "pi" : exact.backend, options.settings.settings.defaultPermission),
     "",
     bounded,
@@ -556,9 +556,10 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
       lines.push(`✗ ${name}: model "${config.model}" not found in the registry`);
       continue;
     }
+    const preset = config.preset ?? "minimal";
     lines.push(ctx.modelRegistry.hasConfiguredAuth(model)
-      ? `✓ ${name}: ${config.model} (auth configured)`
-      : `⚠ ${name}: ${config.model} (no credentials configured)`);
+      ? `✓ ${name}: ${config.model} · ${preset} (auth configured)`
+      : `⚠ ${name}: ${config.model} · ${preset} (no credentials configured)`);
   }
   return lines.join("\n");
 }

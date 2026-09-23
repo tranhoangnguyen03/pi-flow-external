@@ -15,10 +15,11 @@ import { resolveProfileModel } from "./core/model.ts";
 import { textResult } from "./core/progress.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
 import { isValidSubagentName } from "./profiles.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
+import { EXTERNAL_HARNESSES, PI_RESOURCE_PRESETS, type PiResourcePreset } from "./types.ts";
 import type { SubagentProfile } from "./types.ts";
 import {
   installHarnessConfigWithSmokeTest,
+  isPiResourcePreset,
   isValidHarnessName,
   isValidThinkingLevel,
   VALID_THINKING_LEVELS,
@@ -39,7 +40,7 @@ Do not write files yourself and do not run Agent or workflow. The tool will show
 
 export const HARNESS_INTERVIEW_PROMPT = `Help me register one named Pi harness configuration through an AI-assisted interview.
 
-Ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
+Ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), an optional thinking level (off/minimal/low/medium/high/xhigh; default off), and a resource preset. The preset is a simple choice of minimal or skills. minimal is the default and loads no skills. skills loads installed skills; project skills load only when the project is trusted. The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
 
 Do not write files yourself and do not run Agent or workflow in this branch. The tool will show what will be registered for review, request confirmation, stage it, run a real in-process pi smoke test, and either install it or roll it back.`;
 
@@ -51,10 +52,17 @@ const roleParameters = Type.Object({
 
 type RoleParameters = Static<typeof roleParameters>;
 
+type _AssertTrue<T extends true> = T;
+type _PresetSchemaIsPair = _AssertTrue<typeof PI_RESOURCE_PRESETS extends readonly [PiResourcePreset, PiResourcePreset] ? true : false>;
+
 const harnessParameters = Type.Object({
   name: Type.String({ description: "Lowercase pi-<label> harness name, such as pi-deepseek." }),
   model: Type.String({ description: "provider/modelId, resolved live against the Pi model registry, such as deepseek/deepseek-chat." }),
   thinking: Type.Optional(Type.String({ description: "Optional thinking level: off, minimal, low, medium, high, or xhigh. Defaults to off." })),
+  preset: Type.Optional(Type.Union([
+    Type.Literal(PI_RESOURCE_PRESETS[0]),
+    Type.Literal(PI_RESOURCE_PRESETS[1]),
+  ], { description: "Resource preset. minimal loads no skills. skills loads installed skills; project skills load only when the project is trusted. Defaults to minimal." })),
 });
 
 type HarnessParameters = Static<typeof harnessParameters>;
@@ -229,8 +237,11 @@ function roleReview(role: SharedRole, path: string): string {
   return `Destination: ${path}\nShared role (works with any harness; no backend/model/thinking pin).\n\n${compileSharedRole(role)}\nRole creation is offline: no backend smoke test runs for shared roles.`;
 }
 
-function harnessReview(name: string, model: string, thinking: string): string {
-  return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory.`;
+function harnessReview(name: string, model: string, thinking: string, preset: PiResourcePreset): string {
+  const resources = preset === "skills"
+    ? "Preset: skills. The smoke test loads installed skills."
+    : "Preset: minimal. The smoke test loads no skills.";
+  return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n${resources}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory.`;
 }
 
 // Each interview activates only its own finalizer: the role interview exposes
@@ -349,12 +360,18 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
       const name = params.name.trim();
       const model = params.model.trim();
       const thinking = optional(params.thinking) ?? "off";
+      const requestedPreset = (params as { preset?: unknown }).preset;
+      const preset = requestedPreset === undefined ? "minimal" : requestedPreset;
       if (!isValidHarnessName(name)) {
         const error = `Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(name)}).`;
         return textResult(error, { description: "Create Pi harness", subagentType: name || "unknown", backend: "pi", status: "error", error });
       }
       if (!isValidThinkingLevel(thinking)) {
         const error = `Unsupported thinking level ${JSON.stringify(thinking)}; expected one of: ${VALID_THINKING_LEVELS.join(", ")}.`;
+        return textResult(error, { description: "Create Pi harness", subagentType: name, backend: "pi", status: "error", error });
+      }
+      if (!isPiResourcePreset(preset)) {
+        const error = `Unsupported Pi resource preset ${JSON.stringify(preset)}; expected one of: ${PI_RESOURCE_PRESETS.join(", ")}.`;
         return textResult(error, { description: "Create Pi harness", subagentType: name, backend: "pi", status: "error", error });
       }
       const separator = model.indexOf("/");
@@ -373,7 +390,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
           error: "Review UI unavailable",
         });
       }
-      const confirmed = await ctx.ui.confirm(`Register ${name}?`, harnessReview(name, model, thinking), { signal });
+      const confirmed = await ctx.ui.confirm(`Register ${name}?`, harnessReview(name, model, thinking, preset), { signal });
       if (!confirmed) {
         return textResult("Harness creation cancelled. No harness was registered.", {
           description: "Create Pi harness",
@@ -389,6 +406,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
           name,
           model,
           thinking,
+          preset,
           owner: "user",
           signal,
           smokeTest: async () => {
@@ -408,7 +426,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
                 toolCallId: `${toolCallId}-smoke`,
                 description: "Harness smoke test",
                 prompt: smokePrompt(),
-                profile: { name: `${name}-smoke`, description: "Harness smoke test", backend: "pi", harness: name, model, thinking },
+                profile: { name: `${name}-smoke`, description: "Harness smoke test", backend: "pi", harness: name, model, thinking, preset },
                 model: resolvedModel,
                 thinkingLevel: thinking,
                 ctx: { ...ctx, cwd: smokeDir },

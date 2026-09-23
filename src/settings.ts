@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { HARNESS_NAME_PATTERN, parseHarnessEntry, VALID_THINKING_LEVELS, type HarnessConfig } from "./harnesses.ts";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { EXTERNAL_HARNESSES, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
+import { EXTERNAL_HARNESSES, PI_RESOURCE_PRESETS, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
   version: 4,
@@ -91,7 +91,7 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
   }
   for (const key of Object.keys(record)) {
     if (key === "piCapabilitySets") {
-      diagnostics.push('Obsolete setting "piCapabilitySets" is ignored. Named capability sets are not used; Pi children load installed skills through the SDK.');
+      diagnostics.push('Obsolete setting "piCapabilitySets" is ignored. Named capability sets are not used. Pi skills follow the harness preset (minimal or skills).');
       continue;
     }
     if (!KNOWN_SETTING_KEYS.includes(key)) {
@@ -140,7 +140,7 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
       for (const [name, raw] of Object.entries(record.harnesses)) {
         const config = parseHarnessEntry(name, raw);
         if (config) settings.harnesses[name] = config;
-        else diagnostics.push(`Invalid harness "${name}" in settings.json: use a pi-* name, provider/model and thinking: ${VALID_THINKING_LEVELS.join(", ")}.`);
+        else diagnostics.push(`Invalid harness "${name}" in settings.json: use a pi-* name, provider/model, thinking: ${VALID_THINKING_LEVELS.join(", ")}, and preset: ${PI_RESOURCE_PRESETS.join(" or ")}.`);
       }
     }
   }

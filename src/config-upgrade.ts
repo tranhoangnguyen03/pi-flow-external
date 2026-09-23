@@ -443,7 +443,7 @@ function preservedLegacyFields(path: string, record: Record<string, unknown> | u
   const preserved: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort((a, b) => a.localeCompare(b))) {
     if (key === "piCapabilitySets") {
-      notes.push(`Obsolete setting "piCapabilitySets" in ${path} was not copied. Pi children load installed skills through the SDK.`);
+      notes.push(`Obsolete setting "piCapabilitySets" in ${path} was not copied. Pi skills follow the harness preset (minimal or skills).`);
       continue;
     }
     if (key !== "version" && !LEGACY_FIELD_KEYS.includes(key as (typeof LEGACY_FIELD_KEYS)[number]) && key !== "harnesses" && key !== "disabledProfiles") {
@@ -473,7 +473,7 @@ function parseLegacyHarnesses(path: string, value: unknown): {
     const entry = value.harnesses[name];
     if (isRecord(entry)) {
       for (const key of Object.keys(entry)) {
-        if (key !== "model" && key !== "thinking" && key !== "owner") {
+        if (key !== "model" && key !== "thinking" && key !== "preset" && key !== "owner") {
           diagnostics.push(`Harness "${name}" in ${path} has unsupported field "${key}".`);
         }
       }
@@ -506,7 +506,12 @@ function serializeSettings(settings: ConfigUpgradeSettings, preserved: Record<st
     const harnesses: Record<string, ConfigUpgradeHarness> = {};
     for (const name of Object.keys(settings.harnesses).sort((a, b) => a.localeCompare(b))) {
       const entry = settings.harnesses[name];
-      harnesses[name] = entry.owner ? { model: entry.model, thinking: entry.thinking, owner: entry.owner } : { model: entry.model, thinking: entry.thinking };
+      harnesses[name] = {
+        model: entry.model,
+        thinking: entry.thinking,
+        preset: entry.preset ?? "minimal",
+        ...(entry.owner ? { owner: entry.owner } : {}),
+      };
     }
     document.harnesses = harnesses;
   }

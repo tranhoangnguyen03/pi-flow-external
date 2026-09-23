@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { loadExternalSettings, saveExternalSettings, externalSettingsPath, DEFAULT_EXTERNAL_SETTINGS } from "./settings.ts";
 import type { ThinkingLevel as SdkThinkingLevel } from "@earendil-works/pi-agent-core";
+import { PI_RESOURCE_PRESETS, type PiResourcePreset } from "./types.ts";
 
 /**
  * The pinned SDK exposes its thinking-level union only as a TypeScript type,
@@ -23,6 +24,15 @@ export function isValidThinkingLevel(value: unknown): value is SdkThinkingLevel 
   return typeof value === "string" && (VALID_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
+export function isPiResourcePreset(value: unknown): value is PiResourcePreset {
+  return typeof value === "string" && (PI_RESOURCE_PRESETS as readonly string[]).includes(value);
+}
+
+/** Execution default. Only an explicit `skills` registration loads skills. */
+export function effectivePiResourcePreset(value: PiResourcePreset | undefined): PiResourcePreset {
+  return value === "skills" ? "skills" : "minimal";
+}
+
 export const HARNESS_NAME_PATTERN = /^pi-[a-z0-9][a-z0-9-]*$/;
 
 export function isValidHarnessName(name: string): boolean {
@@ -34,6 +44,11 @@ export interface HarnessConfig {
   model: string;
   /** Always persisted explicitly; "off" when the creation interview collects nothing. */
   thinking: SdkThinkingLevel;
+  /**
+   * Resource preset. Always persisted on new writes. A legacy entry that omits
+   * the field is read as `minimal`.
+   */
+  preset: PiResourcePreset;
   /** Ownership tag, stamped by the profile creator. */
   owner?: string;
 }
@@ -54,8 +69,10 @@ export function parseHarnessEntry(name: string, value: unknown): HarnessConfig |
   if (typeof record.model !== "string" || !record.model.trim() || record.model.trim().indexOf("/") <= 0 || record.model.trim().endsWith("/")) return undefined;
   const thinking = record.thinking === undefined ? "off" : record.thinking;
   if (!isValidThinkingLevel(thinking)) return undefined;
+  const preset = record.preset === undefined ? "minimal" : record.preset;
+  if (!isPiResourcePreset(preset)) return undefined;
   const owner = typeof record.owner === "string" && record.owner.trim() ? record.owner.trim() : undefined;
-  return { model: record.model.trim(), thinking, ...(owner ? { owner } : {}) };
+  return { model: record.model.trim(), thinking, preset, ...(owner ? { owner } : {}) };
 }
 
 /** Project the named harness registry from the canonical settings loader. */
@@ -73,6 +90,8 @@ export interface InstallHarnessConfigParams {
   name: string;
   model: string;
   thinking?: SdkThinkingLevel;
+  /** Omitted means `minimal`, and the stored entry still records that preset. */
+  preset?: PiResourcePreset;
   owner?: string;
   signal?: AbortSignal;
   smokeTest: () => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -92,6 +111,10 @@ export async function installHarnessConfigWithSmokeTest(params: InstallHarnessCo
   const thinking = params.thinking ?? "off";
   if (!isValidThinkingLevel(thinking)) {
     throw new Error(`Unsupported thinking level ${JSON.stringify(thinking)}; expected one of: ${VALID_THINKING_LEVELS.join(", ")}.`);
+  }
+  const preset = params.preset ?? "minimal";
+  if (!isPiResourcePreset(preset)) {
+    throw new Error(`Unsupported Pi resource preset ${JSON.stringify(preset)}; expected one of: ${PI_RESOURCE_PRESETS.join(", ")}.`);
   }
 
   const finalPath = harnessesPath(agentDir);
@@ -117,7 +140,7 @@ export async function installHarnessConfigWithSmokeTest(params: InstallHarnessCo
   }
   const raw = existsSync(finalPath) ? JSON.parse(readFileSync(finalPath, "utf8")) : { ...DEFAULT_EXTERNAL_SETTINGS };
   signal?.throwIfAborted();
-  saveExternalSettings(agentDir, { ...raw, harnesses: { ...raw.harnesses, [name]: { model: model.trim(), thinking, ...(owner ? { owner } : {}) } } });
+  saveExternalSettings(agentDir, { ...raw, harnesses: { ...raw.harnesses, [name]: { model: model.trim(), thinking, preset, ...(owner ? { owner } : {}) } } });
 
   const installed = loadHarnessConfigs(agentDir).harnesses;
   if (!installed.has(name)) {

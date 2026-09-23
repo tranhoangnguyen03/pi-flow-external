@@ -201,7 +201,7 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
   const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
     for (const harness of names) {
       const config = harnesses.get(harness);
-      profiles.set(`${harness}-${role}`, { ...definition, name: `${harness}-${role}`, description: definition.description.replaceAll("${backendLabel}", labels[harness] ?? harness), backend: config ? "pi" : harness as ExternalHarness, ...(config ? { harness, model: config.model, thinking: config.thinking } : {}), source });
+      profiles.set(`${harness}-${role}`, { ...definition, name: `${harness}-${role}`, description: definition.description.replaceAll("${backendLabel}", labels[harness] ?? harness), backend: config ? "pi" : harness as ExternalHarness, ...(config ? { harness, ...piHarnessBinding(config) } : {}), source });
     }
   };
   for (const role of defaultRoleNames()) {
@@ -227,14 +227,14 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
           const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
           const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
           if (obsolete.length) {
-            throw new Error(`obsolete metadata ${obsolete.join(", ")} does not grant authority. Remove it. A role describes intent; pass permission on the Agent or workflow call, or set defaultPermission. Pi children load installed skills through the SDK.`);
+            throw new Error(`obsolete metadata ${obsolete.join(", ")} does not grant authority. Remove it. A role describes intent; pass permission on the Agent or workflow call, or set defaultPermission. Pi skills follow the harness preset.`);
           }
           if (Object.keys(frontmatter).some((key) => key !== "description")) throw new Error("shared roles support description only; use an exact override for execution settings");
         } else {
           const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
           const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
           if (obsolete.length) {
-            throw new Error(`obsolete metadata ${obsolete.join(", ")} is not an authority floor or a capability selection. Remove it. Pass permission on the call, or set defaultPermission. Pi children load installed skills through the SDK.`);
+            throw new Error(`obsolete metadata ${obsolete.join(", ")} is not an authority floor or a capability selection. Remove it. Pass permission on the call, or set defaultPermission. Pi skills follow the harness preset.`);
           }
           if (!isExternalAgentProfile(profile, new Set(harnesses.keys()))) throw new Error("override must declare an external backend or registered Pi harness");
         }
@@ -316,6 +316,11 @@ export function externalRoleAvailability(
   return new Map([...roles].sort(([a], [b]) => a.localeCompare(b)));
 }
 
+/** Model, thinking, and resource preset copied from a named Pi registration. */
+function piHarnessBinding(config: HarnessConfig): Pick<SubagentProfile, "model" | "thinking" | "preset"> {
+  return { model: config.model, thinking: config.thinking, preset: config.preset };
+}
+
 /** Canonically synthesize `<harness>-<role>` for a registered pi-* harness. */
 function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: HarnessConfig): SubagentProfile | undefined {
   const definition = roleDefinition(role);
@@ -325,8 +330,7 @@ function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: H
     description: definition.description.replaceAll("${backendLabel}", harness),
     backend: "pi",
     harness,
-    model: harnessConfig.model,
-    thinking: harnessConfig.thinking,
+    ...piHarnessBinding(harnessConfig),
     systemPrompt: definition.body,
   };
 }
@@ -334,10 +338,11 @@ function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: H
 /**
  * Core reconciliation rule shared by the throwing (resolution-time) and
  * non-throwing (merge-time) call sites below: the harness registry stays
- * authoritative for model/thinking. A file that omits them inherits the
- * registry's values; a file that declares the same values is
- * redundant-but-consistent; a file that declares a *different* value is a
- * configuration conflict.
+ * authoritative for model, thinking, and resource preset. A file that omits
+ * model or thinking inherits the registry's values; a file that declares the
+ * same values is redundant-but-consistent; a file that declares a *different*
+ * model or thinking is a configuration conflict. Preset is registration state,
+ * not role metadata, so the registry value is always stamped.
  */
 export function computeReconciledPiProfile(
   profile: SubagentProfile,
@@ -366,7 +371,7 @@ export function computeReconciledPiProfile(
       conflict: `Profile "${profile.name}" declares harness "${profile.harness}" but pins thinking "${profile.thinking}", which conflicts with "${profile.harness}"'s registered thinking "${harnessConfig.thinking}". Remove the override or update settings.json.`,
     };
   }
-  return { profile: { ...profile, model: harnessConfig.model, thinking: harnessConfig.thinking } };
+  return { profile: { ...profile, ...piHarnessBinding(harnessConfig) } };
 }
 
 /**

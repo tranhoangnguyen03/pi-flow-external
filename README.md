@@ -65,7 +65,7 @@ External agents use the effective permission tier and each harness's native mech
 - Antigravity: only `--dangerously-skip-permissions`. `readonly` and `edit` are rejected.
 - Grok: `--sandbox read-only`, `workspace`, or `off`, always alongside `--permission-mode bypassPermissions` — bypass only skips the interactive approval prompt; the kernel sandbox remains the enforced boundary. `readonly`'s network-blocking guarantee is Linux-only (a no-op on macOS), and sandbox startup can fail closed on some macOS hosts (for example when `/var/run/docker.sock` resolves to a symlink) rather than silently running unsandboxed.
 - Muse: every tier passes `--disable-approval` (approval and Muse's own sandbox are ON by default, and headless runs must not hang on an interactive prompt); `readonly` additionally passes `--disable-write --disable-shell`; `edit` leaves the sandbox enabled with only approval bypassed; `danger` uses `--yolo`, which disables approval and the sandbox and additionally trusts the workspace for this run (loads its skills/rules) — a broader grant than an unsandboxed run alone.
-- Named Pi harnesses: a curated tool list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`. That list is not an OS sandbox. Installed skills load. Extensions, prompt templates, and themes do not.
+- Named Pi harnesses: a curated tool list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`. That list is not an OS sandbox. The registration preset is `minimal` (skills stay unloaded; the default when the field is absent) or `skills` (installed skills load; project skills load only when the project is trusted). Extensions, prompt templates, and themes stay unloaded.
 
 The effective tier is the call's `permission`, or settings `defaultPermission` when the call omits it. The default is `danger`. A role does not change the tier. Claude refuses bypass mode when its effective UID is `0`; danger then uses `--permission-mode auto`. Claude `edit` denies Bash headlessly. Pass `danger` on the call when the task needs a shell. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
@@ -163,7 +163,7 @@ Use the Agent tool with role "explorer" and harness "claude" to map this reposit
 
 `/external doctor` checks the catalog separately from CLI readiness. A configured harness can still be uninstalled or unauthenticated.
 
-Author one additional role for every harness with `/external role create`. That interview only validates and writes the role. Register a named Pi harness with `/external harness create`. The harness interview smoke-tests the Pi runtime before saving. A harness smoke test does not judge role quality.
+Author one additional role for every harness with `/external role create`. That interview only validates and writes the role. Register a named Pi harness with `/external harness create`. The interview asks for a resource preset, `minimal` or `skills`, then smoke-tests the Pi runtime with that preset before saving. A harness smoke test does not judge role quality.
 
 ## Commands
 
@@ -292,7 +292,7 @@ Disable an execution identity by listing its exact name in `disabledProfiles`, f
 
 ### Named Pi harness configurations
 
-A named Pi harness runs in-process through Pi's own SDK, for any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Register it with `/external harness create`: a `pi-<label>` name, a `provider/model` id, and a thinking level (`off`, `minimal`, `low`, `medium`, `high`, or `xhigh`, always stored explicitly). Registration is smoke-tested against the real Pi runtime, then saved into the `harnesses` object of `settings.json`. The five CLI harnesses are built in and do not need entries there.
+A named Pi harness runs in-process through Pi's own SDK, for any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Register it with `/external harness create`: a `pi-<label>` name, a `provider/model` id, a thinking level (`off`, `minimal`, `low`, `medium`, `high`, or `xhigh`, always stored explicitly), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. The smoke test uses the selected preset. Registration is then saved into the `harnesses` object of `settings.json`. A legacy entry that omits `preset` is `minimal`. The five CLI harnesses are built in and do not need entries there.
 
 ```json
 {
@@ -306,7 +306,8 @@ A named Pi harness runs in-process through Pi's own SDK, for any model Pi can al
   "harnesses": {
     "pi-deepseek": {
       "model": "deepseek/deepseek-chat",
-      "thinking": "high"
+      "thinking": "high",
+      "preset": "minimal"
     }
   }
 }
@@ -327,7 +328,7 @@ A custom role is the one shared file from `/external role create`. Use `/externa
 
 Settings writes use a private staged file and a same-directory replacement, and they preserve unrelated fields. The extension refuses to overwrite a malformed or newer-version file. Replacement avoids a torn write. Concurrent sessions can still overwrite each other's update: there is no inter-process lock. A harness smoke test finishes before that short commit. The writer then rereads and checks for a duplicate or a conflict.
 
-**v1 scope, by design:** a pi child's tools are the SDK builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit`). Installed skills load through the SDK. Extensions, prompt templates, and themes do not. The tool list is not an OS sandbox, and `bash` at `danger` is host access. Retry is disabled per pi child (in-memory, never touching your real Pi settings). Pi children cannot resume a prior conversation and have no enforced budget cap. Trusted extensions, MCP, resumable sessions, and budget controls remain [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
+**v1 scope, by design:** a pi child's tools are the SDK builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit`). The registration preset selects `minimal` (skills stay unloaded) or `skills` (installed skills load; project skills require a trusted project). Extensions, prompt templates, and themes stay unloaded. The tool list is not an OS sandbox, and `bash` at `danger` is host access. Retry is disabled per pi child (in-memory, never touching your real Pi settings). Pi children cannot resume a prior conversation and have no enforced budget cap. Trusted extensions, MCP, resumable sessions, and budget controls remain [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
 
 ## Agent usage
 

@@ -4,6 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+
+const spawnSubagent = vi.hoisted(() => vi.fn());
+
+vi.mock("../src/core/spawn.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/core/spawn.ts")>();
+  return { ...actual, spawnSubagent };
+});
 import {
   HARNESS_INTERVIEW_PROMPT,
   HARNESS_TOOL_NAME,
@@ -251,6 +258,59 @@ describe("pi_flow_harness_create tool", () => {
       const result = await tool.execute("bad-name", { name: "deepseek", model: "deepseek/deepseek-chat" }, undefined, undefined, ctx);
       expect(result.details.status).toBe("error");
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an unknown resource preset before confirmation", async () => {
+    const agentDir = await makeAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx();
+      const result = await tool.execute("bad-preset", { name: "pi-deepseek", model: "deepseek/deepseek-chat", preset: "all" }, undefined, undefined, ctx);
+      expect(result.details.status).toBe("error");
+      expect(result.details.error).toContain("minimal, skills");
+      expect(ctx.ui.confirm).not.toHaveBeenCalled();
+      expect(spawnSubagent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("smoke-tests and stores the selected preset, defaulting an omission to minimal", async () => {
+    const agentDir = await makeAgentDir();
+    spawnSubagent.mockReset();
+    spawnSubagent.mockResolvedValue({ details: { status: "done", result: "PI_FLOW_PROFILE_OK" } });
+    await withAgentDir(agentDir, async () => {
+      const tool = makeHarnessCreatorTool();
+      const ctx = harnessCtx();
+      const skills = await tool.execute(
+        "create-skills",
+        { name: "pi-deepseek", model: "deepseek/deepseek-chat", preset: "skills" },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(skills.details.status).toBe("done");
+      expect(spawnSubagent).toHaveBeenCalledWith(expect.objectContaining({
+        profile: expect.objectContaining({ backend: "pi", harness: "pi-deepseek", preset: "skills" }),
+      }));
+      expect(ctx.ui.confirm).toHaveBeenCalledWith("Register pi-deepseek?", expect.stringContaining("Preset: skills"), { signal: undefined });
+
+      spawnSubagent.mockClear();
+      const minimal = await tool.execute(
+        "create-minimal",
+        { name: "pi-glm", model: "deepseek/deepseek-chat" },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(minimal.details.status).toBe("done");
+      expect(spawnSubagent).toHaveBeenCalledWith(expect.objectContaining({
+        profile: expect.objectContaining({ backend: "pi", harness: "pi-glm", preset: "minimal" }),
+      }));
+      const saved = JSON.parse(readFileSync(join(agentDir, "pi-flow-external", "settings.json"), "utf8")) as {
+        harnesses: Record<string, { preset?: string }>;
+      };
+      expect(saved.harnesses["pi-deepseek"]?.preset).toBe("skills");
+      expect(saved.harnesses["pi-glm"]?.preset).toBe("minimal");
     });
   });
 

@@ -205,6 +205,7 @@ const cases: Array<{ name: string; run: (agentDir: string) => void }> = [
         disabledProfiles: ["agy-worker", "codex-explorer", "muse-qa"],
       });
       const settingsText = readFileSync(applied.settingsPath, "utf8");
+      expect(JSON.parse(settingsText).harnesses["pi-deepseek"].preset).toBe("minimal");
       expect(Object.keys(JSON.parse(settingsText))).toEqual([
         "version",
         "defaultHarness",

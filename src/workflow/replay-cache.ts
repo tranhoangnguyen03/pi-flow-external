@@ -80,6 +80,7 @@ export function fingerprintWorkflowAgentCall(
         descriptorHarness: descriptor.harness,
         descriptorModel: descriptor.model,
         descriptorThinking: descriptor.thinking,
+        descriptorPreset: descriptor.preset,
         descriptorSystemPrompt: descriptor.systemPrompt,
         descriptorTools: descriptor.tools,
         descriptorMaxBudgetUsd: descriptor.maxBudgetUsd,

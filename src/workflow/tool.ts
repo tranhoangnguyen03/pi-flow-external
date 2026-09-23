@@ -21,7 +21,7 @@ import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
 import { loadExternalCatalog, resolveExternalProfile, selectorHarness } from "../profiles.ts";
-import { loadHarnessConfigs } from "../harnesses.ts";
+import { effectivePiResourcePreset, loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
@@ -45,12 +45,14 @@ export interface CreateWorkflowToolOptions {
   getDefaultMaxBudgetUsd: () => number | undefined;
 }
 
-function toDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
+/** Frozen execution identity for one resolved profile, including the Pi preset. */
+export function toWorkflowSubagentDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
   return {
     backend: profile.backend,
     harness: profile.harness,
     model: profile.model,
     thinking: profile.thinking,
+    ...(profile.backend === "pi" ? { preset: effectivePiResourcePreset(profile.preset) } : {}),
     systemPrompt: profile.systemPrompt,
     tools: profile.tools,
     maxBudgetUsd: profile.maxBudgetUsd,
@@ -136,7 +138,8 @@ export function createWorkflowTool(
       const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
       // Freeze one resolved roster snapshot for the whole run: real on-disk
-      // external profiles plus synthesized pi-* role profiles, merged once,
+      // external profiles plus synthesized pi-* role profiles, including each
+      // registration's resource preset, merged once,
       // BEFORE the models map is built. Building `models` from the pre-merge
       // `profiles` map would leave every synthesized pi role without a model
       // entry, and runAgent's `usesPiBackend(profile) && !model` check would
@@ -400,7 +403,7 @@ export function createWorkflowTool(
           },
           describeSubagentType: (name) => {
             const profile = profiles.get(name);
-            return profile ? toDescriptor(profile) : undefined;
+            return profile ? toWorkflowSubagentDescriptor(profile) : undefined;
           },
           getDefaultPermission: () => defaultPermission,
           resumeAgentResults,

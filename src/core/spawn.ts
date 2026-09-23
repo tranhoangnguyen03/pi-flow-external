@@ -42,7 +42,7 @@ import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { runRecordsDirectory } from "./retention.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 import type { PermissionResolution } from "./permissions.ts";
-import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../harnesses.ts";
+import { effectivePiResourcePreset, isValidThinkingLevel, VALID_THINKING_LEVELS } from "../harnesses.ts";
 
 
 /**
@@ -102,9 +102,9 @@ export interface SpawnSubagentParams {
    */
   executionStartedAt?: number;
   /**
-   * Real project-trust decision (ctx.isProjectTrusted()). Pi children load
-   * installed skills through the SDK; project-scope skills are visible only
-   * when this is true. Omitted means untrusted.
+   * Real project-trust decision (ctx.isProjectTrusted()). The skills preset
+   * loads project-scope skills only when this is true. The minimal preset
+   * leaves skills unloaded either way. Omitted means untrusted.
    */
   projectTrusted?: boolean;
 }
@@ -256,15 +256,18 @@ function rewriteTimeoutResult(
 }
 
 /**
- * Pi child resources: the SDK's minimal surface plus installed skills.
- * Extensions, prompt templates, and themes stay out. Project skills load only
- * when projectTrusted is true. Call reload() after this returns.
+ * Pi child resources for one registration preset.
+ * `minimal` sets `noSkills`. `skills` leaves skills enabled and still threads
+ * `projectTrusted`, so project skills load only when that flag is true.
+ * Extensions, prompt templates, and themes stay out either way.
+ * Call reload() after this returns.
  */
 export function createPiChildResourceLoader(options: {
   cwd: string;
   agentDir: string;
   settingsManager: SettingsManager;
   projectTrusted: boolean;
+  preset: "minimal" | "skills";
   appendSystemPrompt?: string[];
 }): DefaultResourceLoader {
   options.settingsManager.setProjectTrusted(options.projectTrusted);
@@ -274,6 +277,7 @@ export function createPiChildResourceLoader(options: {
     agentDir: options.agentDir,
     settingsManager: options.settingsManager,
     noExtensions: true,
+    noSkills: options.preset === "minimal",
     noPromptTemplates: true,
     noThemes: true,
     appendSystemPromptOverride: (base) => [...base, ...extra],
@@ -764,6 +768,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     agentDir,
     settingsManager,
     projectTrusted: params.projectTrusted ?? false,
+    preset: effectivePiResourcePreset(profile.preset),
     appendSystemPrompt: appendPrompts,
   });
 
@@ -786,11 +791,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
-    // minimal + skills: no extensions, prompt templates, or themes. Installed
-    // skills load through the SDK. Project skills follow projectTrusted, which
-    // createPiChildResourceLoader applied before this reload. reload() preserves
-    // that flag and would discard an earlier settings override, so retry stays
-    // disabled after reload.
+    // Preset was applied on the loader: minimal sets noSkills, skills does not.
+    // Project trust was applied before this reload and only affects the skills
+    // preset. reload() preserves that flag and would discard an earlier settings
+    // override, so retry stays disabled after reload.
     await resourceLoader.reload();
     // Third abort guard: the resource loading above does real file I/O
     // (context files, settings, and skill/prompt-template discovery) and can

@@ -617,12 +617,21 @@ describe("pi child resource preset", () => {
       : message.content.filter((part): part is { type: "text"; text: string } => part.type === "text").map((part) => part.text).join("\n");
   }
 
-  it("loads an installed skill and does not expand prompt templates", async () => {
+  const skillsProfile: SubagentProfile = {
+    name: "pi-test-worker",
+    description: "x",
+    backend: "pi",
+    harness: "pi-test",
+    preset: "skills",
+  };
+
+  it("minimal preset leaves installed skills and project skills unloaded", async () => {
     const skillDir = join(agentDir, "skills", "audit");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), "---\nname: audit\ndescription: Audit skill.\n---\n\nAUDIT_NONCE_91\n");
-    mkdirSync(join(agentDir, "prompts"), { recursive: true });
-    writeFileSync(join(agentDir, "prompts", "greet.md"), "---\ndescription: Greet.\n---\n\nHello $1!\n");
+    const projectSkill = join(cwd, ".pi", "skills", "localaudit");
+    mkdirSync(projectSkill, { recursive: true });
+    writeFileSync(join(projectSkill, "SKILL.md"), "---\nname: localaudit\ndescription: Local audit skill.\n---\n\nLOCAL_NONCE_44\n");
     const { model, modelRegistry, registration } = await createSession();
     let captured: Context | undefined;
     registration.setResponses([(context: Context) => {
@@ -632,31 +641,41 @@ describe("pi child resource preset", () => {
     const result = await spawnSubagent(baseParams({
       model,
       ctx: { cwd, modelRegistry } as ExtensionContext,
-      prompt: "/greet World",
-      projectTrusted: false,
+      projectTrusted: true,
     }));
     expect((result.details as SubagentToolDetails).status).toBe("done");
-    expect(captured?.systemPrompt ?? "").toContain("Audit skill.");
-    expect(captured?.systemPrompt ?? "").not.toContain("AUDIT_NONCE_91");
-    expect(lastUserText(captured!)).toBe("/greet World");
+    expect(captured?.systemPrompt ?? "").not.toContain("Audit skill.");
+    expect(captured?.systemPrompt ?? "").not.toContain("Local audit skill.");
   });
 
-  it("loads a project skill only when the caller marks the project trusted", async () => {
-    const skillDir = join(cwd, ".pi", "skills", "localaudit");
+  it("skills preset loads installed skills, skips prompt templates, and loads a project skill only when trusted", async () => {
+    const skillDir = join(agentDir, "skills", "audit");
     mkdirSync(skillDir, { recursive: true });
-    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: localaudit\ndescription: Local audit skill.\n---\n\nLOCAL_NONCE_44\n");
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: audit\ndescription: Audit skill.\n---\n\nAUDIT_NONCE_91\n");
+    mkdirSync(join(agentDir, "prompts"), { recursive: true });
+    writeFileSync(join(agentDir, "prompts", "greet.md"), "---\ndescription: Greet.\n---\n\nHello $1!\n");
+    const projectSkill = join(cwd, ".pi", "skills", "localaudit");
+    mkdirSync(projectSkill, { recursive: true });
+    writeFileSync(join(projectSkill, "SKILL.md"), "---\nname: localaudit\ndescription: Local audit skill.\n---\n\nLOCAL_NONCE_44\n");
+
     const untrusted = await createSession();
     let hidden: Context | undefined;
     untrusted.registration.setResponses([(context: Context) => {
       hidden = context;
       return fauxAssistantMessage("done");
     }]);
-    await spawnSubagent(baseParams({
+    const hiddenResult = await spawnSubagent(baseParams({
       model: untrusted.model,
       ctx: { cwd, modelRegistry: untrusted.modelRegistry } as ExtensionContext,
+      prompt: "/greet World",
+      profile: skillsProfile,
       projectTrusted: false,
     }));
+    expect((hiddenResult.details as SubagentToolDetails).status).toBe("done");
+    expect(hidden?.systemPrompt ?? "").toContain("Audit skill.");
+    expect(hidden?.systemPrompt ?? "").not.toContain("AUDIT_NONCE_91");
     expect(hidden?.systemPrompt ?? "").not.toContain("Local audit skill.");
+    expect(lastUserText(hidden!)).toBe("/greet World");
 
     const trusted = await createSession();
     let shown: Context | undefined;
@@ -667,6 +686,7 @@ describe("pi child resource preset", () => {
     await spawnSubagent(baseParams({
       model: trusted.model,
       ctx: { cwd, modelRegistry: trusted.modelRegistry } as ExtensionContext,
+      profile: skillsProfile,
       projectTrusted: true,
     }));
     expect(shown?.systemPrompt ?? "").toContain("Local audit skill.");

@@ -376,7 +376,7 @@ describe("pi harness legitimacy", () => {
 
 describe("named pi harness resolution", () => {
   const harnessConfigs = new Map<string, HarnessConfig>([
-    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" }],
   ]);
   const configuredHarnessNames = new Set<string>(["agy", "claude", "codex", "pi-deepseek"]);
 
@@ -390,6 +390,7 @@ describe("named pi harness resolution", () => {
     expect(profile.harness).toBe("pi-deepseek");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
+    expect(profile.preset).toBe("minimal");
     expect(profile.systemPrompt).toContain("Do not modify files");
   });
 
@@ -409,6 +410,7 @@ describe("named pi harness resolution", () => {
     expect(profile.systemPrompt).toBe("Custom body.");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
+    expect(profile.preset).toBe("minimal");
   });
 
   it("rejects an on-disk override that pins a conflicting model", () => {
@@ -446,7 +448,7 @@ describe("named pi harness resolution", () => {
 
 describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", () => {
   const harnessConfigs = new Map<string, HarnessConfig>([
-    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high", preset: "skills" }],
   ]);
 
   it("inherits model/thinking for an on-disk custom-role file that declares neither (the common branch-3 case)", () => {
@@ -461,6 +463,7 @@ describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", (
     const result = merged.get("pi-deepseek-security-reviewer");
     expect(result?.model).toBe("deepseek/deepseek-chat");
     expect(result?.thinking).toBe("high");
+    expect(result?.preset).toBe("skills");
   });
 
   it("leaves a genuinely conflicting on-disk profile unreconciled rather than throwing at merge time", () => {
@@ -494,6 +497,7 @@ describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", (
       description: "Security review.",
       model: "deepseek/deepseek-chat",
       thinking: "high",
+      preset: "skills",
     };
     const merged = mergeSynthesizedPiProfiles(new Map([
       [claudeProfile.name, claudeProfile],

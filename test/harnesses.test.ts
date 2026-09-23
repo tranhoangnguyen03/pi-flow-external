@@ -105,7 +105,37 @@ describe("loadHarnessConfigs", () => {
       harnesses: { "pi-glm": { model: "zhipu/glm-4.6" } },
     }));
     const { harnesses } = loadHarnessConfigs(agentDir);
-    expect(harnesses.get("pi-glm")).toEqual({ model: "zhipu/glm-4.6", thinking: "off" });
+    expect(harnesses.get("pi-glm")).toEqual({ model: "zhipu/glm-4.6", thinking: "off", preset: "minimal" });
+  });
+
+  it("keeps an explicit skills preset and defaults an omitted preset to minimal", () => {
+    const agentDir = tempAgentDir();
+    const dir = join(agentDir, "pi-flow-external");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(harnessesPath(agentDir), JSON.stringify({
+      version: 4,
+      harnesses: {
+        "pi-skills": { model: "deepseek/deepseek-chat", thinking: "high", preset: "skills" },
+        "pi-legacy": { model: "zhipu/glm-4.6", thinking: "low" },
+      },
+    }));
+    const { harnesses, diagnostics } = loadHarnessConfigs(agentDir);
+    expect(diagnostics).toEqual([]);
+    expect(harnesses.get("pi-skills")).toEqual({ model: "deepseek/deepseek-chat", thinking: "high", preset: "skills" });
+    expect(harnesses.get("pi-legacy")?.preset).toBe("minimal");
+  });
+
+  it("drops an entry whose preset is outside minimal or skills", () => {
+    const agentDir = tempAgentDir();
+    const dir = join(agentDir, "pi-flow-external");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(harnessesPath(agentDir), JSON.stringify({
+      version: 4,
+      harnesses: { "pi-typo": { model: "deepseek/deepseek-chat", thinking: "off", preset: "all" } },
+    }));
+    const { harnesses, diagnostics } = loadHarnessConfigs(agentDir);
+    expect(harnesses.has("pi-typo")).toBe(false);
+    expect(diagnostics[0]).toContain("preset");
   });
 
   it("loads a valid multi-entry file with no diagnostics", () => {
@@ -138,7 +168,7 @@ describe("installHarnessConfigWithSmokeTest", () => {
     });
     expect(path).toBe(harnessesPath(agentDir));
     const { harnesses } = loadHarnessConfigs(agentDir);
-    expect(harnesses.get("pi-deepseek")).toEqual({ model: "deepseek/deepseek-chat", thinking: "high" });
+    expect(harnesses.get("pi-deepseek")).toEqual({ model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" });
     // No residual staged file left behind.
     const dirEntries = readFileSync(harnessesPath(agentDir), "utf8");
     expect(dirEntries).not.toContain(".staged");
@@ -185,6 +215,36 @@ describe("installHarnessConfigWithSmokeTest", () => {
       },
     })).rejects.toThrow(/<provider>\/<id>/);
     expect(smokeCalled).toBe(false);
+  });
+
+  it("persists an explicit skills preset", async () => {
+    const agentDir = tempAgentDir();
+    await installHarnessConfigWithSmokeTest({
+      agentDir,
+      name: "pi-deepseek",
+      model: "deepseek/deepseek-chat",
+      thinking: "high",
+      preset: "skills",
+      smokeTest: async () => ({ ok: true }),
+    });
+    expect(loadHarnessConfigs(agentDir).harnesses.get("pi-deepseek")?.preset).toBe("skills");
+  });
+
+  it("rejects an unknown preset before any write", async () => {
+    const agentDir = tempAgentDir();
+    let smokeCalled = false;
+    await expect(installHarnessConfigWithSmokeTest({
+      agentDir,
+      name: "pi-deepseek",
+      model: "deepseek/deepseek-chat",
+      preset: "all" as never,
+      smokeTest: async () => {
+        smokeCalled = true;
+        return { ok: true };
+      },
+    })).rejects.toThrow(/minimal, skills/);
+    expect(smokeCalled).toBe(false);
+    expect(loadHarnessConfigs(agentDir).harnesses.size).toBe(0);
   });
 
   it("rejects an unsupported thinking value before any write", async () => {

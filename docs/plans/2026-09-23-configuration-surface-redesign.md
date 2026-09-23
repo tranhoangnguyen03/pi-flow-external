@@ -1,6 +1,6 @@
 # Configuration surface redesign — proposal and delivery plan
 
-**Status:** Implemented, then amended. The shipped conversion command is `/external settings convert`; `/external settings` points there. A later approval removed permission floors, profile `permission` metadata, and the PR #59 capability-set runtime. Shared roles are cross-harness and describe intent. Pi children load installed skills and not extensions or prompt templates. The proposal below is unchanged history except this status line.
+**Status:** Implemented, then amended. The shipped conversion command is `/external settings convert`; `/external settings` points there. A later approval removed permission floors, profile `permission` metadata, and the PR #59 capability-set runtime. Shared roles are cross-harness and describe intent. Each named Pi registration selects preset `minimal` or `skills` (`minimal` when the field is absent). `minimal` leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. Extensions and prompt templates stay unloaded. The proposal below is unchanged history except this status line.
 
 **Goal:** One extension-owned home, one execution-settings file, six built-in roles with zero generated profile files, and one file per genuinely authored role.
 
