@@ -615,7 +615,7 @@ describe("stale default harness at delegation time", () => {
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(
       join(agentDir, "pi-flow-external", "settings.json"),
-      JSON.stringify({ version: 3, defaultHarness: "pi-missing", maxConcurrentSubagents: 12, subagentTimeoutMs: 1000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 }),
+      JSON.stringify({ version: 4, defaultHarness: "pi-missing", maxConcurrentSubagents: 12, subagentTimeoutMs: 1000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 }),
     );
     const { session, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry }) as unknown as ExtensionContext;

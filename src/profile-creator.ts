@@ -14,51 +14,45 @@ import type { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { resolveProfileModel } from "./core/model.ts";
 import { textResult } from "./core/progress.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { isValidSubagentName } from "./profiles.ts";
+import { EXTERNAL_HARNESSES } from "./types.ts";
+import type { SubagentProfile } from "./types.ts";
 import {
-  filterExternalAgentProfiles,
-  getSubagentProfiles,
-  isValidSubagentName,
-  parseSubagentProfileContent,
-  reconcilePiProfileWithHarness,
-} from "./profiles.ts";
-import {
-  getConfiguredHarnessNames,
   installHarnessConfigWithSmokeTest,
   isValidHarnessName,
   isValidThinkingLevel,
-  loadHarnessConfigs,
   VALID_THINKING_LEVELS,
 } from "./harnesses.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
-import type { SubagentProfile, SubagentUsage } from "./types.ts";
+import type { PermissionTier, SubagentUsage } from "./types.ts";
 
-const PROFILE_TOOL_NAME = "pi_flow_profile_create";
-const HARNESS_TOOL_NAME = "pi_flow_harness_create";
+export const ROLE_TOOL_NAME = "pi_flow_role_create";
+export const HARNESS_TOOL_NAME = "pi_flow_harness_create";
 const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 
-export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external agent profile, or one named Pi harness configuration, through an AI-assisted interview.
+const VALID_PERMISSIONS: readonly PermissionTier[] = ["readonly", "edit", "danger"];
 
-Start by asking which of three things I want:
-1. A role profile for an existing external CLI harness (claude, codex, agy, grok, or muse).
-2. A new named Pi harness configuration (a "pi-*" name pinning a provider/model and optional thinking level, run in-process rather than as a CLI).
-3. A role profile for an existing registered pi-* harness.
+export const ROLE_INTERVIEW_PROMPT = `Help me create one reusable pi-flow external role through an AI-assisted interview.
 
-For branch 1 or 3: ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. For branch 1, recommend a backend (claude, codex, agy, grok, or muse) and explain briefly; for branch 3, confirm which already-registered pi-* harness this role targets. Suggest a lowercase <harness>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them for branch 1/3 profiles; otherwise omit them — for branch 3, model/thinking are inherited from the named harness and must not be overridden to a different value. When ready, summarize once and call ${PROFILE_TOOL_NAME}.
+A role is shared authoring only: one markdown file under pi-flow-external/roles/ that works with any harness (agy, claude, codex, grok, muse, or a registered pi-* harness). Ask one question at a time, only when the answer is not already known. Collect enough information to write a focused role: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. Suggest a lowercase role name such as security-reviewer (no backend prefix; naming it reviewer replaces the built-in reviewer across harnesses).
 
-For branch 2: ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
+Ask about permission floor only when it matters (readonly, edit, or danger); otherwise omit it. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific customizations belong in an exact override created later via /external role override. When ready, summarize once and call ${ROLE_TOOL_NAME}.
 
-Do not write files yourself and do not run Agent or workflow in either branch. The tool will show what will be created for review, request confirmation, stage it, run a real backend smoke test, and either install it or roll it back.`;
+Do not write files yourself and do not run Agent or workflow. The tool will show what will be created for review, request confirmation, and write it offline without a backend smoke test. A role is not an authenticated connection; readiness smoke testing belongs to harness registration.`;
 
-const profileParameters = Type.Object({
-  name: Type.String({ description: "Lowercase <harness>-<role> profile name, such as claude-security-reviewer or pi-deepseek-security-reviewer; the suffix becomes its role." }),
-  description: Type.String({ description: "Concise profile description shown by external_help and in delegation intent." }),
-  backend: Type.String({ description: "External CLI backend (claude, codex, agy, grok, muse) or a registered named pi-* harness." }),
-  model: Type.Optional(Type.String({ description: "Optional backend model override. Omit to use the CLI default. For a pi-* backend, must match the harness's registered model if given at all." })),
-  thinking: Type.Optional(Type.String({ description: "Optional reasoning-effort override. Omit to use the current Pi level. For a pi-* backend, must match the harness's registered thinking if given at all." })),
-  systemPrompt: Type.String({ description: "Complete focused instructions for the external agent profile." }),
+export const HARNESS_INTERVIEW_PROMPT = `Help me register one named Pi harness configuration through an AI-assisted interview.
+
+Ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
+
+Do not write files yourself and do not run Agent or workflow in this branch. The tool will show what will be registered for review, request confirmation, stage it, run a real in-process pi smoke test, and either install it or roll it back.`;
+
+const roleParameters = Type.Object({
+  name: Type.String({ description: "Lowercase shared role name, such as security-reviewer. No backend prefix; reviewer replaces the built-in reviewer." }),
+  description: Type.String({ description: "Concise role description shown by external_help and in delegation intent." }),
+  permission: Type.Optional(Type.String({ description: "Optional permission floor: readonly, edit, or danger. Omit to leave unset." })),
+  systemPrompt: Type.String({ description: "Complete focused instructions for the shared role." }),
 });
 
-type ProfileParameters = Static<typeof profileParameters>;
+type RoleParameters = Static<typeof roleParameters>;
 
 const harnessParameters = Type.Object({
   name: Type.String({ description: "Lowercase pi-<label> harness name, such as pi-deepseek." }),
@@ -67,6 +61,13 @@ const harnessParameters = Type.Object({
 });
 
 type HarnessParameters = Static<typeof harnessParameters>;
+
+export interface SharedRole {
+  name: string;
+  description: string;
+  permission?: PermissionTier;
+  systemPrompt: string;
+}
 
 interface ProfileCreatorOptions {
   getLimiter: () => ConcurrencyLimiter;
@@ -80,27 +81,58 @@ function optional(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-/** Is `backend` one of claude/codex/agy/grok/muse (a genuine external CLI selector)? */
-function isExternalHarnessBackend(value: string): value is (typeof EXTERNAL_HARNESSES)[number] {
-  return (EXTERNAL_HARNESSES as readonly string[]).includes(value);
+export function rolesDir(agentDir: string): string {
+  return join(agentDir, "pi-flow-external", "roles");
 }
 
-function normalizeProfile(input: ProfileParameters): SubagentProfile {
-  const backendInput = input.backend.trim();
-  const isPiHarness = !isExternalHarnessBackend(backendInput);
+export function sharedRolePath(agentDir: string, name: string): string {
+  return join(rolesDir(agentDir), `${name}.md`);
+}
+
+function normalizeSharedRole(input: RoleParameters): SharedRole {
+  const permission = optional(input.permission);
+  if (permission !== undefined && !(VALID_PERMISSIONS as readonly string[]).includes(permission)) {
+    throw new Error(`Role permission must be one of: ${VALID_PERMISSIONS.join(", ")}.`);
+  }
   return {
     name: input.name.trim(),
     description: input.description.trim(),
-    backend: isPiHarness ? "pi" : backendInput,
-    ...(isPiHarness ? { harness: backendInput } : {}),
-    model: optional(input.model),
-    thinking: optional(input.thinking),
+    ...(permission ? { permission: permission as PermissionTier } : {}),
     systemPrompt: input.systemPrompt.trim(),
-    // Profiles authored through this flow belong to the user.
-    owner: "user",
   };
 }
 
+/**
+ * Compile a shared role to its canonical markdown. Shared roles carry only
+ * description and permission; backend/model/thinking/owner fields belong in
+ * an exact override and are rejected by the catalog loader.
+ */
+export function compileSharedRole(role: SharedRole): string {
+  if (!isValidSubagentName(role.name)) {
+    throw new Error("Role name must contain only lowercase letters, numbers, and hyphens.");
+  }
+  if (!role.description.trim()) {
+    throw new Error("Role description is required.");
+  }
+  if (!role.systemPrompt?.trim()) {
+    throw new Error("Role instructions are required.");
+  }
+  if (role.permission !== undefined && !(VALID_PERMISSIONS as readonly string[]).includes(role.permission)) {
+    throw new Error(`Role permission must be one of: ${VALID_PERMISSIONS.join(", ")}.`);
+  }
+  const frontmatter = [
+    `description: ${JSON.stringify(role.description.trim())}`,
+    ...(role.permission ? [`permission: ${JSON.stringify(role.permission)}`] : []),
+  ];
+  return `---\n${frontmatter.join("\n")}\n---\n\n${role.systemPrompt.trim()}\n`;
+}
+
+/**
+ * Serialize an exact execution profile to its canonical markdown: the full
+ * existing profile schema (description, backend/harness, model/thinking,
+ * tools, permission, budget, owner) plus the complete instruction body.
+ * Used for materializing intentional overrides.
+ */
 export function compileProfile(profile: SubagentProfile): string {
   if (!isValidSubagentName(profile.name)) {
     throw new Error("Profile name must contain only lowercase letters, numbers, and hyphens.");
@@ -130,65 +162,51 @@ export function compileProfile(profile: SubagentProfile): string {
     ...(profile.harness ? [`harness: ${JSON.stringify(profile.harness)}`] : []),
     ...(profile.model ? [`model: ${JSON.stringify(profile.model)}`] : []),
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
+    ...(profile.tools && profile.tools.length ? [`tools: ${profile.tools.join(", ")}`] : []),
     ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
+    ...(typeof profile.maxBudgetUsd === "number" ? [`max_budget_usd: ${profile.maxBudgetUsd}`] : []),
     ...(profile.owner ? [`owner: ${JSON.stringify(profile.owner)}`] : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`;
 }
 
-export async function installProfileWithSmokeTest({
+/**
+ * Offline install of a shared role: validate, confirm upstream, then write
+ * pi-flow-external/roles/<name>.md exactly once. No backend smoke test — a
+ * role is authored content, not an authenticated connection.
+ */
+export async function installSharedRole({
   agentDir,
-  profile,
+  role,
   signal,
-  smokeTest,
 }: {
   agentDir: string;
-  profile: SubagentProfile;
+  role: SharedRole;
   signal?: AbortSignal;
-  smokeTest: (reconciledProfile: SubagentProfile) => Promise<{ ok: true } | { ok: false; error: string }>;
 }): Promise<string> {
-  const { harnesses: harnessConfigs } = loadHarnessConfigs(agentDir);
-  const reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
-  const content = compileProfile(profile);
-  if (!parseSubagentProfileContent(content, profile.name, { requireBody: true })) {
-    throw new Error("Compiled profile failed runtime validation.");
-  }
-  if (getSubagentProfiles(agentDir).has(profile.name)) {
-    throw new Error(`Profile "${profile.name}" already exists.`);
-  }
-
-  const dir = join(agentDir, "subagents");
-  const finalPath = join(dir, `${profile.name}.md`);
-  const stagedPath = join(dir, `.${profile.name}.${process.pid}.${randomUUID()}.staged`);
+  const content = compileSharedRole(role);
+  const dir = rolesDir(agentDir);
+  const finalPath = sharedRolePath(agentDir, role.name);
+  const stagedPath = join(dir, `.${role.name}.${process.pid}.${randomUUID()}.staged`);
   let finalCreated = false;
   await mkdir(dir, { recursive: true });
   try {
     await access(finalPath);
-    throw new Error(`Profile "${profile.name}" already exists.`);
+    throw new Error(`Role "${role.name}" already exists.`);
   } catch (error) {
     if (error instanceof Error && !((error as NodeJS.ErrnoException).code === "ENOENT")) {
       throw error;
     }
   }
-
+  signal?.throwIfAborted();
   try {
     await writeFile(stagedPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    const smoke = await smokeTest(reconciled);
-    if (!smoke.ok) {
-      throw new Error(smoke.error);
-    }
     signal?.throwIfAborted();
-    // Hard-linking is an atomic, no-overwrite install because staging and final
-    // paths share a directory. Remove the staged name after the link succeeds.
+    // Atomic no-overwrite publication: readers never observe a partial role.
     await link(stagedPath, finalPath);
     finalCreated = true;
     await unlink(stagedPath);
     signal?.throwIfAborted();
-
-    const installed = filterExternalAgentProfiles(getSubagentProfiles(agentDir), getConfiguredHarnessNames(agentDir)).get(profile.name);
-    if (!installed) {
-      throw new Error("Installed profile was not discovered by the runtime loader.");
-    }
     return finalPath;
   } catch (error) {
     const cleanupErrors: string[] = [];
@@ -214,7 +232,7 @@ export async function installProfileWithSmokeTest({
 }
 
 function smokePrompt(): string {
-  return `This is a profile readiness smoke test. Do not inspect, create, modify, or delete files. Reply with exactly ${SMOKE_TOKEN} and nothing else.`;
+  return `This is a harness readiness smoke test. Do not inspect, create, modify, or delete files. Reply with exactly ${SMOKE_TOKEN} and nothing else.`;
 }
 
 function resultText(result: Awaited<ReturnType<typeof spawnSubagent>>): string | undefined {
@@ -222,187 +240,117 @@ function resultText(result: Awaited<ReturnType<typeof spawnSubagent>>): string |
   return details.result;
 }
 
-function profileReview(profile: SubagentProfile, path: string): string {
-  return `Destination: ${path}\nBackend executable: ${profile.backend}\n\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
+function roleReview(role: SharedRole, path: string): string {
+  return `Destination: ${path}\nShared role (works with any harness; no backend/model/thinking pin).\n\n${compileSharedRole(role)}\nRole creation is offline: no backend smoke test runs for shared roles.`;
 }
 
 function harnessReview(name: string, model: string, thinking: string): string {
   return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory.`;
 }
 
-// Both creator tools are activated together during the interview: the
-// assistant picks whichever branch (role profile vs. new harness) applies and
-// calls that one tool; finalizing either one deactivates both.
-function setProfileCreatorActive(pi: ExtensionAPI, active: boolean): void {
-  const current = pi.getActiveTools().filter((name) => name !== PROFILE_TOOL_NAME && name !== HARNESS_TOOL_NAME);
-  pi.setActiveTools(active ? [...current, PROFILE_TOOL_NAME, HARNESS_TOOL_NAME] : current);
+// Each interview activates only its own finalizer: the role interview exposes
+// pi_flow_role_create, the harness interview pi_flow_harness_create.
+// Finalizing either tool, or a session start, deactivates both.
+function setCreatorActive(pi: ExtensionAPI, tool: typeof ROLE_TOOL_NAME | typeof HARNESS_TOOL_NAME | null): void {
+  const current = pi.getActiveTools().filter((name) => name !== ROLE_TOOL_NAME && name !== HARNESS_TOOL_NAME);
+  pi.setActiveTools(tool ? [...current, tool] : current);
 }
 
 export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreatorOptions): void {
-  const creatorTool = defineTool({
-    name: PROFILE_TOOL_NAME,
-    label: "Create pi-flow profile",
-    description: "Finalize a profile during the /external profile create interview. Shows the compiled profile for user confirmation, smoke-tests the real external backend, and rolls back on failure.",
-    parameters: profileParameters,
+  const roleTool = defineTool({
+    name: ROLE_TOOL_NAME,
+    label: "Create pi-flow role",
+    description: "Finalize a shared role during the /external role create interview. Shows the compiled role for user confirmation and writes it offline to pi-flow-external/roles/ without a backend smoke test.",
+    parameters: roleParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
-      const profile = normalizeProfile(params);
-      const finalPath = join(getAgentDir(), "subagents", `${profile.name}.md`);
-      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
-      let reconciled: SubagentProfile;
+      void toolCallId;
+      let role: SharedRole;
       try {
-        reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
-        compileProfile(profile);
+        role = normalizeSharedRole(params);
+        compileSharedRole(role);
       } catch (error) {
-        return textResult(`Profile validation failed: ${error instanceof Error ? error.message : String(error)}`, {
-          description: "Create pi-flow profile",
-          subagentType: profile.name || "unknown",
-          backend: profile.backend,
+        return textResult(`Role validation failed: ${error instanceof Error ? error.message : String(error)}`, {
+          description: "Create pi-flow role",
+          subagentType: params?.name?.trim() || "unknown",
+
           status: "error",
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      const finalPath = sharedRolePath(getAgentDir(), role.name);
 
       if (!ctx.hasUI) {
-        return textResult("Profile creation requires interactive or RPC UI so the compiled file can be reviewed and confirmed.", {
-          description: "Create pi-flow profile",
-          subagentType: profile.name,
-          backend: profile.backend,
+        return textResult("Role creation requires interactive or RPC UI so the file can be reviewed and confirmed.", {
+          description: "Create pi-flow role",
+          subagentType: role.name,
+
           status: "error",
           error: "Review UI unavailable",
         });
       }
 
-      const confirmed = await ctx.ui.confirm(
-        `Create ${profile.name}?`,
-        profileReview(profile, finalPath),
-        { signal },
-      );
+      const confirmed = await ctx.ui.confirm(`Create role ${role.name}?`, roleReview(role, finalPath), { signal });
       if (!confirmed) {
-        return textResult("Profile creation cancelled. No profile was created.", {
-          description: "Create pi-flow profile",
-          subagentType: profile.name,
-          backend: profile.backend,
+        return textResult("Role creation cancelled. No role was created.", {
+          description: "Create pi-flow role",
+          subagentType: role.name,
+
           status: "aborted",
         });
       }
 
       try {
-        const createdPath = await installProfileWithSmokeTest({
-          agentDir: getAgentDir(),
-          profile,
-          signal,
-          smokeTest: async (reconciledProfile) => {
-            let release: () => void;
-            try {
-              release = await options.getLimiter().acquire(signal);
-            } catch (error) {
-              if (signal?.aborted) {
-                throw new DOMException(error instanceof Error ? error.message : String(error), "AbortError");
-              }
-              throw error;
-            }
-            let smokeDir: string | undefined;
-            try {
-              smokeDir = await mkdtemp(join(tmpdir(), "pi-flow-profile-smoke-"));
-              const smokeProfile = profile.backend === "pi" ? (reconciledProfile ?? reconciled) : profile;
-              const result = await spawnSubagent({
-                toolCallId: `${toolCallId}-smoke`,
-                description: "Profile smoke test",
-                prompt: smokePrompt(),
-                // Validate backend availability/auth/model without executing the
-                // new profile's instructions or loading project instructions.
-                profile: { ...smokeProfile, systemPrompt: undefined },
-                // The pi backend's spawn runtime requires a pre-resolved model
-                // object, unlike claude/codex/agy/grok/muse which resolve their own model
-                // string internally; resolve it here so the smoke test actually
-                // exercises the harness's registered model instead of failing
-                // immediately with "No model is selected".
-                model: smokeProfile.backend === "pi" ? resolveProfileModel(smokeProfile, ctx) : undefined,
-                thinkingLevel: smokeProfile.backend === "agy"
-                  ? undefined
-                  : smokeProfile.thinking ?? options.getThinkingLevel(),
-                ctx: { ...ctx, cwd: smokeDir },
-                signal,
-                timeoutMs: options.getSubagentTimeoutMs(),
-                progressEnabled: false,
-                onProgress: undefined,
-                onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
-                excludeTools: CHILD_EXCLUDED_TOOLS,
-                recordRun: false,
-              });
-              const details = result.details as { status?: string; error?: string };
-              if (details.status === "aborted") {
-                throw new DOMException(details.error ?? "Profile smoke test cancelled.", "AbortError");
-              }
-              if (details.status !== "done") {
-                return { ok: false, error: details.error ?? `Smoke test ended with status ${details.status ?? "unknown"}.` };
-              }
-              if (resultText(result) !== SMOKE_TOKEN) {
-                return { ok: false, error: `Smoke test returned an unexpected response instead of ${SMOKE_TOKEN}.` };
-              }
-              return { ok: true };
-            } finally {
-              release();
-              if (smokeDir) {
-                await rm(smokeDir, { recursive: true, force: true });
-              }
-            }
-          },
-        });
-        ctx.ui.notify(`Profile "${profile.name}" is ready: ${createdPath}`, "info");
-        return textResult(`Profile "${profile.name}" passed its smoke test and was installed at ${createdPath}.`, {
-          description: "Create pi-flow profile",
-          subagentType: profile.name,
-          backend: profile.backend,
+        signal?.throwIfAborted();
+        const createdPath = await installSharedRole({ agentDir: getAgentDir(), role, signal });
+        ctx.ui.notify(`Role "${role.name}" is ready: ${createdPath}. It works with any harness from the next invocation.`, "info");
+        return textResult(`Role "${role.name}" was installed at ${createdPath}.`, {
+          description: "Create pi-flow role",
+          subagentType: role.name,
+
           status: "done",
           result: createdPath,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const cancelled = error instanceof DOMException && error.name === "AbortError";
-        const rollbackIncomplete = message.includes("Rollback incomplete;");
-        const existingProfile = message === `Profile "${profile.name}" already exists.`;
         if (cancelled) {
-          ctx.ui.notify("Profile creation cancelled. No profile was created.", "info");
-          return textResult("Profile creation cancelled. No profile was created.", {
-            description: "Create pi-flow profile",
-            subagentType: profile.name,
-            backend: profile.backend,
+          ctx.ui.notify("Role creation cancelled. No role was created.", "info");
+          return textResult("Role creation cancelled. No role was created.", {
+            description: "Create pi-flow role",
+            subagentType: role.name,
+
             status: "aborted",
             error: message,
           });
         }
+        const existing = message === `Role "${role.name}" already exists.`;
         ctx.ui.notify(
-          rollbackIncomplete
-            ? `Profile creation failed; rollback is incomplete: ${message}`
-            : existingProfile
-              ? `Profile creation failed: ${message} The existing profile was not changed.`
-              : `Profile creation failed and was rolled back: ${message}`,
+          existing
+            ? `Role creation failed: ${message} The existing role was not changed.`
+            : `Role creation failed: ${message}`,
           "error",
         );
         return textResult(
-          rollbackIncomplete
-            ? `Profile creation failed during validation or smoke testing: ${message}`
-            : existingProfile
-              ? `Profile creation failed: ${message}\n\nThe existing profile was not changed.`
-              : `Profile creation failed during validation or smoke testing: ${message}\n\nRolled back. No profile was created.`, {
-          description: "Create pi-flow profile",
-          subagentType: profile.name,
-          backend: profile.backend,
+          existing
+            ? `Role creation failed: ${message}\n\nThe existing role was not changed.`
+            : `Role creation failed: ${message}\n\nNo role was created.`, {
+          description: "Create pi-flow role",
+          subagentType: role.name,
+
           status: "error",
           error: message,
         });
       }
     },
   });
-  const executeCreator = creatorTool.execute.bind(creatorTool);
+  const executeRoleCreator = roleTool.execute.bind(roleTool);
   pi.registerTool({
-    ...creatorTool,
+    ...roleTool,
     async execute(...args) {
       try {
-        return await executeCreator(...args);
+        return await executeRoleCreator(...args);
       } finally {
-        setProfileCreatorActive(pi, false);
+        setCreatorActive(pi, null);
       }
     },
   });
@@ -410,7 +358,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const harnessTool = defineTool({
     name: HARNESS_TOOL_NAME,
     label: "Create named Pi harness",
-    description: "Finalize a new named Pi harness configuration during the /external profile create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
+    description: "Finalize a new named Pi harness configuration during the /external harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
     parameters: harnessParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const name = params.name.trim();
@@ -545,49 +493,44 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
       try {
         return await executeHarnessCreator(...args);
       } finally {
-        setProfileCreatorActive(pi, false);
+        setCreatorActive(pi, null);
       }
     },
   });
 
-  pi.on("session_start", () => setProfileCreatorActive(pi, false));
+  pi.on("session_start", () => setCreatorActive(pi, null));
   pi.on("input", (event) => {
-    if (event.source === "extension" && event.text === PROFILE_INTERVIEW_PROMPT) {
-      setProfileCreatorActive(pi, true);
+    if (event.source === "extension" && event.text === ROLE_INTERVIEW_PROMPT) {
+      setCreatorActive(pi, ROLE_TOOL_NAME);
+    } else if (event.source === "extension" && event.text === HARNESS_INTERVIEW_PROMPT) {
+      setCreatorActive(pi, HARNESS_TOOL_NAME);
     }
-  });
-
-  pi.registerCommand("pi-flow-profile", {
-    description: "Deprecated: use /external profile create",
-    getArgumentCompletions: (prefix) => "create".startsWith(prefix.trim())
-      ? [{ value: "create", label: "create", description: "Start an AI-assisted profile interview" }]
-      : null,
-    handler: async (args, ctx) => {
-      if (args.trim() !== "create") {
-        ctx.ui.notify("Usage: /external profile create", "warning");
-        return;
-      }
-      ctx.ui.notify("/pi-flow-profile is deprecated; use /external profile create.", "warning");
-      await startProfileInterview(ctx);
-    },
   });
 }
 
-export async function startProfileInterview(ctx: ExtensionCommandContext): Promise<void> {
+async function startInterview(ctx: ExtensionCommandContext, prompt: string, label: string): Promise<void> {
   if (!ctx.hasUI) {
-    ctx.ui.notify("Profile creation requires interactive or RPC mode.", "error");
+    ctx.ui.notify(`${label} requires interactive or RPC mode.`, "error");
     return;
   }
   if (!ctx.model) {
-    ctx.ui.notify("Select a Pi model before starting the profile interview.", "error");
+    ctx.ui.notify(`Select a Pi model before starting the ${label.toLowerCase()}.`, "error");
     return;
   }
 
   const result = await ctx.newSession({
     parentSession: ctx.sessionManager.getSessionFile(),
     withSession: async (newCtx) => {
-      await newCtx.sendUserMessage(PROFILE_INTERVIEW_PROMPT);
+      await newCtx.sendUserMessage(prompt);
     },
   });
-  if (result.cancelled) ctx.ui.notify("Profile interview cancelled.", "info");
+  if (result.cancelled) ctx.ui.notify(`${label} cancelled.`, "info");
+}
+
+export async function startRoleInterview(ctx: ExtensionCommandContext): Promise<void> {
+  await startInterview(ctx, ROLE_INTERVIEW_PROMPT, "Role interview");
+}
+
+export async function startHarnessInterview(ctx: ExtensionCommandContext): Promise<void> {
+  await startInterview(ctx, HARNESS_INTERVIEW_PROMPT, "Harness interview");
 }

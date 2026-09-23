@@ -8,11 +8,11 @@ const { renameMock, unlinkMock } = vi.hoisted(() => ({
   unlinkMock: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  renameMock.mockImplementation(actual.rename);
-  unlinkMock.mockImplementation(actual.unlink);
-  return { ...actual, rename: renameMock, unlink: unlinkMock };
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  renameMock.mockImplementation(actual.renameSync);
+  unlinkMock.mockImplementation(actual.unlinkSync);
+  return { ...actual, renameSync: renameMock, unlinkSync: unlinkMock };
 });
 
 import {
@@ -59,7 +59,7 @@ describe("loadHarnessConfigs", () => {
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
     writeFileSync(harnessesPath(agentDir), JSON.stringify({
-      version: 1,
+      version: 4,
       harnesses: {
         "not-pi-prefixed": { model: "openai/gpt-5" },
         "pi-deepseek": { model: "deepseek/deepseek-chat" },
@@ -75,7 +75,7 @@ describe("loadHarnessConfigs", () => {
     const agentDir = tempAgentDir();
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(harnessesPath(agentDir), JSON.stringify({ version: 1, harnesses: { "pi-bad": {} } }));
+    writeFileSync(harnessesPath(agentDir), JSON.stringify({ version: 4, harnesses: { "pi-bad": {} } }));
     const { harnesses, diagnostics } = loadHarnessConfigs(agentDir);
     expect(harnesses.has("pi-bad")).toBe(false);
     expect(diagnostics).toHaveLength(1);
@@ -86,7 +86,7 @@ describe("loadHarnessConfigs", () => {
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
     writeFileSync(harnessesPath(agentDir), JSON.stringify({
-      version: 1,
+      version: 4,
       harnesses: { "pi-typo": { model: "deepseek/deepseek-chat", thinking: "med" } },
     }));
     const { harnesses, diagnostics } = loadHarnessConfigs(agentDir);
@@ -99,7 +99,7 @@ describe("loadHarnessConfigs", () => {
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
     writeFileSync(harnessesPath(agentDir), JSON.stringify({
-      version: 1,
+      version: 4,
       harnesses: { "pi-glm": { model: "zhipu/glm-4.6" } },
     }));
     const { harnesses } = loadHarnessConfigs(agentDir);
@@ -111,7 +111,7 @@ describe("loadHarnessConfigs", () => {
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
     writeFileSync(harnessesPath(agentDir), JSON.stringify({
-      version: 1,
+      version: 4,
       harnesses: {
         "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" },
         "pi-glm": { model: "zhipu/glm-4.6" },
@@ -233,12 +233,18 @@ describe("installHarnessConfigWithSmokeTest", () => {
       smokeTest: async () => ({ ok: true }),
     });
     expect(renameMock).toHaveBeenCalledTimes(1);
-    // No separate unlink-of-the-final-path step: the rename call itself is
-    // the atomic replace, so unlink is never used to clear the destination.
-    expect(unlinkMock).not.toHaveBeenCalled();
+    const [stagedPath, finalPath] = renameMock.mock.calls[0] as [string, string];
+    expect(finalPath).toBe(harnessesPath(agentDir));
+    expect(stagedPath).toContain(".staged");
+    // Cleanup may unlink the staged path after rename. It must never unlink
+    // the destination; that would open an unlink-then-link window.
+    for (const call of unlinkMock.mock.calls) {
+      expect(call[0]).not.toBe(harnessesPath(agentDir));
+      expect(String(call[0])).toContain(".staged");
+    }
   });
 
-  it("leaves an existing harnesses.json completely untouched, with no data loss, when the atomic rename fails", async () => {
+  it("leaves an existing settings.json completely untouched, with no data loss, when the atomic rename fails", async () => {
     const agentDir = tempAgentDir();
     await installHarnessConfigWithSmokeTest({
       agentDir,
@@ -248,7 +254,9 @@ describe("installHarnessConfigWithSmokeTest", () => {
     });
     const before = readFileSync(harnessesPath(agentDir), "utf8");
 
-    renameMock.mockRejectedValueOnce(new Error("simulated rename failure"));
+    renameMock.mockImplementationOnce(() => {
+      throw new Error("simulated rename failure");
+    });
     await expect(installHarnessConfigWithSmokeTest({
       agentDir,
       name: "pi-new",

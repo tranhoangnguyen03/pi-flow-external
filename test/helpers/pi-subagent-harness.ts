@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,7 @@ type CreateSessionOptions = {
   defaultModelId?: string;
   thinkingLevel?: ThinkingLevel;
   projectTrusted?: boolean;
-  /** Register named pi-* harness configs (writes harnesses.json) pointing at an already-registered faux model. */
+  /** Register named pi-* harness configs in settings.json (version 4) pointing at an already-registered faux model. */
   piHarnesses?: Record<string, { modelId: string; thinking?: ThinkingLevel }>;
 };
 
@@ -139,7 +139,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(config, null, 2));
   }
 
-  function writeHarnessesJson(piHarnesses: NonNullable<CreateSessionOptions["piHarnesses"]>, models: Array<Model<string>>) {
+  function writeHarnessSettings(piHarnesses: NonNullable<CreateSessionOptions["piHarnesses"]>, models: Array<Model<string>>) {
     const harnesses: Record<string, { model: string; thinking: string }> = {};
     for (const [name, config] of Object.entries(piHarnesses)) {
       const model = models.find((candidate) => candidate.id === config.modelId);
@@ -148,7 +148,12 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     }
     const dir = join(agentDir, "pi-flow-external");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "harnesses.json"), JSON.stringify({ version: 1, harnesses }, null, 2));
+    const path = join(dir, "settings.json");
+    const existing = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : {};
+    const existingHarnesses = existing.harnesses && typeof existing.harnesses === "object" && !Array.isArray(existing.harnesses)
+      ? existing.harnesses as Record<string, unknown>
+      : {};
+    writeFileSync(path, JSON.stringify({ ...existing, version: 4, harnesses: { ...existingHarnesses, ...harnesses } }, null, 2));
   }
 
   async function createSession(options: CreateSessionOptions = {}) {
@@ -173,7 +178,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     authStorage.setRuntimeApiKey(model.provider, "test-api-key");
     writeModelsJson(models);
     if (piHarnesses) {
-      writeHarnessesJson(piHarnesses, models);
+      writeHarnessSettings(piHarnesses, models);
     }
     const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
     const settingsManager = SettingsManager.inMemory({});

@@ -4,6 +4,22 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [3.0.0-external.0] - 2026-09-23
+
+### Breaking upgrade
+
+- Removed `/external profiles`, `/external profile create`, and `/pi-flow-profile create` without aliases. Use `/external roles`, `/external role create`, or `/external harness create` instead. Agent/workflow `role`, `harness`, and exact `subagent_type` APIs remain supported.
+- Execution configuration now has one authoritative file: `pi-flow-external/settings.json` version 4, including named Pi harness model/thinking registrations. Run `/external settings convert` once for an older installation; invalid or conflicting inputs block conversion rather than being discarded.
+- The six built-in roles are synthesized for agy, Claude, Codex, Grok, Muse, and registered Pi harnesses. No default profile files or seed markers are written. Shared authored roles live in `pi-flow-external/roles/`; exact overrides live in `pi-flow-external/overrides/`.
+- Conversion copies custom external profiles and preserves deleted-default intent, leaving original files in place. Once v4 is active, legacy `subagents/` profiles and `harnesses.json` are ignored, not fallback configuration.
+- Optional `/external [danger]purge-old-files` explicitly deletes the listed legacy profiles (including customized copies), seed markers, and old harness registry. Nonstandard names require individual selection. Native/unrelated files and current configuration/evidence are excluded. Downgrading after purge requires your own backup; simultaneous old/new-version configuration is unsupported.
+
+### Added
+
+- Unified role discovery, inspection, offline shared-role authoring, exact override creation, harness registration, and validated settings editing. All execution/discovery consumers use the same effective catalog.
+- Frozen workflow catalog/model snapshots and explicit invalid/disabled selection errors prevent hidden fallback to a built-in role or another harness.
+- Isolated v4 E2E fixtures and explicit permission selection, including Grok `danger` checks without sandbox workarounds.
+
 ## [2.4.2-external.0] - 2026-09-23
 
 ### Fixed

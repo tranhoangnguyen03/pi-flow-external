@@ -43,12 +43,12 @@ describe("delegation transparency rendering", () => {
   }
 
   it("explains a direct delegation and links its expanded evidence receipt", () => {
-    const profilesDir = join(agentDir, "subagents");
+    const profilesDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(profilesDir, { recursive: true });
     const profilePath = join(profilesDir, "claude-explorer.md");
     writeFileSync(
       profilePath,
-      "---\ndescription: Repository exploration through Claude Code.\nbackend: claude\n---\nExplore repositories read-only.\n",
+      "---\ndescription: Custom cached explorer reason.\nbackend: claude\n---\nExplore repositories read-only.\n",
     );
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
     const theme = makeMockTheme() as never;
@@ -66,7 +66,7 @@ describe("delegation transparency rendering", () => {
     expect(callText).toContain("Claude Code → claude-explorer");
     expect(callText).toContain("unsandboxed external CLI");
     expect(callText).toContain("Task Map repository architecture");
-    expect(callText).toContain("Why Repository exploration through Claude Code.");
+    expect(callText).toContain("Why Custom cached explorer reason.");
     expect(callText).toContain(`Workspace ${cwd}`);
     expect(callText).not.toContain("Context");
     const sharedCall = tool.renderCall?.({ ...callArgs, context: { mode: "recent", turns: 5 } }, theme, { ...callContext, state: {} });
@@ -74,7 +74,7 @@ describe("delegation transparency rendering", () => {
 
     unlinkSync(profilePath);
     const cachedCall = tool.renderCall?.(callArgs, theme, callContext);
-    expect(renderToText(cachedCall!)).toContain("Why Repository exploration through Claude Code.");
+    expect(renderToText(cachedCall!)).toContain("Why Custom cached explorer reason.");
 
     const running: SubagentToolDetails = {
       description: "Map repository architecture",
@@ -136,8 +136,8 @@ describe("delegation transparency rendering", () => {
   it("discloses a pi-harness delegation as an in-process child, never as an external CLI", () => {
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(
-      join(agentDir, "pi-flow-external", "harnesses.json"),
-      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+      join(agentDir, "pi-flow-external", "settings.json"),
+      JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
     );
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
     const theme = makeMockTheme() as never;
@@ -244,7 +244,7 @@ describe("delegation roster lane disclosure", () => {
     expect(roster).toContain("Harnesses: agy (default), claude, codex, grok, muse.");
     expect(roster).toContain("Roles: implementer (claude only), reviewer (agy, claude only).");
     expect(roster).toContain("Exact-only profiles: specialist (codex).");
-    expect(roster).toContain("Catalog availability reflects configured profiles");
+    expect(roster).toContain("Catalog availability reflects built-in and authored roles");
     expect(roster).toContain("use external CLIs and registered Pi harnesses");
     expect(roster).not.toContain("Code review through Antigravity.");
   });

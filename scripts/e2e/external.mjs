@@ -14,9 +14,11 @@ const defaults = {
   grok: { model: "grok-4.6", thinking: "high" },
   muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
   // No fixed model/thinking default: a named pi harness pins its own model and
-  // thinking in the caller's real harnesses.json; --harness names which one.
+  // thinking in the caller's real settings.json (version 4) harnesses map;
+  // --harness names which one.
   pi: {},
 };
+const PERMISSION_TIERS = ["readonly", "edit", "danger"];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 let cleanupProfilePath;
 process.once("exit", () => {
@@ -50,6 +52,7 @@ function parseArgs(argv) {
     else if (arg === "--harness") options.harness = value();
     else if (arg === "--model") options.model = value();
     else if (arg === "--thinking") options.thinking = value();
+    else if (arg === "--permission") options.permission = value();
     else if (arg === "--root-model") { options.rootModel = value(); rootModelProvided = true; }
     else if (arg === "--root-thinking") { options.rootThinking = value(); rootThinkingProvided = true; }
     else if (arg === "--agent-dir") { options.agentDir = path.resolve(value()); agentDirProvided = true; }
@@ -63,8 +66,14 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option: ${arg}`);
   }
   if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, or pi");
-  if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real harnesses.json");
+  if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 4");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
+  if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
+    throw new Error("--permission must be readonly, edit, or danger");
+  }
+  // Field runs, including Grok, request a tier on the child call. Omit the
+  // flag to keep this runner's existing explicit danger tier.
+  options.permission ??= "danger";
   if (options.workflow && options.interrupt) throw new Error("--workflow and --interrupt are separate checks");
   // --root-model/--root-thinking only mean anything when a real root Pi LLM is
   // actually prompted to choose the tool call, which only happens in the
@@ -101,9 +110,11 @@ function help() {
   console.log(`Usage: npm run e2e -- [options]
 
   --backend <claude|codex|agy|grok|muse|pi>  external backend (default: codex)
-  --harness <name>              required with --backend pi: a pi-* harness already registered in your own real harnesses.json
+  --harness <name>              required with --backend pi: a pi-* harness already registered in your own real settings.json version 4
   --model <id>                  child model (backend default when omitted; ignored for pi, which pins its own)
   --thinking <level>            child thinking (default: high; ignored for pi, which pins its own)
+  --permission <readonly|edit|danger>
+                                explicit child permission request (default: danger). Grok field runs pass this on the child call; omit it to keep danger.
   --workflow                    test a blocking two-child workflow instead of a single direct Agent call
   --interrupt                   launch a background Agent, then cancel/wait/inspect it through external_runs
   --agent-dir <dir>             Pi agent directory (default: isolated under run root; real dir for --backend pi)
@@ -206,34 +217,82 @@ function withWatchdog(promise, controller, timeoutMs, message) {
   })();
 }
 
+function settingsPathFor(agentDir) {
+  return path.join(agentDir, "pi-flow-external", "settings.json");
+}
+
 /**
- * Doctor-style precheck: confirm the named pi harness actually resolves in
- * the real, on-disk harnesses.json before spending time on the real backend
- * call. Mirrors /external doctor's own pi-aware check (model shape and
- * presence only; it cannot verify live provider auth from a standalone
- * script) rather than letting a missing/misspelled harness surface only as a
- * confusing failure deep inside session construction.
+ * Read settings without writing. Version 1–3 and a leftover harnesses.json
+ * are an actionable conversion, never something this script rewrites.
  */
-function preflightPiHarness(agentDir, harnessName) {
-  const harnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
-  if (!existsSync(harnessesPath)) {
-    throw new Error(`No harnesses.json found at ${harnessesPath}. Register "${harnessName}" first via /external profile create.`);
+function readSettingsFile(agentDir) {
+  const settingsPath = settingsPathFor(agentDir);
+  const legacyHarnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
+  if (!existsSync(settingsPath)) {
+    if (existsSync(legacyHarnessesPath)) {
+      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external settings convert to upgrade it to settings.json version 4. This script will not modify ${agentDir}.`);
+    }
+    return { settingsPath, missing: true };
   }
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(harnessesPath, "utf8"));
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
   } catch (error) {
-    throw new Error(`${harnessesPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${settingsPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const harnesses = parsed && typeof parsed === "object" ? parsed.harnesses : undefined;
-  const entry = harnesses && typeof harnesses === "object" ? harnesses[harnessName] : undefined;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${settingsPath} must be a JSON object. This script will not modify it.`);
+  }
+  if (parsed.version !== 4) {
+    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 4. Run /external settings convert to upgrade this installation. This script will not modify it.`);
+  }
+  return { settingsPath, missing: false, parsed };
+}
+
+/**
+ * Doctor-style precheck: confirm the named pi harness is registered in the
+ * real settings.json version 4 harnesses map before spending time on the
+ * real backend call. Model shape and presence only; live provider auth is
+ * not verified here. A version 1–3 file is reported for conversion and is
+ * never rewritten.
+ */
+function preflightPiHarness(agentDir, harnessName) {
+  const loaded = readSettingsFile(agentDir);
+  if (loaded.missing) {
+    throw new Error(`No settings.json found at ${loaded.settingsPath}. Register "${harnessName}" under "harnesses" in settings.json version 4. This script will not create or modify it.`);
+  }
+  const harnesses = loaded.parsed.harnesses;
+  const registry = harnesses && typeof harnesses === "object" && !Array.isArray(harnesses) ? harnesses : undefined;
+  const entry = registry ? registry[harnessName] : undefined;
   if (!entry || typeof entry.model !== "string" || !entry.model.trim()) {
-    const registered = harnesses && typeof harnesses === "object" ? Object.keys(harnesses) : [];
+    const registered = registry ? Object.keys(registry) : [];
     throw new Error(
-      `Harness "${harnessName}" is not registered in ${harnessesPath}. ` +
+      `Harness "${harnessName}" is not registered in ${loaded.settingsPath}. ` +
       `Registered harnesses: ${registered.join(", ") || "none"}.`,
     );
   }
+}
+
+/**
+ * Fresh CLI fixtures are settings.json version 4 plus one exact override.
+ * An existing version 4 file is left byte-for-byte alone. Anything older, or
+ * a leftover harnesses.json with no settings file, stops here unedited.
+ */
+function installCliFixture(agentDir, backend, role, model, thinking) {
+  const loaded = readSettingsFile(agentDir);
+  if (loaded.missing) {
+    mkdirSync(path.dirname(loaded.settingsPath), { recursive: true });
+    writeFileSync(loaded.settingsPath, `${JSON.stringify({ version: 4 }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  }
+  const overridesDir = path.join(agentDir, "pi-flow-external", "overrides");
+  mkdirSync(overridesDir, { recursive: true });
+  const profilePath = path.join(overridesDir, `${backend}-${role}.md`);
+  writeFileSync(
+    profilePath,
+    `---\ndescription: Temporary ${backend} E2E profile.\nbackend: ${backend}\nmodel: ${model}\nthinking: ${thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  return profilePath;
 }
 
 // The fixture content is an unpredictable nonce, generated fresh per run and
@@ -292,8 +351,7 @@ async function runRoutingSmoke(options) {
     const fixture = path.join(options.runRoot, "fixture");
     const sessionDir = path.join(options.runRoot, "sessions");
     const evidenceDir = path.join(options.runRoot, "evidence");
-    const subagentsDir = path.join(options.agentDir, "subagents");
-    for (const directory of [fixture, sessionDir, evidenceDir, subagentsDir]) mkdirSync(directory, { recursive: true });
+    for (const directory of [fixture, sessionDir, evidenceDir]) mkdirSync(directory, { recursive: true });
 
     const isPi = options.backend === "pi";
     const harnessName = isPi ? options.harness : options.backend;
@@ -308,6 +366,7 @@ async function runRoutingSmoke(options) {
     // unresolvable, which previously surfaced as an unrelated coordinator
     // startup failure.
     if (!isPi) {
+      mkdirSync(options.agentDir, { recursive: true });
       const realAgentDir = process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent");
       for (const file of ["models.json", "auth.json"]) {
         const source = path.join(realAgentDir, file);
@@ -319,21 +378,20 @@ async function runRoutingSmoke(options) {
 
     const role = isPi ? "worker" : `zz-e2e-${randomUUID()}`;
     if (!isPi) {
-      const profileName = `${options.backend}-${role}`;
-      profilePath = path.join(subagentsDir, `${profileName}.md`);
-      writeFileSync(profilePath, `---\ndescription: Temporary ${options.backend} E2E profile.\nbackend: ${options.backend}\nmodel: ${options.model}\nthinking: ${options.thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`, { flag: "wx" });
+      profilePath = installCliFixture(options.agentDir, options.backend, role, options.model, options.thinking);
       if (!options.keep) cleanupProfilePath = profilePath;
     }
 
     const childPrompt = options.interrupt
       ? `Read ${JSON.stringify(targetPath)}, report ${marker}, then keep inspecting the read-only fixture until cancelled. Do not edit files.`
       : buildReadPrompt(targetPath);
-    const workflow = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)} })\n]);\nreturn results;`;
+    const permission = options.permission;
+    const workflow = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)}, permission: ${JSON.stringify(permission)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)}, permission: ${JSON.stringify(permission)} })\n]);\nreturn results;`;
     const rootPrompt = options.workflow
       ? `Call workflow exactly once with background:true and this exact script:\n\n${workflow}\n\nUse external_runs wait on the returned workflow run ID, then inspect its output and summary. Report the returned token lines and WORKFLOW_SUPERVISION_OK.`
       : options.interrupt
-        ? `Call Agent exactly once with background:true, description "External interruption smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(harnessName)}, and prompt ${JSON.stringify(childPrompt)}. Cancel its returned run ID with external_runs using reason "E2E requested cancellation", wait for that run, then inspect its output and diagnostics. Report E2E_CANCELLED.`
-        : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(harnessName)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;
+        ? `Call Agent exactly once with background:true, description "External interruption smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(harnessName)}, permission ${JSON.stringify(permission)}, and prompt ${JSON.stringify(childPrompt)}. Cancel its returned run ID with external_runs using reason "E2E requested cancellation", wait for that run, then inspect its output and diagnostics. Report E2E_CANCELLED.`
+        : `Call Agent exactly once with description "External smoke", role ${JSON.stringify(role)}, harness ${JSON.stringify(harnessName)}, permission ${JSON.stringify(permission)}, and prompt ${JSON.stringify(childPrompt)}. Report its exact result.`;
     const promptPath = path.join(options.runRoot, "prompt.md");
     writeFileSync(promptPath, rootPrompt);
 
@@ -392,7 +450,7 @@ async function runRoutingSmoke(options) {
 // Agent/workflow/external_runs tool executors directly, exactly as
 // test/agent-contract.test.ts does. The selected external backend's child
 // (a real spawned CLI process, or, for --backend pi, a real in-process
-// nested Pi child against the caller's real harnesses.json) is real.
+// nested Pi child against the caller's real settings.json version 4) is real.
 // ---------------------------------------------------------------------------
 
 function makeMockTheme(Theme) {
@@ -487,10 +545,10 @@ async function buildDeterministicSession({ agentDir, cwd, sessionDir, subagentTi
   };
 }
 
-async function runDirect({ agentTool, ctx }, { role, harnessName, childPrompt, expectedResult, evidenceDir, signal }) {
+async function runDirect({ agentTool, ctx }, { role, harnessName, permission, childPrompt, expectedResult, evidenceDir, signal }) {
   const result = await agentTool.execute(
     "e2e-direct",
-    { description: "External smoke", prompt: childPrompt, role, harness: harnessName },
+    { description: "External smoke", prompt: childPrompt, role, harness: harnessName, permission },
     signal,
     undefined,
     ctx,
@@ -505,8 +563,8 @@ async function runDirect({ agentTool, ctx }, { role, harnessName, childPrompt, e
   return [summary];
 }
 
-async function runWorkflowMode({ workflowTool, ctx }, { role, harnessName, childPrompt, expectedResult, evidenceDir, signal }) {
-  const script = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)} })\n]);\nreturn results;`;
+async function runWorkflowMode({ workflowTool, ctx }, { role, harnessName, permission, childPrompt, expectedResult, evidenceDir, signal }) {
+  const script = `export const meta = { apiVersion: 1, name: "external_e2e", description: "External workflow smoke" };\nconst results = await parallel([\n  () => agent(${JSON.stringify(childPrompt)}, { label: "one", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)}, permission: ${JSON.stringify(permission)} }),\n  () => agent(${JSON.stringify(childPrompt)}, { label: "two", role: ${JSON.stringify(role)}, harness: ${JSON.stringify(harnessName)}, permission: ${JSON.stringify(permission)} })\n]);\nreturn results;`;
   const result = await workflowTool.execute("e2e-workflow", { script, background: false }, signal, undefined, ctx);
   assert(result.details?.status === "completed", `Workflow did not complete: ${JSON.stringify(result.details)}`);
   const agents = result.details.agents ?? [];
@@ -566,11 +624,11 @@ async function drainInspectPages(runsTool, ctx, runId, view, signal) {
   return pages;
 }
 
-async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, targetPath, evidenceDir, signal }) {
+async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, permission, targetPath, evidenceDir, signal }) {
   const childPrompt = `Read ${JSON.stringify(targetPath)}, then keep inspecting the read-only fixture until cancelled. Do not edit files.`;
   const launched = await agentTool.execute(
     "e2e-interrupt",
-    { description: "External interruption smoke", prompt: childPrompt, role, harness: harnessName, background: true },
+    { description: "External interruption smoke", prompt: childPrompt, role, harness: harnessName, permission, background: true },
     signal,
     undefined,
     ctx,
@@ -661,23 +719,17 @@ async function runDeterministic(options) {
     for (const directory of [fixture, evidenceDir, sessionDir]) mkdirSync(directory, { recursive: true });
 
     const agentDir = options.agentDir;
-    const subagentsDir = path.join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
 
     // Fail fast on a missing/misspelled harness before ever building the SDK
-    // session, exactly like the routing-smoke lane's own precheck.
+    // session, exactly like the routing-smoke lane's own precheck. This read
+    // never writes the caller's settings.
     if (isPi) preflightPiHarness(agentDir, harnessName);
 
     const { targetPath, expectedResult } = buildFixture(fixture);
 
     const role = isPi ? "worker" : `zz-e2e-${randomUUID()}`;
     if (!isPi) {
-      profilePath = path.join(subagentsDir, `${options.backend}-${role}.md`);
-      writeFileSync(
-        profilePath,
-        `---\ndescription: Temporary ${options.backend} E2E profile.\nbackend: ${options.backend}\nmodel: ${options.model}\nthinking: ${options.thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
-        { flag: "wx" },
-      );
+      profilePath = installCliFixture(agentDir, options.backend, role, options.model, options.thinking);
       if (!options.keep) cleanupProfilePath = profilePath;
     }
 
@@ -695,11 +747,12 @@ async function runDeterministic(options) {
       subagentTimeoutMs: options.timeoutMs,
     });
     const controller = new AbortController();
+    const child = { role, harnessName, permission: options.permission, childPrompt, expectedResult, evidenceDir, targetPath, signal: controller.signal };
     const check = options.workflow
-      ? runWorkflowMode(built, { role, harnessName, childPrompt, expectedResult, evidenceDir, signal: controller.signal })
+      ? runWorkflowMode(built, child)
       : options.interrupt
-        ? runInterrupt(built, { role, harnessName, targetPath, evidenceDir, signal: controller.signal })
-        : runDirect(built, { role, harnessName, childPrompt, expectedResult, evidenceDir, signal: controller.signal });
+        ? runInterrupt(built, child)
+        : runDirect(built, child);
     const receipts = await withWatchdog(check, controller, options.timeoutMs + 30_000, `Deterministic ${options.backend}${mode} E2E timed out after ${options.timeoutMs + 30_000}ms`);
     if (!options.interrupt) {
       for (const summary of receipts) assertReceiptSemantics(options, summary);

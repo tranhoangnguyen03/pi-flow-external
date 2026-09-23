@@ -1106,7 +1106,7 @@ describe("workflow tool registration", () => {
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_profile_create", "pi_flow_harness_create"]);
+    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_role_create", "pi_flow_harness_create"]);
   });
 });
 
@@ -1139,7 +1139,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     registration.setResponses([() => fauxAssistantMessage("CUSTOM_PI_WORKFLOW_OK")]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
 
     // 1. An on-disk custom profile that omits model and thinking (inheriting from harness pi-deepseek)
@@ -1207,7 +1207,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     registration.setResponses([() => fauxAssistantMessage("done")]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "pi-deepseek-custom.md"),
@@ -1283,7 +1283,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     const heldResponse = new Promise<AssistantMessage>((resolve) => { resolveResponse = resolve; });
     registration.setResponses([() => heldResponse]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "pi-deepseek-custom.md"),
@@ -1378,7 +1378,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       },
     });
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
 
     writeFileSync(

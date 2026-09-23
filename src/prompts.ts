@@ -29,7 +29,7 @@ export function formatExternalRoleCatalog(
 ): string {
   const roles = [...externalRoleAvailability(profiles)].map(([role, harnesses]) => roleLabel(role, harnesses, configuredHarnessNames));
   const exactProfiles = [...profiles.values()]
-    .filter((profile) => !externalProfileRole(profile))
+    .filter((profile) => !profile.configurationError && !externalProfileRole(profile))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((profile) => `${profile.name} (${profile.harness ?? profile.backend})`);
   return [
@@ -56,13 +56,13 @@ export function formatExternalRoleHelp(
     }),
   ]);
   const exactLines = selectedProfiles
-    .filter((profile) => !externalProfileRole(profile))
+    .filter((profile) => !profile.configurationError && !externalProfileRole(profile))
     .map((profile) => `- ${profile.name} (${profile.harness ?? profile.backend}): ${profile.description}`);
   return [
     `External roles${harness ? ` on ${harness}` : ""}. Default harness: ${defaultHarness}.`,
     roleLines.join("\n") || "- none",
     ...(exactLines.length ? ["Exact-only profiles (use legacy subagent_type):", exactLines.join("\n")] : []),
-    "Availability reflects configured profiles, not CLI installation or authentication.",
+    "Availability reflects built-in and authored roles, not CLI installation or authentication.",
     "Role selection never falls back to another harness.",
   ].join("\n\n");
 }
@@ -92,5 +92,5 @@ export function buildCoordinatorPrompt(
 
 ${formatExternalRoleCatalog(profiles, defaultHarness, configuredHarnessNames)}
 
-Catalog availability reflects configured profiles, not CLI installation or authentication. External delegation tools use external CLIs and registered Pi harnesses; use native Pi subagents for Pi-backed work. Give each child a clear task, absolute paths, and read-only/edit intent; nested agents may start elsewhere. Share parent context explicitly when a child needs it: context: {mode:"recent", turns:N} for the last N user turns (including the current turn), {mode:"full"} for available post-compaction conversation, or omit it for independent tasks. Prefer the smallest sufficient snapshot; snapshots exclude thinking/system instructions and pending calls, fail on images or over 1 MiB, and may contain sensitive data sent to the external harness. Use resume to follow up on an existing child; never combine it with sharing. This is text transfer, not a native session clone or guaranteed cache reuse. Blocking by default; set background:true only when the parent can proceed before completion, then use external_runs on the returned run ID. Parallel same-harness work shares one maxConcurrentSubagents cap: use parallel([() => agent(...), ...]) or separate background Agent calls in one turn; sequential awaits stay serial. External CLIs have host access, and agy always runs unsandboxed (readonly/edit are advisory). Role selection never falls back. Do not retry failed runs: agy alone may make one disclosed infrastructure retry. Use external_help for role descriptions, permission details, workflow syntax, supervision syntax, and saved workflows.`;
+Catalog availability reflects built-in and authored roles, not CLI installation or authentication. External delegation tools use external CLIs and registered Pi harnesses; use native Pi subagents for Pi-backed work. Give each child a clear task, absolute paths, and read-only/edit intent; nested agents may start elsewhere. Share parent context explicitly when a child needs it: context: {mode:"recent", turns:N} for the last N user turns (including the current turn), {mode:"full"} for available post-compaction conversation, or omit it for independent tasks. Prefer the smallest sufficient snapshot; snapshots exclude thinking/system instructions and pending calls, fail on images or over 1 MiB, and may contain sensitive data sent to the external harness. Use resume to follow up on an existing child; never combine it with sharing. This is text transfer, not a native session clone or guaranteed cache reuse. Blocking by default; set background:true only when the parent can proceed before completion, then use external_runs on the returned run ID. Parallel same-harness work shares one maxConcurrentSubagents cap: use parallel([() => agent(...), ...]) or separate background Agent calls in one turn; sequential awaits stay serial. External CLIs have host access, and agy always runs unsandboxed (readonly/edit are advisory). Role selection never falls back. Do not retry failed runs: agy alone may make one disclosed infrastructure retry. Use external_help for role descriptions, permission details, workflow syntax, supervision syntax, and saved workflows.`;
 }

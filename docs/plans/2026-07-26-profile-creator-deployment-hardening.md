@@ -1,5 +1,7 @@
 # Profile Creator Deployment Hardening Implementation Plan
 
+> **Superseded for configuration:** `/external profile create` and per-backend profile files are replaced by `/external role create`, `/external harness create`, and `/external role override`. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Make the approved external-profile creator safe and verifiable enough to merge and publish.

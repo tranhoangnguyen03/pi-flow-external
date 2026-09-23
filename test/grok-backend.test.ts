@@ -781,7 +781,7 @@ console.log(JSON.stringify({
   });
 
   it("runs a grok-backed subagent through the Agent tool with nested activity and a session receipt", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-grok-agent-tool");
     const runInfoPath = join(tempDir, "grok-agent-tool-info.json");
     mkdirSync(subagentsDir, { recursive: true });

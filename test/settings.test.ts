@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { createSubagentExtension } from "../src/pi-subagent.ts";
 import {
   DEFAULT_EXTERNAL_SETTINGS,
   loadExternalSettings,
+  saveExternalSettings,
   projectExternalSettingsPath,
   renderDefaultHarness,
   resolveCtxDefaultHarness,
@@ -18,6 +19,7 @@ const roots: string[] = [];
 function agentDir(): string {
   const path = mkdtempSync(join(tmpdir(), "pi-flow-settings-"));
   roots.push(path);
+  mkdirSync(join(path, "pi-flow-external"));
   return path;
 }
 
@@ -80,17 +82,26 @@ describe("project default-harness override", () => {
 });
 
 describe("external settings", () => {
-  it("creates a private default file once", () => {
+  it("reads built-in defaults without creating configuration files", () => {
     const root = agentDir();
     const first = loadExternalSettings(root);
-    const original = readFileSync(first.path, "utf8");
-
     expect(first.settings).toEqual(DEFAULT_EXTERNAL_SETTINGS);
     expect(first.diagnostics).toEqual([]);
-    expect(statSync(first.path).mode & 0o777).toBe(0o600);
+    expect(existsSync(first.path)).toBe(false);
+  });
 
-    writeFileSync(first.path, original.replace('"agy"', '"claude"').replace("12", "7"));
-    expect(loadExternalSettings(root).settings).toMatchObject({ defaultHarness: "claude", maxConcurrentSubagents: 7 });
+  it("does not confuse a native prefixed role with legacy external configuration and permits explicit malformed-file repair", () => {
+    const root = agentDir();
+    mkdirSync(join(root, "subagents"));
+    writeFileSync(join(root, "subagents", "claude-native.md"), "---\ndescription: Native\n---\nNative instructions");
+    expect(loadExternalSettings(root).blocked).toBe(false);
+    const path = join(root, "pi-flow-external", "settings.json");
+    writeFileSync(path, "broken");
+    expect(() => saveExternalSettings(root, { version: 4 })).toThrow();
+    saveExternalSettings(root, { version: 4 }, { repair: true });
+    expect(loadExternalSettings(root).blocked).toBe(false);
+    writeFileSync(path, '{"version":3}');
+    expect(() => saveExternalSettings(root, { version: 4 }, { repair: true })).toThrow();
   });
 
   it("uses safe defaults and diagnostics for invalid files", () => {
@@ -103,7 +114,7 @@ describe("external settings", () => {
     expect(invalid.diagnostics.join(" ")).toMatch(/defaultHarness|Unknown setting/);
   });
 
-  it("migrates a valid v1 file on read and fills current defaults", () => {
+  it("requires explicit conversion of a v1 file without rewriting it", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
     writeFileSync(loaded.path, `${JSON.stringify({
@@ -114,7 +125,7 @@ describe("external settings", () => {
 
     const migrated = loadExternalSettings(root);
     expect(migrated.settings).toEqual({
-      version: 3,
+      version: 4,
       defaultHarness: "agy",
       maxConcurrentSubagents: 7,
       subagentTimeoutMs: 600_000,
@@ -122,8 +133,9 @@ describe("external settings", () => {
       defaultMaxBudgetUsd: null,
       maxRunRecords: 200,
     });
-    // A v1 file is valid input, not a warning.
-    expect(migrated.diagnostics).toEqual([]);
+    expect(migrated.blocked).toBe(true);
+    expect(migrated.upgradeRequired).toBe(true);
+    expect(JSON.parse(readFileSync(loaded.path, "utf8")).version).toBe(1);
   });
 
   it("accepts a pi-* harness name at the global settings parse-shape level", () => {
@@ -162,7 +174,8 @@ describe("external settings", () => {
 
     const malformed = loadExternalSettings(root);
     expect(malformed.settings).toEqual(DEFAULT_EXTERNAL_SETTINGS);
-    expect(malformed.diagnostics[0]).toMatch(/valid JSON/);
+    expect(malformed.blocked).toBe(true);
+    expect(malformed.diagnostics[0]).toMatch(/Could not read settings/);
   });
 
   it("applies file, factory, then CLI precedence through the extension", async () => {
@@ -170,7 +183,7 @@ describe("external settings", () => {
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = root;
     const loaded = loadExternalSettings(root);
-    writeFileSync(loaded.path, JSON.stringify({ version: 1, maxConcurrentSubagents: 3, subagentTimeoutMs: 4_000 }));
+    writeFileSync(loaded.path, JSON.stringify({ version: 4, maxConcurrentSubagents: 3, subagentTimeoutMs: 4_000 }));
 
     const load = (factoryValue?: number) => {
       const flags = new Map<string, { default: string }>();
@@ -193,9 +206,9 @@ describe("external settings", () => {
     };
 
     try {
-      expect(load().flags.get("max-concurrent-subagents")?.default).toBe("3");
+      expect(load().flags.get("max-concurrent-subagents")?.default).toBe("");
       const configured = load(5);
-      expect(configured.flags.get("max-concurrent-subagents")?.default).toBe("5");
+      expect(configured.flags.get("max-concurrent-subagents")?.default).toBe("");
       configured.values.set("max-concurrent-subagents", "7");
       const notices: string[] = [];
       await configured.settingsCommand?.("settings", { cwd: root, isProjectTrusted: () => false, ui: { notify: (text: string) => notices.push(text) } });

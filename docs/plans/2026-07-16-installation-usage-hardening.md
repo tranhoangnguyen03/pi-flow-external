@@ -1,5 +1,7 @@
 # Installation and External Profile Hardening Implementation Plan
 
+> **Superseded for configuration:** user-defined `subagents/` profiles as the install model are replaced by settings v4, in-memory built-in roles, and `/external settings convert`. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Make a fresh pi-flow-external installation understandable and fail safely unless every direct or workflow delegation selects a configured external profile.

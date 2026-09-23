@@ -802,7 +802,7 @@ console.log(JSON.stringify({
   });
 
   it("runs a muse-backed subagent through the Agent tool with a session receipt and reconstructable output", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-muse-agent-tool");
     const runInfoPath = join(tempDir, "muse-agent-tool-info.json");
     mkdirSync(subagentsDir, { recursive: true });

@@ -19,6 +19,7 @@ import { createExternalRunsTool } from "./external-runs.ts";
 import {
   filterExternalAgentProfiles,
   getSubagentProfiles,
+  loadExternalCatalog,
   mergeSynthesizedPiProfiles,
   resolveExternalProfile,
   selectorHarness,
@@ -37,8 +38,7 @@ import { RunRegistry } from "./core/run-registry.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
-import { registerProfileCreator, startProfileInterview } from "./profile-creator.ts";
-import { seedDefaultProfiles } from "./defaults.ts";
+import { registerProfileCreator, startRoleInterview, startHarnessInterview } from "./profile-creator.ts";
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveCtxDefaultHarness, resolveExternalSettings, renderDefaultHarness } from "./settings.ts";
 import { EXTERNAL_HARNESSES } from "./types.ts";
@@ -367,8 +367,10 @@ function createAgentTool(
         ...state,
         progressEnabled: state.progressEnabled || shouldEnableProgress(ctx),
       };
-      const allProfiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const catalog = loadExternalCatalog(getAgentDir());
+      if (catalog.blocked) return textResult(catalog.diagnostics.join(" "), { description: params.description, subagentType: "unknown", status: "error", error: catalog.diagnostics.join(" ") });
+      const allProfiles = catalog.profiles;
+      const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
       // Merge synthesized pi role profiles in, not just filter to on-disk
       // ones: a legacy exact subagent_type selector only ever looks up the
@@ -378,14 +380,11 @@ function createAgentTool(
       // "pi-deepseek-reviewer" could be reached via role+harness but not via
       // subagent_type="pi-deepseek-reviewer", which is confusing and
       // inconsistent for the parent agent driving delegation.
-      const profiles = mergeSynthesizedPiProfiles(
-        filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys())),
-        harnessConfigs,
-      );
+      const profiles = allProfiles;
       const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
       const defaultHarness = requestedDefault.harness;
-      if (!params.harness && !configuredHarnessNames.has(defaultHarness)) {
-        const error = `Default harness "${defaultHarness}" is not registered (deleted from harnesses.json?); pass harness explicitly or recreate it via /external profile create.`;
+      if (params.role && !params.harness && !configuredHarnessNames.has(defaultHarness)) {
+        const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external harness create.`;
         return textResult(error, {
           description: params.description,
           subagentType: "unknown",
@@ -594,13 +593,12 @@ function createAgentTool(
       if (state.selectionKey !== selectionKey) {
         let profile: SubagentProfile | undefined;
         try {
-          const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+          const catalog = loadExternalCatalog(getAgentDir());
+          if (catalog.blocked) throw new Error(catalog.diagnostics.join(" "));
+          const harnessConfigs = catalog.harnessConfigs;
           const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
           profile = resolveExternalProfile(
-            mergeSynthesizedPiProfiles(
-              filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys())),
-              harnessConfigs,
-            ),
+            catalog.profiles,
             {
               role: typeof args.role === "string" ? args.role : undefined,
               harness: typeof args.harness === "string" ? args.harness : undefined,
@@ -673,12 +671,12 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.registerFlag(MAX_CONCURRENT_SUBAGENTS_FLAG, {
       description: `Maximum number of pi-flow subagents that may run concurrently (default: ${defaultMaxConcurrentSubagents})`,
       type: "string",
-      default: String(defaultMaxConcurrentSubagents),
+      default: "",
     });
     pi.registerFlag(SUBAGENT_TIMEOUT_MS_FLAG, {
       description: `Maximum wall-clock runtime for each pi-flow subagent in milliseconds; set 0 to disable (default: ${defaultSubagentTimeoutMs})`,
       type: "string",
-      default: String(defaultSubagentTimeoutMs),
+      default: "",
     });
 
     const rootState: DelegationState = {
@@ -695,17 +693,27 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       frame: 0,
     };
     const syncMaxConcurrentSubagents = () => {
+      const latest = loadExternalSettings(getAgentDir());
+      Object.assign(loadedSettings, latest);
+      rootState.defaultPermission = latest.settings.defaultPermission;
+      rootState.defaultHarness = latest.settings.defaultHarness;
+      rootState.defaultMaxBudgetUsd = latest.settings.defaultMaxBudgetUsd ?? undefined;
+      rootState.maxRunRecords = latest.settings.maxRunRecords;
       const current = normalizeMaxConcurrentSubagents(
-        pi.getFlag(MAX_CONCURRENT_SUBAGENTS_FLAG),
+        !pi.getFlag(MAX_CONCURRENT_SUBAGENTS_FLAG)
+          ? options.maxConcurrentSubagents ?? latest.settings.maxConcurrentSubagents
+          : pi.getFlag(MAX_CONCURRENT_SUBAGENTS_FLAG),
         defaultMaxConcurrentSubagents,
         `--${MAX_CONCURRENT_SUBAGENTS_FLAG}`,
       );
-      if (current !== rootState.maxConcurrentSubagents) {
+      if (current !== rootState.maxConcurrentSubagents && rootState.limiter.activeCount === 0 && rootState.limiter.pendingCount === 0) {
         rootState.limiter = new ConcurrencyLimiter(current);
         rootState.maxConcurrentSubagents = current;
       }
       rootState.subagentTimeoutMs = normalizeSubagentTimeoutMs(
-        pi.getFlag(SUBAGENT_TIMEOUT_MS_FLAG),
+        !pi.getFlag(SUBAGENT_TIMEOUT_MS_FLAG)
+          ? options.subagentTimeoutMs ?? latest.settings.subagentTimeoutMs
+          : pi.getFlag(SUBAGENT_TIMEOUT_MS_FLAG),
         defaultSubagentTimeoutMs,
         `--${SUBAGENT_TIMEOUT_MS_FLAG}`,
       );
@@ -747,7 +755,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         };
       },
       getMaxRunRecords: () => rootState.maxRunRecords,
-      startProfileInterview,
+      startRoleInterview,
+      startHarnessInterview,
       externalRuns,
     });
     if (workflowEnabled) {
@@ -775,14 +784,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       syncMaxConcurrentSubagents();
       usageStatusState.calls.clear();
       usageStatusState.latestCacheHitRate = undefined;
-      // Best-effort retention sweep and one-time default-profile seeding;
-      // never blocks or fails the session.
+      // Retention never blocks startup. Built-in roles do not write files.
       void pruneRunRecords(runRecordsDirectory(), rootState.maxRunRecords).catch(() => undefined);
-      try {
-        seedDefaultProfiles(getAgentDir());
-      } catch {
-        // Seeding is opportunistic; a read-only agent dir must not break startup.
-      }
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }
@@ -805,14 +808,12 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       // synchronously in execute() before the first await and releases it in the
       // finally. Acquisition is synchronous and release always runs, so the
       // in-flight count stays accurate across turns without a reset.
-      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
-      const profiles = mergeSynthesizedPiProfiles(
-        filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry), new Set(harnessConfigs.keys())),
-        harnessConfigs,
-      );
+      const catalog = loadExternalCatalog(getAgentDir());
+      const profiles = catalog.profiles;
+      const harnessConfigs = catalog.harnessConfigs;
       const defaultHarness = resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness;
       const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()];
-      return { systemPrompt: `${event.systemPrompt}\n\n${buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}` };
+      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && catalog.diagnostics.length ? `\nConfiguration diagnostics: ${catalog.diagnostics.join(" ")}` : ""}` };
     });
   };
 }

@@ -16,6 +16,9 @@ export type ThinkingLevel = string;
 export type PermissionTier = "readonly" | "edit" | "danger";
 
 export interface SubagentProfile {
+  /** Invalid/disabled catalog entries block selection instead of exposing a fallback. */
+  configurationError?: string;
+  source?: string;
   name: string;
   description: string;
   backend: SubagentBackend;

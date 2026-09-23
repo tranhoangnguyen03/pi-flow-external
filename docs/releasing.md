@@ -84,10 +84,27 @@ Inspect the dry-run manifest: expected version and files, including
 operational docs. Development E2E scripts and tests must not be shipped.
 
 Run the essential real-provider gate from [`field-testing.md`](field-testing.md)
-before merging: all three direct backends and one workflow, plus its
-natural-language routing smoke when discovery or coordinator guidance changed,
-and its nested timeout scenario when nested detection or timeout behavior
-changed.
+before merging: all five direct backends are mandatory (`agy`, `claude`,
+`codex`, `grok`, `muse`), plus their workflow receipts, and one named Pi
+harness direct plus workflow receipt when a real harness is registered. Add the routing smoke when
+discovery, coordinator guidance, or slash commands changed, the configuration
+surface check when settings, roles, upgrade, or purge changed, and the nested
+timeout scenario when nested detection or timeout behavior changed. An
+auth-blocked lane is not a pass.
+
+A release that removes `/external profiles`, `/external profile create`, and
+`/pi-flow-profile create`, or that moves execution settings to version 4, is
+breaking. Label it `release:major` (core major, `external.0`). The CHANGELOG
+section, which becomes the GitHub release notes, must include the README
+upgrade notice: the old-to-new command mapping, one-time conversion through
+`/external settings convert` (`/external settings` points there), originals
+kept until an explicit purge, version 4 ignores old paths,
+`/external [danger]purge-old-files` deletes only the legacy paths you select
+(customized copies included), and downgrade after purge needs the user's own
+backup. Do not
+hide that break in a patch or minor note. Do not claim side-by-side old and
+new layouts. The version bump and CHANGELOG text are owned by the release PR;
+this file only states the contract.
 
 ## After the release
 
@@ -110,14 +127,18 @@ export VERIFY_AGENT_DIR="$(mktemp -d /tmp/pi-flow-release-check.XXXXXX)"
 PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi install "npm:@tranhoangnguyen0310/pi-flow-external@<new-version>"
 PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi list
 PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi
-# In Pi: /external doctor, then /external settings
+# In Pi: /external doctor, /external settings, /external roles
+# Confirm /external profile create does not start an interview.
+# Usage includes settings convert, role create, and harness create.
+# Confirm the fresh directory has no seeded subagents/*.md files.
 rm -rf "$VERIFY_AGENT_DIR"
 unset VERIFY_AGENT_DIR
 ```
 
-Confirm `pi list` shows the exact version and both commands are available.
-Keep resulting evidence private and remove the temporary agent directory
-afterward.
+Confirm `pi list` shows the exact version and `/external doctor`,
+`/external settings`, and `/external roles` respond. A fresh directory must
+not gain the old 30 seeded profile files or seed markers. Keep resulting
+evidence private and remove the temporary agent directory afterward.
 
 ## Drift watchdog
 

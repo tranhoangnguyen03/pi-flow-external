@@ -125,7 +125,7 @@ describe("pi-subagent agy backend", () => {
   });
 
   it("runs an agy-backed subagent through the Agent tool", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy");
     const argsPath = join(tempDir, "agy-args.json");
     mkdirSync(subagentsDir, { recursive: true });
@@ -336,7 +336,7 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
   });
 
   it("retries an agy infrastructure failure once and reports the retry", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-retry");
     const counterPath = join(tempDir, "agy-retry-count.txt");
     const argsPath = join(tempDir, "agy-retry-args");
@@ -387,7 +387,7 @@ if (count === 1) {
   });
 
   it("does not retry a non-transient agy failure", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-no-retry");
     const counterPath = join(tempDir, "agy-no-retry-count.txt");
     mkdirSync(subagentsDir, { recursive: true });
@@ -427,7 +427,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-no
   });
 
   it("retries a transient agy failure only once", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-retry-bounded");
     const counterPath = join(tempDir, "agy-retry-bounded-count.txt");
     mkdirSync(subagentsDir, { recursive: true });

@@ -1,5 +1,7 @@
 # External Command, Settings, and Essential Tests Implementation Plan
 
+> **Superseded for configuration:** the `/external profiles` command set, the `/pi-flow-profile create` alias, and profile Markdown as the harness store are replaced by settings v4 and `/external settings convert`. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Replace the fragmented profile command with one `/external` namespace, add a minimal extension-owned settings file, expose only execution tools to the ordinary driver, and cut duplicate/non-product tests.

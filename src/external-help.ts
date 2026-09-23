@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
+import { loadExternalCatalog } from "./profiles.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
 import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
@@ -65,7 +65,7 @@ function permissionHelp(harness: string | undefined, configuredPiHarnesses: Read
     ? [permissionHelpBackend(harness, configuredPiHarnesses)]
     : [...EXTERNAL_HARNESSES, ...(configuredPiHarnesses.size ? (["pi"] as const) : [])];
   return [
-    "External CLIs and pi-* harnesses run with host access; use them only in trusted repositories. Permission precedence is call override, then profile, then the global default; omit the override when unsure.",
+    "External CLIs and pi-* harnesses run with host access; use them only in trusted repositories. A role's permission is a floor (or the global default when absent); a call can raise it, never lower it. Backend execution-lane floors also apply.",
     ...backends.map((name) => PERMISSION_HELP_BY_BACKEND[name]),
     "Failed or aborted runs are not silently retried. Only agy may retry once for an infrastructure-classified auth, eligibility, or network failure, and the receipt discloses it.",
   ].join("\n\n");
@@ -138,20 +138,14 @@ export function createExternalHelpTool(
       // guidance without error.
       const harness = params.harness?.trim() ? params.harness.trim() : undefined;
       let text: string;
-      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const catalog = loadExternalCatalog(getAgentDir());
+      const harnessConfigs = catalog.harnessConfigs;
       const configuredPiHarnesses = new Set(harnessConfigs.keys());
       if (params.topic !== "workflow") {
         validateHarnessFilter(harness, configuredPiHarnesses);
       }
       if (params.topic === "roles") {
-        const profiles = mergeSynthesizedPiProfiles(
-          filterExternalAgentProfiles(
-            filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry),
-            configuredPiHarnesses,
-          ),
-          harnessConfigs,
-        );
-        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), harness);
+        text = catalog.blocked ? catalog.diagnostics.join(" ") : formatExternalRoleHelp(catalog.profiles, options.getDefaultHarness(ctx), harness);
       } else if (params.topic === "permissions") {
         text = permissionHelp(harness, configuredPiHarnesses);
       } else {

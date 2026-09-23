@@ -20,7 +20,7 @@ import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile, selectorHarness } from "../profiles.ts";
+import { loadExternalCatalog, resolveExternalProfile, selectorHarness } from "../profiles.ts";
 import { loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
@@ -132,7 +132,9 @@ export function createWorkflowTool(
       // resolves its child model/auth through it (spawn.ts's pi branch), the
       // same already-populated instance used to resolve models below.
       const executionContext = { cwd: project, modelRegistry: ctx.modelRegistry } as ExtensionContext;
-      const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
+      const catalog = loadExternalCatalog(getAgentDir());
+      if (catalog.blocked) return workflowError(catalog.diagnostics.join(" "), { name: "workflow", error: catalog.diagnostics.join(" "), status: "error" });
+      const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
       // Freeze one resolved roster snapshot for the whole run: real on-disk
       // external profiles plus synthesized pi-* role profiles, merged once,
@@ -140,10 +142,7 @@ export function createWorkflowTool(
       // `profiles` map would leave every synthesized pi role without a model
       // entry, and runAgent's `usesPiBackend(profile) && !model` check would
       // then reject a call that resolveSubagentType already accepted.
-      const profiles = mergeSynthesizedPiProfiles(
-        filterExternalAgentProfiles(filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry), new Set(harnessConfigs.keys())),
-        harnessConfigs,
-      );
+      const profiles = catalog.profiles;
       const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
       const limiter = options.getLimiter();
       const thinkingLevel = options.getThinkingLevel();
@@ -196,6 +195,7 @@ export function createWorkflowTool(
         let agentSeq = 0;
         const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
         const profile = profiles.get(call.subagentType);
+        if (profile?.configurationError) throw new Error(profile.configurationError);
         if (!profile) {
           throw new Error(
             `Unknown external subagent_type "${call.subagentType}". Available external agents: ${[...profiles.keys()].join(", ")}. Use the native subagent system for Pi-backed agents.`,
@@ -364,9 +364,9 @@ export function createWorkflowTool(
           },
           defaultSubagentType: null,
           resolveSubagentType: (selection) => {
-            if (!selection.harness && !configuredHarnessNames.has(defaultHarness)) {
+            if (selection.role && !selection.harness && !configuredHarnessNames.has(defaultHarness)) {
               throw new Error(
-                `Default harness "${defaultHarness}" is not registered (deleted from harnesses.json?); pass harness explicitly or recreate it via /external profile create.`,
+                `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external harness create.`,
               );
             }
             return resolveExternalProfile(

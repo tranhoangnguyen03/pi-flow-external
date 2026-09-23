@@ -63,8 +63,8 @@ describe("external_help unknown harness filter", () => {
     const agentDir = tempAgentDir();
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(
-      join(agentDir, "pi-flow-external", "harnesses.json"),
-      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+      join(agentDir, "pi-flow-external", "settings.json"),
+      JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
     );
     await withAgentDir(agentDir, async () => {
       const tool = makeTool();
@@ -77,8 +77,8 @@ describe("external_help unknown harness filter", () => {
     const agentDir = tempAgentDir();
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(
-      join(agentDir, "pi-flow-external", "harnesses.json"),
-      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+      join(agentDir, "pi-flow-external", "settings.json"),
+      JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
     );
     await withAgentDir(agentDir, async () => {
       const tool = makeTool();

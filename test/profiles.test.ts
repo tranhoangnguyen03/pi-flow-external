@@ -19,7 +19,7 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { externalRoleAvailability, filterExternalAgentProfiles, getSubagentProfiles, isExternalAgentProfile, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../src/profiles.ts";
+import { externalRoleAvailability, filterExternalAgentProfiles, getSubagentProfiles, isExternalAgentProfile, loadCustomSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../src/profiles.ts";
 import type { HarnessConfig } from "../src/harnesses.ts";
 import type { SubagentProfile } from "../src/types.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
@@ -51,7 +51,7 @@ describe("pi-subagent profiles", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("loads custom subagent profiles from filename-derived names", () => {
+  it("loads custom subagent profiles from filename-derived names through the legacy subagents parser", () => {
     const subagentsDir = join(agentDir, "subagents");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "code-reviewer.md"), `---
@@ -129,7 +129,7 @@ description: Valid frontmatter but empty body.
 ---
 `);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = loadCustomSubagentProfiles(agentDir);
 
     expect(profiles.get("code-reviewer")).toMatchObject({
       name: "code-reviewer",
@@ -169,7 +169,7 @@ description: Valid frontmatter but empty body.
   });
 
   it("loads codex-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-reviewer.md"), `---
 description: Reviews through Codex CLI.
@@ -210,12 +210,14 @@ Arbitrary Codex model prompt.`);
       model: "gpt 5.4",
       systemPrompt: "Arbitrary Codex model prompt.",
     });
-    expect(profiles.has("bad-backend")).toBe(false);
+    expect(profiles.get("bad-backend")?.configurationError).toMatch(/invalid/i);
+    expect(() => resolveExternalProfile(profiles, { subagentType: "bad-backend" }, "agy")).toThrow(/invalid/i);
+    expect(profiles.get("custom-codex-model")?.configurationError).toBeUndefined();
   });
 
 
   it("loads claude-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-reviewer.md"), `---
 description: Reviews through Claude Code.
@@ -255,7 +257,7 @@ Arbitrary Claude model prompt.`);
   });
 
   it("loads grok-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "grok-reviewer.md"), `---
 description: Reviews through Grok CLI.
@@ -279,7 +281,7 @@ Grok reviewer prompt.`);
   });
 
   it("loads muse-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "muse-reviewer.md"), `---
 description: Reviews through Muse Code.

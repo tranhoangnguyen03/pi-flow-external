@@ -190,7 +190,7 @@ describe("pi-subagent claude backend", () => {
   });
 
   it.each(["Agent", "workflow"])("transfers parent context through %s to Claude stdin and receipts", async (toolName) => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude");
     const argsPath = join(tempDir, "claude-args.json");
     mkdirSync(subagentsDir, { recursive: true });
@@ -273,7 +273,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
   });
 
   it("surfaces permission denials and the run id in the Agent tool text", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude-denials");
     mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
@@ -316,7 +316,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
   });
 
   it("elevates claude execution profiles to danger floor when called with permission: edit", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude-elevate");
     const argsPath = join(tempDir, "claude-elevate-args.json");
     mkdirSync(subagentsDir, { recursive: true });
