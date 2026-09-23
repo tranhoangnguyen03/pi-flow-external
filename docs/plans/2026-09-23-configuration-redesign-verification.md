@@ -1,13 +1,15 @@
 # Configuration redesign verification
 
-Implementation branch: `feat/configuration-redesign`; proposed release: `3.0.0-external.0` (breaking command/configuration surface).
+Implementation branch: `feat/configuration-redesign`; proposed release: `2.6.0-external.0` (product-owner decision to stay on v2; breaking command/configuration changes remain disclosed).
+
+PR #59 subsequently merged into main at `19d3d2d`. The checks below predate that merge and do not establish compatibility with its shared Pi roles/capability sets. Integration and fresh verification are required before this PR is merge-ready.
 
 ## Automated verification
 
 - Baseline before implementation: 40 test files, 442 tests passing.
 - Final `npm run check`: TypeScript passes; 42 files, 459 tests passing.
 - `git diff --check`: passes.
-- `npm pack --dry-run --json`: 3.0.0-external.0; runtime sources included, tests excluded.
+- Original `npm pack --dry-run --json` before the version revision: 3.0.0-external.0; runtime sources included, tests excluded.
 - `npm audit --omit=dev --audit-level=high`: zero vulnerabilities.
 - One full-suite attempt hit the existing workflow fatal-cleanup test's 200ms wall-clock assertion under load. Its targeted rerun and the subsequent full check passed. Do not interpret this as a backend failure or silently relax the assertion.
 

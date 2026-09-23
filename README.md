@@ -73,7 +73,7 @@ The TUI labels a direct run with its effective access, including `unsandboxed ex
 
 ## Breaking upgrade
 
-Settings are version 4. This is a breaking configuration release (`release:major` in [`docs/releasing.md`](docs/releasing.md)). The changelog and GitHub release notes carry this notice. Earlier notes under `docs/plans/` stay historical; this section is the current contract.
+Settings are version 4. This v2 minor release includes breaking configuration and command changes; the product owner chose `2.6.0-external.0` (`release:minor`) rather than a v3 bump. The changelog and GitHub release notes carry this notice. Earlier notes under `docs/plans/` stay historical; this section is the current contract.
 
 `/external profiles`, `/external profile create`, and `/pi-flow-profile create` are removed. They are not aliases, redirects, or hidden handlers. An unknown `/external` command lists the commands below. `Agent` and `workflow` still accept exact `subagent_type`. That API is unchanged.
 
