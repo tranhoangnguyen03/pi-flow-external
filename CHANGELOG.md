@@ -15,6 +15,23 @@ Partially addresses issue #43 (named Pi harness follow-up capability expansion):
 - A workflow child that fails before `spawnSubagent` ever runs (unknown `capabilitySet`, or any other pre-spawn resolution error) now still finishes its already-queued durable run record as a recognizable failure, instead of leaving it stuck "incomplete" forever.
 - Offline coverage in `test/capabilities.test.ts`, extended `test/pi-runtime.test.ts` (including real-SDK tests of the installed SDK's own explicit `/name args` prompt-template expansion and `/skill:name` skill invocation semantics, unaffected by `capabilitySet` filtering), `test/profiles.test.ts`, `test/settings.test.ts`, `test/workflow.test.ts`, `test/replay-cache.test.ts`, and `test/external-command.test.ts`. Verified against a real registered `pi-*` harness with real credentials: a real child resolved a project-scope `capabilitySet`, read and followed the selected skill's content (not guessable — an unpredictable nonce), and both the returned result and the persisted receipt disclosed matching `capabilities` (set, skills, content hash).
 
+## [2.4.2-external.0] - 2026-09-23
+
+### Fixed
+
+- Simplified model-facing run supervision to one `runIds` selector, including singleton output/final inspection and cancellation. Legacy `runId` callers remain supported; conflicting cancellation selectors fail explicitly.
+- Workflow help accepts a supplied harness without blocking, explains its cross-harness scope, and accepts blank filters at the SDK schema boundary.
+- Blank Agent resume arguments no longer conflict with context sharing or trigger resume lookup. Real resume/context conflicts remain errors.
+- Added SDK argument-validation coverage alongside provider-payload tests. Audited workflow source selection: blank sources already normalize away; multiple real sources still fail. Downstream required-field promotion remains unverified, so #62 stays open.
+
+## [2.4.1-external.0] - 2026-09-23
+
+### Fixed
+
+- Muse rejects effective `thinking: off` before process launch because its `meta` provider does not support `--reasoning-effort none`. The error explains supported profile/parent levels without silently changing reasoning (#60).
+- Grok runtime-socket symlink sandbox failures include actionable guidance while retaining the original error, requested permissions, and fail-closed behavior. No socket changes, retries, or sandbox downgrade (#61).
+- Added an offline test of the actual Pi `openai-completions` provider payload for optional tool selectors. Client optionality is preserved; the downstream model-facing conversion remains unresolved and tracked in #62. See `docs/tool-schema-compatibility.md`.
+
 ## [2.4.0-external.0] - 2026-09-21
 
 Adds `muse` as a fifth external CLI backend, delegating to Muse Code alongside Claude Code, Codex CLI, Antigravity, and Grok Build CLI. Investigation notes: `docs/plans/muse-backend-prep.md`; ex-ante design issue: none filed — additive backend addition following the same shape as the Grok backend.

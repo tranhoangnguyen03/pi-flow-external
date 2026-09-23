@@ -407,9 +407,10 @@ function createAgentTool(
     parameters: agentToolParameters,
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const resume = typeof params.resume === "string" && params.resume.trim() !== "" ? params.resume.trim() : undefined;
       const briefing = prepareParentContext(params.prompt, params.context,
         params.context && params.context.mode !== "none" ? captureParentContext(ctx.sessionManager) : undefined,
-        toolCallId, params.resume);
+        toolCallId, resume);
       const state = getState();
       const effectiveState: DelegationState = {
         ...state,
@@ -610,7 +611,7 @@ function createAgentTool(
           permission: params.permission,
           defaultPermission,
           maxBudgetUsd,
-          resumeRunId: params.resume,
+          resumeRunId: resume,
           executionStartedAt: run.progress.executionStartedAt,
           projectTrusted,
           capabilities,

@@ -45,7 +45,8 @@ export function prepareParentContext(
 ): { prompt: string; context?: ParentContextReceipt } {
   const context = parseParentContext(selection);
   if (!context || context.mode === "none") return { prompt };
-  if (resume !== undefined) throw new Error("context sharing cannot be combined with resume; continue the child or start a new one");
+  const resumeId = typeof resume === "string" && resume.trim() !== "" ? resume.trim() : undefined;
+  if (resumeId !== undefined) throw new Error("context sharing cannot be combined with resume; continue the child or start a new one");
   if (!messages) throw new Error("Parent context is unavailable; use context:none and a self-contained prompt");
   const compacted = messages.some((message) => message.role === "compactionSummary");
   let start = 0;
