@@ -409,6 +409,36 @@ const cases: Array<{ name: string; run: (agentDir: string) => void }> = [
     },
   },
   {
+    name: "reports a malformed short pi-* template and still excludes unrelated native profiles",
+    run(agentDir) {
+      write(agentDir, "pi-flow-external/settings.json", `${JSON.stringify({ version: 3, defaultHarness: "agy" })}\n`);
+      write(agentDir, "subagents/scout.md", "---\ndescription: Native scout.\n---\n\nLook around.\n");
+      write(agentDir, "subagents/pi-scout.md", "---\ndescription: Native short scout.\nbackend: pi\n---\n\nStay native.\n");
+      const malformed = "---\nbackend: pi\nharness: \"pi-*\"\n---\n\nDo the work.\n";
+      write(agentDir, "subagents/pi-worker.md", malformed);
+      write(agentDir, "subagents/pi-oracle.md", "this is not a profile\n");
+      write(agentDir, "subagents/random-notes.md", "unrelated\n");
+      const plan = planConfigUpgrade(agentDir);
+      expect(plan.status, plan.diagnostics.join("\n")).toBe("ready");
+      expect(plan.excludedProfiles).toEqual(["pi-scout", "scout"]);
+      expect(plan.roles).toEqual([]);
+      expect(plan.overrides.map((override) => override.name)).not.toContain("pi-worker");
+      expect(plan.notes.join("\n")).toMatch(/Skipped .*pi-worker\.md/);
+      expect(plan.notes.join("\n")).toMatch(/malformed pi-\* role template/);
+      expect(plan.notes.join("\n")).not.toMatch(/pi-oracle|pi-scout|random-notes|scout\.md/);
+      expect(plan.diagnostics.join("\n")).not.toMatch(/pi-oracle|random-notes/);
+      const applied = applyConfigUpgrade(agentDir);
+      expect(applied.status, applied.diagnostics.join("\n")).toBe("applied");
+      expect(applied.notes.join("\n")).toMatch(/pi-worker\.md/);
+      expect(existsSync(join(agentDir, "pi-flow-external/roles/worker.md"))).toBe(false);
+      expect(readFileSync(join(agentDir, "subagents/pi-worker.md"), "utf8")).toBe(malformed);
+      expect(readFileSync(join(agentDir, "subagents/pi-oracle.md"), "utf8")).toBe("this is not a profile\n");
+      expect(readFileSync(join(agentDir, "subagents/scout.md"), "utf8")).toContain("Native scout.");
+      expect(existsSync(join(agentDir, "pi-flow-external/overrides/scout.md"))).toBe(false);
+      expect(existsSync(join(agentDir, "pi-flow-external/overrides/pi-scout.md"))).toBe(false);
+    },
+  },
+  {
     name: "converts a pi-* template into a cross-harness role and drops obsolete settings",
     run(agentDir) {
       write(agentDir, "pi-flow-external/settings.json", `${JSON.stringify({

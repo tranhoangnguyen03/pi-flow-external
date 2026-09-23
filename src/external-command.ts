@@ -397,6 +397,7 @@ function formatUpgradePreview(plan: ReturnType<typeof planConfigUpgrade>): strin
   list("Disabled seeded identities", plan.disabledProfiles);
   list("Unchanged defaults (no copy needed)", plan.unchangedDefaults);
   list("Excluded native/contradictory profiles", plan.excludedProfiles);
+  list("Notes", plan.notes);
   const preserved = Object.keys(plan.preservedFields);
   if (preserved.length) lines.push(`Preserved unknown fields: ${preserved.join(", ")}`);
   return lines.join("\n");

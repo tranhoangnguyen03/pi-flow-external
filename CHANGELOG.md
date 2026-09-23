@@ -4,6 +4,13 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Antigravity's unsupported-tier error tells the caller to pass `permission: "danger"` or change `defaultPermission`. Omitting the call tier keeps the global default.
+- Unsupported-permission and resume failures keep resolved permission, parent context, and budget on the run receipt. The same fields are written on a launched finish.
+- Conversion reports a malformed short `pi-<role>.md` wildcard template and leaves it in place. Parsed native profiles stay excluded.
+- An unresolved delegation intent shows the tier as unresolved instead of borrowing another harness's enforcement label.
+
 ## [2.6.0-external.0] - 2026-09-23
 
 ### Breaking upgrade

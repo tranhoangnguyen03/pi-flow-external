@@ -133,6 +133,26 @@ describe("delegation transparency rendering", () => {
     expect(receiptText).toContain("claude_12345678");
   });
 
+  it("leaves an unresolved delegation unlabeled by another harness's enforcement", () => {
+    const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
+    const call = tool.renderCall?.(
+      {
+        description: "Unknown delegation",
+        prompt: "Do something.",
+        role: "not-a-role",
+        harness: "claude",
+        permission: "readonly",
+      },
+      makeMockTheme() as never,
+      { cwd, executionStarted: true, state: {} },
+    );
+    const text = renderToText(call!);
+    expect(text).toContain("readonly · unresolved");
+    expect(text).not.toContain("Bash auto-denied");
+    expect(text).not.toContain("unsandboxed external CLI");
+    expect(text).not.toContain("external CLI");
+  });
+
   it("discloses a pi-harness delegation as an in-process child, never as an external CLI", () => {
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(

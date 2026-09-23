@@ -630,7 +630,11 @@ function createAgentTool(
         profile,
         options.getDefaultPermission(),
       );
-      const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
+      // An unresolved profile has no backend. Do not borrow Claude's label:
+      // that would claim a permission boundary this call has not resolved.
+      const tierLabel = backend
+        ? permissionLabel(resolvePermission(tier, backend))
+        : `${tier} · unresolved`;
       const lines = [
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`,
         description ? `${theme.fg("muted", "Task")} ${description}` : "",

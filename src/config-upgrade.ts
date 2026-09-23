@@ -347,6 +347,19 @@ function looksLikeLegacyProfileName(name: string): boolean {
   return name.startsWith("pi-") && name.split("-").length >= 3;
 }
 
+/**
+ * `pi-<role>.md` wildcard templates use one segment after `pi-`.
+ * A named harness file is `pi-<label>-<role>.md` (three or more segments)
+ * and is classified separately. A short file that also carries `harness: pi-*`
+ * but cannot be parsed is a skipped template, not a native profile.
+ */
+function isShortWildcardCandidate(name: string, bytes: Buffer): boolean {
+  if (!name.startsWith("pi-")) return false;
+  const role = name.slice(3);
+  if (!isValidSubagentName(role) || role.includes("-")) return false;
+  return /(?:^|\r?\n)[ \t]*harness:[ \t]*["']?pi-\*["']?[ \t]*(?:\r?\n|$)/.test(bytes.toString("utf8"));
+}
+
 function namedPiHarness(backend: string, harness: string | undefined, name: string): string | undefined {
   if (backend !== "pi" || !harness || !HARNESS_NAME_PATTERN.test(harness)) return undefined;
   const prefix = `${harness}-`;
@@ -356,6 +369,15 @@ function namedPiHarness(backend: string, harness: string | undefined, name: stri
 function classifyRegular(name: string, path: string, bytes: Buffer): ClassifiedProfile {
   const parsed = parseSubagentProfileContent(bytes.toString("utf8"), name, { requireBody: false });
   if (!parsed) {
+    if (isShortWildcardCandidate(name, bytes)) {
+      return {
+        name,
+        path,
+        bytes,
+        upgrade: "ignore",
+        notes: [`Skipped ${path}: malformed pi-* role template could not be parsed, so conversion left the file in place.`],
+      };
+    }
     if (!looksLikeLegacyProfileName(name)) return { name, path, upgrade: "ignore" };
     const purge = DEFAULT_NAMES.has(name)
       ? { kind: "seeded-profile" as const, inventory: true }
@@ -671,6 +693,9 @@ function snapshotLegacy(root: string, settingsRecord: Record<string, unknown> | 
     if (classified.upgrade !== "ignore") profiles.push(classified);
     if (classified.upgrade === "copy" || classified.upgrade === "role" || classified.upgrade === "unchanged" || classified.upgrade === "block") evidence = true;
     if (classified.upgrade === "exclude" && DEFAULT_NAMES.has(name)) evidence = true;
+    // A skipped wildcard template is legacy configuration. Report it instead of
+    // treating the installation as empty when it is the only legacy file.
+    if (classified.upgrade === "ignore" && classified.notes?.length) evidence = true;
   }
 
   return { diagnostics, evidence, settingsRecord, preserved, harnesses, profiles, markers, digestLines, notes };

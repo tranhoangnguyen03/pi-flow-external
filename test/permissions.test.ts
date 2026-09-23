@@ -213,7 +213,10 @@ describe("tier enforcement resolution", () => {
     const readonly = resolvePermission("readonly", "agy");
     expect(readonly.enforced).toBe(false);
     expect(readonly.caveat).toContain("unsupported");
-    expect(unsupportedPermissionReason("readonly", "agy")).toMatch(/danger/);
+    const agyReadonly = unsupportedPermissionReason("readonly", "agy");
+    expect(agyReadonly).toMatch(/permission "danger"/);
+    expect(agyReadonly).toMatch(/defaultPermission/);
+    expect(agyReadonly).not.toMatch(/omit/i);
     expect(unsupportedPermissionReason("danger", "agy")).toBeUndefined();
     expect(unsupportedPermissionReason("readonly", "claude")).toBeUndefined();
   });
