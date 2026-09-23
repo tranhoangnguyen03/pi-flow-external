@@ -5,9 +5,9 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { filterExternalAgentProfiles, getSubagentProfiles } from "./profiles.ts";
+import { extractSharedPiRoleProfiles, filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
-import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
+import { projectExternalSettingsPath, resolveCtxCapabilitySets, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
 import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
@@ -67,6 +67,14 @@ function formatHarnessesLine(harnessConfigs: ReadonlyMap<string, import("./harne
   return `Pi harnesses: ${entries.join(", ")}`;
 }
 
+function formatCapabilitySetsLine(sets: ReadonlyMap<string, import("./settings.ts").PiCapabilitySet>): string {
+  if (sets.size === 0) return "Pi capability sets: none configured";
+  const entries = [...sets]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, set]) => `${name} (${set.skills.length} skill(s), ${set.promptTemplates.length} prompt template(s))`);
+  return `Pi capability sets: ${entries.join(", ")}`;
+}
+
 function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
   const effective = options.getRuntimeSettings();
   const settings = options.settings.settings;
@@ -78,7 +86,8 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
   const staleDefault = !(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness.harness) && !harnessConfigs.has(harness.harness)
     ? [`Configured default harness "${harness.harness}" is not currently registered.`]
     : [];
-  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...harnessDiagnostics, ...staleDefault];
+  const capabilitySets = resolveCtxCapabilitySets(settings.piCapabilitySets, ctx);
+  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...harnessDiagnostics, ...staleDefault, ...capabilitySets.diagnostics];
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
@@ -87,8 +96,9 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
     formatHarnessesLine(harnessConfigs),
+    formatCapabilitySetsLine(capabilitySets.sets),
     `Settings: ${options.settings.path}`,
-    `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness only)`,
+    `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness and piCapabilitySets only; a project set replaces the same-named global set)`,
     ...(warnings.length ? ["Warnings:", ...warnings.map((item) => `- ${item}`)] : []),
     "Edit the file, then run /reload. CLI flags override file values.",
   ].join("\n");
@@ -96,11 +106,39 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
 
 async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<string> {
   const { harnesses: harnessConfigs, diagnostics: harnessDiagnostics } = loadHarnessConfigs(getAgentDir());
-  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys()));
+  const allProfiles = getSubagentProfiles(getAgentDir());
+  const profiles = filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys()));
+  const { templates: sharedRoleTemplates, diagnostics: sharedRoleDiagnostics } = extractSharedPiRoleProfiles(allProfiles);
   const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi");
   const settingsErrors = [
     ...options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting")),
     ...harnessDiagnostics,
+    ...sharedRoleDiagnostics,
+  ];
+  // Effective capability config: the same trust-aware global+project merge
+  // settingsText already shows, plus a check that every profile/shared
+  // template actually referencing a capabilitySet names one that exists in
+  // that effective set — an unknown reference here would otherwise only
+  // surface later, mid-delegation, as a per-call failure.
+  const capabilitySets = resolveCtxCapabilitySets(options.settings.settings.piCapabilitySets, ctx);
+  const capabilitySetRefs = new Map<string, string>();
+  for (const profile of [...profiles.values(), ...sharedRoleTemplates.values()]) {
+    if (profile.capabilitySet && !capabilitySetRefs.has(profile.capabilitySet)) {
+      capabilitySetRefs.set(profile.capabilitySet, profile.name);
+    }
+  }
+  const unknownCapabilitySetRefs = [...capabilitySetRefs].filter(([set]) => !capabilitySets.sets.has(set));
+  // A profile kept in the roster with a malformed capabilitySet field (see
+  // capabilitySetError on SubagentProfile) never silently vanishes back to
+  // canonical/shared-template synthesis, but it also raises no error until
+  // someone actually selects it — surface it here too, the same way a bad
+  // shared-template filename or pinned model/thinking already is.
+  const invalidCapabilitySetProfiles = [...profiles.values(), ...sharedRoleTemplates.values()]
+    .filter((profile) => profile.capabilitySetError)
+    .map((profile) => `"${profile.name}" has an invalid capabilitySet: ${profile.capabilitySetError}`);
+  const capabilitySetIssues = [
+    ...unknownCapabilitySetRefs.map(([set, profile]) => `"${set}" referenced by "${profile}" is not configured`),
+    ...invalidCapabilitySetProfiles,
   ];
   const lines = [
     settingsErrors.length
@@ -109,6 +147,12 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
         ? `⚠ Settings: ${options.settings.diagnostics.join(" ")}`
         : "✓ Settings: valid",
     profiles.size ? `✓ Profiles: ${profiles.size} external` : "✗ Profiles: none configured",
+    capabilitySetIssues.length
+      ? `✗ Capability sets: ${capabilitySetIssues.join("; ")}`
+      : capabilitySets.sets.size
+        ? `✓ Capability sets: ${capabilitySets.sets.size} configured`
+        : "Capability sets: none configured",
+    ...(capabilitySets.diagnostics.length ? [`⚠ Capability sets: ${capabilitySets.diagnostics.join(" ")}`] : []),
   ];
   for (const backend of backends) {
     const result = await pi.exec(backend, ["--version"], { timeout: 10_000 });
@@ -135,7 +179,12 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
 
 function profilesText(): string {
   const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
-  const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(harnessConfigs.keys()));
+  const allProfiles = getSubagentProfiles(getAgentDir());
+  const profiles = mergeSynthesizedPiProfiles(
+    filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys())),
+    harnessConfigs,
+    extractSharedPiRoleProfiles(allProfiles).templates,
+  );
   if (!profiles.size) return "No external profiles. Run /external profile create.";
   return [...profiles.values()].map((profile) =>
     `${profile.name}: ${profile.harness ?? profile.backend} · ${profile.model ?? "default model"} · ${profile.thinking ?? "inherited thinking"}`,

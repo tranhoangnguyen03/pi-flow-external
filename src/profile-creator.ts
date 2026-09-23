@@ -15,11 +15,16 @@ import { resolveProfileModel } from "./core/model.ts";
 import { textResult } from "./core/progress.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
 import {
+  extractSharedPiRoleProfiles,
   filterExternalAgentProfiles,
   getSubagentProfiles,
+  isSharedPiRoleTemplate,
   isValidSubagentName,
+  materializeSharedPiRoleProfile,
   parseSubagentProfileContent,
   reconcilePiProfileWithHarness,
+  SHARED_PI_HARNESS_MARKER,
+  sharedPiRoleName,
 } from "./profiles.ts";
 import {
   getConfiguredHarnessNames,
@@ -28,6 +33,7 @@ import {
   isValidThinkingLevel,
   loadHarnessConfigs,
   VALID_THINKING_LEVELS,
+  type HarnessConfig,
 } from "./harnesses.ts";
 import { EXTERNAL_HARNESSES } from "./types.ts";
 import type { SubagentProfile, SubagentUsage } from "./types.ts";
@@ -38,23 +44,26 @@ const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 
 export const PROFILE_INTERVIEW_PROMPT = `Help me create one pi-flow external agent profile, or one named Pi harness configuration, through an AI-assisted interview.
 
-Start by asking which of three things I want:
+Start by asking which of four things I want:
 1. A role profile for an existing external CLI harness (claude, codex, agy, grok, or muse).
 2. A new named Pi harness configuration (a "pi-*" name pinning a provider/model and optional thinking level, run in-process rather than as a CLI).
-3. A role profile for an existing registered pi-* harness.
+3. A role profile for one existing registered pi-* harness only.
+4. A shared role profile applied across every currently-registered pi-* harness, and any registered later.
 
 For branch 1 or 3: ask one question at a time, only when the answer is not already known. Collect enough information to write a focused profile: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. For branch 1, recommend a backend (claude, codex, agy, grok, or muse) and explain briefly; for branch 3, confirm which already-registered pi-* harness this role targets. Suggest a lowercase <harness>-<role> profile name; the suffix becomes the role callers use. Ask about model and thinking only when I want to pin them for branch 1/3 profiles; otherwise omit them — for branch 3, model/thinking are inherited from the named harness and must not be overridden to a different value. When ready, summarize once and call ${PROFILE_TOOL_NAME}.
 
 For branch 2: ask for a "pi-<label>" name, a provider/model id (validated live against the model registry), and an optional thinking level (off/minimal/low/medium/high/xhigh; default off). The six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness the moment it is registered — no per-role file needed. When ready, summarize once and call ${HARNESS_TOOL_NAME}.
 
-Do not write files yourself and do not run Agent or workflow in either branch. The tool will show what will be created for review, request confirmation, stage it, run a real backend smoke test, and either install it or roll it back.`;
+For branch 4: collect the same focused-profile information as branch 1/3, but never ask about model or thinking — a shared role must not pin either, since it materializes onto whichever harness runs it using that harness's own registered model/thinking. Suggest a lowercase "pi-<role>" profile name (no harness prefix) and pass backend "${SHARED_PI_HARNESS_MARKER}" when calling ${PROFILE_TOOL_NAME}. Explain that a harness-specific <harness>-<role> file, if one already exists, still takes precedence over this shared role for that one harness. This branch requires at least one already-registered pi-* harness to smoke-test against; if none exists, tell me to register one first (branch 2).
+
+Do not write files yourself and do not run Agent or workflow in any branch. The tool will show what will be created for review, request confirmation, stage it, run a real backend smoke test, and either install it or roll it back.`;
 
 const profileParameters = Type.Object({
   name: Type.String({ description: "Lowercase <harness>-<role> profile name, such as claude-security-reviewer or pi-deepseek-security-reviewer; the suffix becomes its role." }),
   description: Type.String({ description: "Concise profile description shown by external_help and in delegation intent." }),
-  backend: Type.String({ description: "External CLI backend (claude, codex, agy, grok, muse) or a registered named pi-* harness." }),
-  model: Type.Optional(Type.String({ description: "Optional backend model override. Omit to use the CLI default. For a pi-* backend, must match the harness's registered model if given at all." })),
-  thinking: Type.Optional(Type.String({ description: "Optional reasoning-effort override. Omit to use the current Pi level. For a pi-* backend, must match the harness's registered thinking if given at all." })),
+  backend: Type.String({ description: `External CLI backend (claude, codex, agy, grok, muse), a registered named pi-* harness, or the literal "${SHARED_PI_HARNESS_MARKER}" marker for a role shared across every registered pi-* harness.` }),
+  model: Type.Optional(Type.String({ description: `Optional backend model override. Omit to use the CLI default. For a pi-* backend, must match the harness's registered model if given at all. Must be omitted entirely for backend "${SHARED_PI_HARNESS_MARKER}".` })),
+  thinking: Type.Optional(Type.String({ description: `Optional reasoning-effort override. Omit to use the current Pi level. For a pi-* backend, must match the harness's registered thinking if given at all. Must be omitted entirely for backend "${SHARED_PI_HARNESS_MARKER}".` })),
   systemPrompt: Type.String({ description: "Complete focused instructions for the external agent profile." }),
 });
 
@@ -106,14 +115,21 @@ export function compileProfile(profile: SubagentProfile): string {
     throw new Error("Profile name must contain only lowercase letters, numbers, and hyphens.");
   }
   const isExternalCli = (EXTERNAL_HARNESSES as readonly string[]).includes(profile.backend);
-  const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined;
-  if (!isExternalCli && !isPiHarnessProfile) {
-    throw new Error("Profile backend must be claude, codex, agy, grok, muse, or a registered pi-* harness name.");
+  const isSharedTemplate = isSharedPiRoleTemplate(profile);
+  const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined && !isSharedTemplate;
+  if (!isExternalCli && !isPiHarnessProfile && !isSharedTemplate) {
+    throw new Error(`Profile backend must be claude, codex, agy, grok, muse, a registered pi-* harness name, or the shared "${SHARED_PI_HARNESS_MARKER}" marker.`);
   }
   if (isPiHarnessProfile && !isValidHarnessName(profile.harness!)) {
     throw new Error(`Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(profile.harness)}).`);
   }
-  const selectorPrefix = `${profile.harness ?? profile.backend}-`;
+  if (isSharedTemplate && (profile.model !== undefined || profile.thinking !== undefined)) {
+    throw new Error(`Shared role profile "${profile.name}" must not pin model or thinking; each registered pi-* harness supplies its own. Remove the override(s).`);
+  }
+  if (profile.capabilitySet && isExternalCli) {
+    throw new Error(`Profile "${profile.name}" declares backend "${profile.backend}" and capabilitySet "${profile.capabilitySet}", but capabilitySet only applies to backend "pi" (in-process, curated-tools) profiles — the ${profile.backend} CLI has no mechanism to load skills/prompt templates and would silently ignore the selection. Remove capabilitySet from this profile or change its backend to "pi" with a registered harness.`);
+  }
+  const selectorPrefix = isSharedTemplate ? "pi-" : `${profile.harness ?? profile.backend}-`;
   if (!profile.name.startsWith(selectorPrefix) || profile.name === selectorPrefix) {
     throw new Error(`Profile name must start with ${JSON.stringify(selectorPrefix)}.`);
   }
@@ -132,6 +148,7 @@ export function compileProfile(profile: SubagentProfile): string {
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
     ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
     ...(profile.owner ? [`owner: ${JSON.stringify(profile.owner)}`] : []),
+    ...(profile.capabilitySet ? [`capabilitySet: ${JSON.stringify(profile.capabilitySet)}`] : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`;
 }
@@ -148,7 +165,9 @@ export async function installProfileWithSmokeTest({
   smokeTest: (reconciledProfile: SubagentProfile) => Promise<{ ok: true } | { ok: false; error: string }>;
 }): Promise<string> {
   const { harnesses: harnessConfigs } = loadHarnessConfigs(agentDir);
-  const reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
+  // A shared role template has no single harness to reconcile against; its
+  // model/thinking rejection is enforced by compileProfile instead.
+  const reconciled = isSharedPiRoleTemplate(profile) ? profile : reconcilePiProfileWithHarness(profile, harnessConfigs);
   const content = compileProfile(profile);
   if (!parseSubagentProfileContent(content, profile.name, { requireBody: true })) {
     throw new Error("Compiled profile failed runtime validation.");
@@ -185,7 +204,13 @@ export async function installProfileWithSmokeTest({
     await unlink(stagedPath);
     signal?.throwIfAborted();
 
-    const installed = filterExternalAgentProfiles(getSubagentProfiles(agentDir), getConfiguredHarnessNames(agentDir)).get(profile.name);
+    // A shared role template is never externally selectable on its own (see
+    // isExternalAgentProfile), so its discovery check reads back the raw
+    // template instead of the filtered/selectable roster.
+    const installedProfiles = getSubagentProfiles(agentDir);
+    const installed = isSharedPiRoleTemplate(profile)
+      ? extractSharedPiRoleProfiles(installedProfiles).templates.get(sharedPiRoleName(profile.name) ?? "")
+      : filterExternalAgentProfiles(installedProfiles, getConfiguredHarnessNames(agentDir)).get(profile.name);
     if (!installed) {
       throw new Error("Installed profile was not discovered by the runtime loader.");
     }
@@ -222,8 +247,11 @@ function resultText(result: Awaited<ReturnType<typeof spawnSubagent>>): string |
   return details.result;
 }
 
-function profileReview(profile: SubagentProfile, path: string): string {
-  return `Destination: ${path}\nBackend executable: ${profile.backend}\n\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
+function profileReview(profile: SubagentProfile, path: string, smokeHarness?: string): string {
+  const sharedNote = smokeHarness
+    ? `\nThis role applies to every registered pi-* harness (currently: ${smokeHarness} and any others) that lacks its own <harness>-${sharedPiRoleName(profile.name)} override; the smoke test below only exercises "${smokeHarness}" as a representative.\n`
+    : "";
+  return `Destination: ${path}\nBackend executable: ${profile.backend}\n${sharedNote}\n${compileProfile(profile)}\nThe smoke test omits these profile instructions and launches this backend in its configured no-approval mode from an empty temporary working directory.`;
 }
 
 function harnessReview(name: string, model: string, thinking: string): string {
@@ -248,10 +276,21 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
       const profile = normalizeProfile(params);
       const finalPath = join(getAgentDir(), "subagents", `${profile.name}.md`);
       const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
-      let reconciled: SubagentProfile;
+      const isSharedTemplate = isSharedPiRoleTemplate(profile);
+      let reconciled: SubagentProfile | undefined;
+      let smokeHarness: string | undefined;
+      let smokeHarnessConfig: HarnessConfig | undefined;
       try {
-        reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
         compileProfile(profile);
+        if (isSharedTemplate) {
+          const first = harnessConfigs.entries().next();
+          if (first.done) {
+            throw new Error("Register a named Pi harness first (via /external profile create); a shared pi-* role needs at least one live harness to validate against.");
+          }
+          [smokeHarness, smokeHarnessConfig] = first.value;
+        } else {
+          reconciled = reconcilePiProfileWithHarness(profile, harnessConfigs);
+        }
       } catch (error) {
         return textResult(`Profile validation failed: ${error instanceof Error ? error.message : String(error)}`, {
           description: "Create pi-flow profile",
@@ -274,7 +313,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
 
       const confirmed = await ctx.ui.confirm(
         `Create ${profile.name}?`,
-        profileReview(profile, finalPath),
+        profileReview(profile, finalPath, smokeHarness),
         { signal },
       );
       if (!confirmed) {
@@ -304,7 +343,9 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
             let smokeDir: string | undefined;
             try {
               smokeDir = await mkdtemp(join(tmpdir(), "pi-flow-profile-smoke-"));
-              const smokeProfile = profile.backend === "pi" ? (reconciledProfile ?? reconciled) : profile;
+              const smokeProfile = isSharedTemplate
+                ? materializeSharedPiRoleProfile(sharedPiRoleName(profile.name)!, smokeHarness!, smokeHarnessConfig!, profile)
+                : profile.backend === "pi" ? (reconciledProfile ?? reconciled!) : profile;
               const result = await spawnSubagent({
                 toolCallId: `${toolCallId}-smoke`,
                 description: "Profile smoke test",

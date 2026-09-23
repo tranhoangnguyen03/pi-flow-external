@@ -156,7 +156,7 @@ backend: muse
 model: muse-spark-1.3-contributor
 ```
 
-Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is only available to this extension when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below); a bare `backend: pi` profile, or no backend at all, belongs to Pi's native subagent system and is never modified by this extension.
+Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is directly selectable by this extension only when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below), or is materialized from a shared role template declaring the literal `harness: "pi-*"` marker (see [Shared custom Pi roles](#shared-custom-pi-roles)); a bare `backend: pi` profile with no `harness`, an unregistered one, or no backend at all belongs to Pi's native subagent system and is never modified by this extension.
 
 ### Default profiles
 
@@ -192,9 +192,63 @@ Agent({
 });
 ```
 
-A custom (non-canonical) role still needs its own profile file per harness, the same as for the four CLI backends: `~/.pi/agent/subagents/pi-deepseek-security-reviewer.md` with `backend: pi` and `harness: pi-deepseek`. That file's body/permission/tools may be customized; its `model`/`thinking` are not — they always come from the harness's registered config, and a file that tries to override them to a different value is rejected rather than silently honored.
+A custom (non-canonical) role can be given its own profile file per harness, the same as for the five CLI backends: `~/.pi/agent/subagents/pi-deepseek-security-reviewer.md` with `backend: pi` and `harness: pi-deepseek`. That file's body/permission/tools may be customized; its `model`/`thinking` are not — they always come from the harness's registered config, and a file that tries to override them to a different value is rejected rather than silently honored.
 
-**v1 scope, by design:** a pi child's entire tool surface is the SDK's own builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit` tiers) — no project/user extensions, skills, prompt templates, or themes load into it. This bounds which tool *names* exist; it does not make `bash` at `danger` tier any less exposed than on an external CLI. Retry is disabled per pi child (in-memory, never touching your real Pi settings) so a transient provider error fails immediately rather than silently retrying. Pi children cannot resume a prior conversation and have no enforced budget cap. Expanding this capability set (trusted extensions/MCP/skills, a shared custom-role format, resumable sessions, real budget controls) is tracked in [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
+### Shared custom Pi roles
+
+Instead of duplicating a custom role's file per harness, author it once as a **shared role template**: `~/.pi/agent/subagents/pi-security-audit.md` with `backend: pi` and the literal marker `harness: "pi-*"` (not one specific harness name):
+
+```md
+---
+description: Shared security audit role.
+backend: pi
+harness: "pi-*"
+---
+
+Audit for security defects. Do not modify files.
+```
+
+This template is applied to every currently-registered `pi-*` harness that doesn't already have its own `<harness>-security-audit.md` override — `pi-deepseek-security-audit`, `pi-astra-security-audit`, and so on, each pinned to that harness's own registered model/thinking. Precedence: a harness-specific on-disk file wins for that harness, then the shared template, then (for the six canonical role names only) the built-in synthesized body. A shared template must not pin `model` or `thinking` itself — a harness's registry stays authoritative — and its file name must match its `pi-<role>` marker; either mistake drops the template with a diagnostic surfaced by `/external doctor` rather than silently misapplying one harness's model to the rest. `/external profile create` can author one directly (the fourth interview branch); creating one requires at least one already-registered `pi-*` harness, since its smoke test runs against one representative harness while the installed file stays harness-agnostic.
+
+**v1 scope, by design:** a pi child's entire tool surface is the SDK's own builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit` tiers) — no project/user extensions, MCP, or themes load into it. This bounds which tool *names* exist; it does not make `bash` at `danger` tier any less exposed than on an external CLI. Retry is disabled per pi child (in-memory, never touching your real Pi settings) so a transient provider error fails immediately rather than silently retrying. Pi children cannot resume a prior conversation and have no enforced budget cap. Expanding this capability set (trusted extensions/MCP, resumable sessions, real budget controls) is tracked in [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
+
+### Reusable capability sets (skills & prompt templates)
+
+A profile can opt into a named, reusable selection of exact skills and prompt templates via frontmatter:
+
+```md
+---
+description: Docs writer.
+backend: pi
+harness: pi-deepseek
+capabilitySet: docs
+---
+
+Write documentation.
+```
+
+The named set itself lives in settings, not the profile — define it once, reuse it from any profile or harness:
+
+```json
+{
+  "piCapabilitySets": {
+    "docs": {
+      "skills": ["technical-writer"],
+      "promptTemplates": ["release-notes"]
+    }
+  }
+}
+```
+
+`skills`/`promptTemplates` are exact resource names only — never booleans, never wildcards — so the set stays a closed, auditable list. Either array may be omitted, and an entry may be the empty object (`"empty": {}`) — that is a valid, explicit selection of nothing, distinct from not declaring `capabilitySet` at all. A trusted project's `.pi/pi-flow-external/settings.json` may define its own `piCapabilitySets`; a project entry with the same name fully replaces the global one (arrays are never merged). Absent `capabilitySet`, behavior is unchanged: nothing loads.
+
+Selected resources are discovered through Pi's own SDK — never through project/user extensions or MCP, which stay unconditionally excluded — and filtered to exactly the named skills/prompt templates; project-scope resources are only visible when the project is trusted. An unknown set name, or a selected skill/prompt template that isn't discoverable, fails before any prompt is sent, naming exactly what's missing. Selected names are shown on the intent card before launch and recorded in the run receipt. Because a skill is a lazy file read (the child reads it itself), a workflow run freezes one content hash per selection up front for its replay fingerprint and re-checks it immediately before each child spawn, rejecting a child rather than running it against drifted instructions if the selected file changed mid-run.
+
+A frontmatter `capabilitySet` that isn't a non-empty string (a boolean, a number, an empty string) does not silently drop or disable the profile. The profile stays in the roster with the malformed value recorded internally; selecting that exact profile — directly, via a canonical `<harness>-<role>` override, or via a shared `pi-*` role template materialized onto a harness — fails loudly at that point, naming what's wrong. This is deliberate: dropping the whole profile file instead would let an on-disk override or shared template silently vanish and fall back to the built-in canonical role body, hiding a real configuration mistake. Unrelated profiles and roles are never affected.
+
+A selected **prompt template** is only reachable through the child's own explicit `/template-name args` task text (the SDK's built-in `/template-name` expansion) — it is never injected into the child's system prompt. A misspelled or unselected template name is therefore not an error; it is simply never expanded and passes through as literal task text.
+
+A selected **skill**'s *autonomous* discoverability — whether its name/description is listed in the child's system prompt for the model to invoke on its own initiative — is governed entirely by that skill's own `disable-model-invocation` frontmatter flag, exactly as Pi's SDK already enforces it. `capabilitySet` filtering only narrows *which* skills are visible to the child at all; it never overrides that flag. A skill marked `disable-model-invocation: true` is still reachable via an explicit `/skill:name args` task invocation, since that lookup is by exact selected name, not by the flag.
 
 ## Agent usage
 

@@ -173,6 +173,13 @@ export interface WorkflowSubagentDescriptor {
   tools?: string[];
   permission?: import("../types.ts").PermissionTier;
   maxBudgetUsd?: number;
+  /**
+   * Frozen capabilitySet selection (see src/core/capabilities.ts), resolved
+   * once up front for the whole workflow run. Its contentHash widens the
+   * replay fingerprint so an edited selected SKILL.md/template invalidates a
+   * stale cached fingerprint instead of silently matching it.
+   */
+  capabilities?: import("../types.ts").ResolvedCapabilities & { contentHash: string };
 }
 
 export interface RunWorkflowOptions {

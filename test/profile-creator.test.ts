@@ -11,7 +11,7 @@ import {
   registerProfileCreator,
 } from "../src/profile-creator.ts";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
-import { loadCustomSubagentProfiles, parseSubagentProfileContent } from "../src/profiles.ts";
+import { extractSharedPiRoleProfiles, loadCustomSubagentProfiles, parseSubagentProfileContent, SHARED_PI_HARNESS_MARKER } from "../src/profiles.ts";
 import { fauxAssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
@@ -97,9 +97,22 @@ describe("profile creator", () => {
       .toThrow('Profile name must start with "claude-".');
   });
 
+  it("serializes capabilitySet and round-trips it through parseSubagentProfileContent", () => {
+    const withSet = { ...profile, backend: "pi" as const, harness: "pi-deepseek", name: "pi-deepseek-security-reviewer", capabilitySet: "sec-tools" };
+    const content = compileProfile(withSet);
+    expect(content).toContain(`capabilitySet: "sec-tools"`);
+    const parsed = parseSubagentProfileContent(content, withSet.name, { requireBody: true });
+    expect(parsed?.capabilitySet).toBe("sec-tools");
+  });
+
+  it("rejects a capabilitySet declared on a non-pi backend profile", () => {
+    expect(() => compileProfile({ ...profile, capabilitySet: "sec-tools" }))
+      .toThrow(/capabilitySet only applies to backend "pi"/);
+  });
+
   it("rejects an invalid backend in compileProfile with the full list of supported backends", () => {
     expect(() => compileProfile({ ...profile, backend: "invalid-backend" as any, name: "invalid-backend-reviewer" }))
-      .toThrow("Profile backend must be claude, codex, agy, grok, muse, or a registered pi-* harness name.");
+      .toThrow('Profile backend must be claude, codex, agy, grok, muse, a registered pi-* harness name, or the shared "pi-*" marker.');
   });
 
   it("installs only after a successful smoke test", async () => {
@@ -670,5 +683,134 @@ describe("creatorTool with registered pi harness", () => {
     expect(loaded?.harness).toBe("pi-deepseek");
     expect(loaded?.model).toBeUndefined();
     expect(loaded?.thinking).toBeUndefined();
+  });
+});
+
+describe("shared pi-* role authoring (issue #43 first slice)", () => {
+  const sharedProfile = {
+    name: "pi-security-audit",
+    description: "Shared security audit role.",
+    backend: SHARED_PI_HARNESS_MARKER,
+    systemPrompt: "Audit for security defects across every harness. Do not modify files.",
+    owner: "user",
+  };
+
+  it("compiles a pi-<role> name under the pi-* marker without a harness-name-shape check", () => {
+    const content = compileProfile({ ...sharedProfile, backend: "pi", harness: SHARED_PI_HARNESS_MARKER });
+    expect(content).toContain(`harness: "${SHARED_PI_HARNESS_MARKER}"`);
+    expect(content).toContain("backend: pi");
+    const parsed = parseSubagentProfileContent(content, sharedProfile.name, { requireBody: true });
+    expect(parsed?.harness).toBe(SHARED_PI_HARNESS_MARKER);
+  });
+
+  it("rejects a shared template that pins a model", () => {
+    expect(() => compileProfile({ ...sharedProfile, backend: "pi", harness: SHARED_PI_HARNESS_MARKER, model: "openai/gpt-5" }))
+      .toThrow(/must not pin model or thinking/);
+  });
+
+  it("rejects a shared template that pins a thinking level", () => {
+    expect(() => compileProfile({ ...sharedProfile, backend: "pi", harness: SHARED_PI_HARNESS_MARKER, thinking: "high" }))
+      .toThrow(/must not pin model or thinking/);
+  });
+
+  it("rejects a shared template name that isn't pi-<role>", () => {
+    expect(() => compileProfile({ ...sharedProfile, backend: "pi", harness: SHARED_PI_HARNESS_MARKER, name: "security-audit" }))
+      .toThrow('Profile name must start with "pi-".');
+  });
+
+  it("installProfileWithSmokeTest skips single-harness reconciliation and installs the marker as-is", async () => {
+    const agentDir = await makeAgentDir();
+    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "off" } } }),
+    );
+    const createdPath = await installProfileWithSmokeTest({
+      agentDir,
+      profile: { ...sharedProfile, backend: "pi", harness: SHARED_PI_HARNESS_MARKER },
+      smokeTest: async () => ({ ok: true }),
+    });
+    expect(existsSync(createdPath)).toBe(true);
+    const raw = loadCustomSubagentProfiles(agentDir).get(sharedProfile.name);
+    expect(raw?.harness).toBe(SHARED_PI_HARNESS_MARKER);
+    const { templates } = extractSharedPiRoleProfiles(loadCustomSubagentProfiles(agentDir));
+    expect(templates.get("security-audit")?.name).toBe(sharedProfile.name);
+  });
+});
+
+describe("creatorTool.execute for a shared pi-* role", () => {
+  let agentDir = "";
+  let cwd = "";
+  const { createSession } = setupPiSubagentTestHarness((state) => {
+    agentDir = state.agentDir;
+    cwd = state.cwd;
+  });
+
+  it("requires at least one registered pi-* harness before confirmation", async () => {
+    await createSession({});
+    const tool = makeCreatorTool();
+    const ctx = {
+      hasUI: true,
+      cwd,
+      modelRegistry: { find: vi.fn(), hasConfiguredAuth: vi.fn(() => true) },
+      ui: { confirm: vi.fn(async () => true), notify: vi.fn() },
+    } as unknown as ExtensionCommandContext;
+
+    const result = await tool.execute(
+      "no-harness-shared-profile",
+      {
+        name: "pi-security-audit",
+        backend: SHARED_PI_HARNESS_MARKER,
+        description: "Shared security audit role.",
+        systemPrompt: "Audit for security defects.",
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(result.details.status).toBe("error");
+    expect(result.details.error).toMatch(/at least one live harness/);
+    expect(ctx.ui.confirm).not.toHaveBeenCalled();
+  });
+
+  it("smoke-tests against a representative registered harness and materializes onto every harness", async () => {
+    const { modelRegistry, registration } = await createSession({
+      piHarnesses: {
+        "pi-deepseek": { modelId: "faux-thinker", thinking: "high" },
+      },
+    });
+    registration.setResponses([() => fauxAssistantMessage("PI_FLOW_PROFILE_OK")]);
+
+    const tool = makeCreatorTool();
+    const ctx = {
+      hasUI: true,
+      cwd,
+      modelRegistry,
+      ui: { confirm: vi.fn(async () => true), notify: vi.fn() },
+    } as unknown as ExtensionCommandContext;
+
+    const result = await tool.execute(
+      "create-shared-role",
+      {
+        name: "pi-security-audit",
+        backend: SHARED_PI_HARNESS_MARKER,
+        description: "Shared security audit role.",
+        systemPrompt: "Audit for security defects across every harness.",
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result.details.status).toBe("done");
+    const installedPath = join(agentDir, "subagents", "pi-security-audit.md");
+    expect(existsSync(installedPath)).toBe(true);
+    const content = readFileSync(installedPath, "utf8");
+    expect(content).not.toContain("model:");
+    expect(content).not.toContain("thinking:");
+    expect(content).toContain(`harness: "${SHARED_PI_HARNESS_MARKER}"`);
+
+    const { templates } = extractSharedPiRoleProfiles(loadCustomSubagentProfiles(agentDir));
+    expect(templates.get("security-audit")?.systemPrompt).toBe("Audit for security defects across every harness.");
   });
 });

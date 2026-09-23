@@ -84,6 +84,7 @@ export function fingerprintWorkflowAgentCall(
         descriptorTools: descriptor.tools,
         descriptorPermission: descriptor.permission,
         descriptorMaxBudgetUsd: descriptor.maxBudgetUsd,
+        descriptorCapabilities: descriptor.capabilities,
         policyVersion: WORKFLOW_FINGERPRINT_POLICY_VERSION,
       }
       : {}),

@@ -8,7 +8,10 @@ import {
   DEFAULT_EXTERNAL_SETTINGS,
   loadExternalSettings,
   projectExternalSettingsPath,
+  renderCapabilitySets,
   renderDefaultHarness,
+  resolveCapabilitySets,
+  resolveCtxCapabilitySets,
   resolveCtxDefaultHarness,
   resolveDefaultHarness,
 } from "../src/settings.ts";
@@ -121,6 +124,7 @@ describe("external settings", () => {
       defaultPermission: "danger",
       defaultMaxBudgetUsd: null,
       maxRunRecords: 200,
+      piCapabilitySets: {},
     });
     // A v1 file is valid input, not a warning.
     expect(migrated.diagnostics).toEqual([]);
@@ -204,5 +208,110 @@ describe("external settings", () => {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
     }
+  });
+});
+
+describe("piCapabilitySets (issue #43 second slice)", () => {
+  it("parses valid entries and drops an invalid one with a diagnostic, keeping the rest", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({
+      ...DEFAULT_EXTERNAL_SETTINGS,
+      piCapabilitySets: {
+        docs: { skills: ["writer", "writer"], promptTemplates: ["release-notes"] },
+        "Bad Name": { skills: ["x"] },
+        broken: { skills: [true] },
+      },
+    }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.piCapabilitySets).toEqual({ docs: { skills: ["writer"], promptTemplates: ["release-notes"] } });
+    expect(parsed.diagnostics.join(" ")).toMatch(/Bad Name/);
+    expect(parsed.diagnostics.join(" ")).toMatch(/broken/);
+  });
+
+  it("defaults absent skills/promptTemplates arrays to empty rather than rejecting the entry", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ ...DEFAULT_EXTERNAL_SETTINGS, piCapabilitySets: { docs: {} } }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.piCapabilitySets).toEqual({ docs: { skills: [], promptTemplates: [] } });
+  });
+
+  it("rejects an entry with an unknown field instead of silently dropping it", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({
+      ...DEFAULT_EXTERNAL_SETTINGS,
+      piCapabilitySets: {
+        docs: { skills: ["writer"], promptTempaltes: ["release-notes"] },
+        ok: { skills: ["writer"] },
+      },
+    }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.settings.piCapabilitySets).toEqual({ ok: { skills: ["writer"], promptTemplates: [] } });
+    expect(parsed.diagnostics.join(" ")).toMatch(/piCapabilitySets entry "docs" ignored: unknown field\(s\) promptTempaltes/);
+  });
+
+  describe("project override", () => {
+    const project = () => {
+      const cwd = mkdtempSync(join(tmpdir(), "pi-flow-capsets-"));
+      roots.push(cwd);
+      return cwd;
+    };
+    const writeProjectSettings = (cwd: string, body: string) => {
+      mkdirSync(dirname(projectExternalSettingsPath(cwd)), { recursive: true });
+      writeFileSync(projectExternalSettingsPath(cwd), body);
+    };
+    const global = { docs: { skills: ["writer"], promptTemplates: ["release-notes"] } };
+
+    it("replaces a same-named global set wholesale rather than merging its arrays, only when trusted", () => {
+      const cwd = project();
+      writeProjectSettings(cwd, JSON.stringify({ piCapabilitySets: { docs: { skills: ["project-writer"] } } }));
+      const untrusted = resolveCapabilitySets(global, cwd, false);
+      expect(untrusted.sets.get("docs")).toEqual(global.docs);
+      expect(untrusted.diagnostics.join(" ")).toMatch(/not trusted/);
+
+      const trusted = resolveCapabilitySets(global, cwd, true);
+      expect(trusted.sets.get("docs")).toEqual({ skills: ["project-writer"], promptTemplates: [] });
+    });
+
+    it("shadows a same-named global set with an unknown-set failure when the project override is malformed, rather than silently keeping the global definition", () => {
+      const cwd = project();
+      writeProjectSettings(cwd, JSON.stringify({ piCapabilitySets: { docs: { skills: [true] } } }));
+      const trusted = resolveCapabilitySets(global, cwd, true);
+      expect(trusted.sets.has("docs")).toBe(false);
+      expect(trusted.diagnostics.join(" ")).toMatch(/piCapabilitySets entry "docs" ignored/);
+    });
+
+    it("shadows a same-named global set when the project override has a typo'd field, rather than silently inheriting the global definition", () => {
+      const cwd = project();
+      writeProjectSettings(cwd, JSON.stringify({ piCapabilitySets: { docs: { skils: ["project-writer"] } } }));
+      const trusted = resolveCapabilitySets(global, cwd, true);
+      expect(trusted.sets.has("docs")).toBe(false);
+      expect(trusted.diagnostics.join(" ")).toMatch(/piCapabilitySets entry "docs" ignored: unknown field\(s\) skils/);
+    });
+
+    it("adds a project-only set name alongside untouched global sets", () => {
+      const cwd = project();
+      writeProjectSettings(cwd, JSON.stringify({ piCapabilitySets: { "project-only": { skills: ["scout"] } } }));
+      const trusted = resolveCapabilitySets(global, cwd, true);
+      expect(trusted.sets.get("docs")).toEqual(global.docs);
+      expect(trusted.sets.get("project-only")).toEqual({ skills: ["scout"], promptTemplates: [] });
+    });
+
+    it("falls back to global-only when no project file exists", () => {
+      const cwd = project();
+      const result = resolveCapabilitySets(global, cwd, true);
+      expect(result.sets).toEqual(new Map(Object.entries(global)));
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("remembers the last ctx-resolved sets for render paths, like renderDefaultHarness", () => {
+      const cwd = project();
+      writeProjectSettings(cwd, JSON.stringify({ piCapabilitySets: { docs: { skills: ["project-writer"] } } }));
+      expect(renderCapabilitySets(global, join(cwd, "elsewhere")).sets.get("docs")).toEqual(global.docs);
+      resolveCtxCapabilitySets(global, { cwd, isProjectTrusted: () => true });
+      expect(renderCapabilitySets(global, cwd).sets.get("docs")).toEqual({ skills: ["project-writer"], promptTemplates: [] });
+    });
   });
 });

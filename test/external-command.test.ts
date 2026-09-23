@@ -39,6 +39,7 @@ describe("/external command", () => {
           defaultPermission: "danger",
           defaultMaxBudgetUsd: null,
           maxRunRecords: 200,
+          piCapabilitySets: {},
         },
         diagnostics: ['Unknown setting "futureOption".'],
       };
@@ -173,6 +174,7 @@ describe("/external command", () => {
           defaultPermission: "danger",
           defaultMaxBudgetUsd: null,
           maxRunRecords: 200,
+          piCapabilitySets: {},
         },
         diagnostics: [],
       };
@@ -206,6 +208,165 @@ describe("/external command", () => {
     }
   });
 
+  it("/external profiles materializes the same synthesized canonical roster as Agent/help, not just on-disk files", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-roster-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(root, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+    );
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: {
+          version: 3,
+          defaultHarness: "agy",
+          maxConcurrentSubagents: 12,
+          subagentTimeoutMs: 7200000,
+          defaultPermission: "danger",
+          defaultMaxBudgetUsd: null,
+          maxRunRecords: 200,
+          piCapabilitySets: {},
+        },
+        diagnostics: [],
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 12, subagentTimeoutMs: 7_200_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: { execute: vi.fn() } as never,
+      });
+
+      const notices: string[] = [];
+      const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
+      // No on-disk profile files at all: the six canonical roles must still be
+      // synthesized for the registered pi-deepseek harness, exactly like the
+      // Agent tool's and external_help's own roster.
+      await command?.handler("profiles", ctx);
+      expect(notices.at(-1)).toContain("pi-deepseek-reviewer: pi-deepseek");
+      expect(notices.at(-1)).toContain("pi-deepseek-explorer: pi-deepseek");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("doctor flags a profile referencing an unconfigured capabilitySet and reports the effective capability set count", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-capdoctor-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(root, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+    );
+    mkdirSync(join(root, "subagents"), { recursive: true });
+    writeFileSync(
+      join(root, "subagents", "pi-deepseek-docs.md"),
+      "---\ndescription: Docs writer.\nbackend: pi\nharness: pi-deepseek\ncapabilitySet: missing-set\n---\nWrite docs.\n",
+    );
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: {
+          version: 3,
+          defaultHarness: "agy",
+          maxConcurrentSubagents: 12,
+          subagentTimeoutMs: 7200000,
+          defaultPermission: "danger",
+          defaultMaxBudgetUsd: null,
+          maxRunRecords: 200,
+          piCapabilitySets: { docs: { skills: [], promptTemplates: [] } },
+        },
+        diagnostics: [],
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 12, subagentTimeoutMs: 7_200_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: { execute: vi.fn() } as never,
+      });
+
+      const notices: string[] = [];
+      const modelRegistry = {
+        find: (provider: string, id: string) => provider === "deepseek" && id === "deepseek-chat" ? { provider, id } : undefined,
+        hasConfiguredAuth: () => true,
+      };
+      const ctx = { cwd: root, isProjectTrusted: () => false, modelRegistry, ui: { notify: (message: string) => notices.push(message) } };
+      await command?.handler("doctor", ctx);
+      expect(notices.at(-1)).toContain('✗ Capability sets: "missing-set" referenced by "pi-deepseek-docs" is not configured');
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("doctor flags a profile with a malformed capabilitySet field instead of silently omitting it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-badcap-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+    writeFileSync(
+      join(root, "pi-flow-external", "harnesses.json"),
+      JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+    );
+    mkdirSync(join(root, "subagents"), { recursive: true });
+    writeFileSync(
+      join(root, "subagents", "pi-deepseek-docs.md"),
+      "---\ndescription: Docs writer.\nbackend: pi\nharness: pi-deepseek\ncapabilitySet: true\n---\nWrite docs.\n",
+    );
+    try {
+      let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+      const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+      const settings: LoadedExternalSettings = {
+        path: join(root, "pi-flow-external", "settings.json"),
+        settings: {
+          version: 3,
+          defaultHarness: "agy",
+          maxConcurrentSubagents: 12,
+          subagentTimeoutMs: 7200000,
+          defaultPermission: "danger",
+          defaultMaxBudgetUsd: null,
+          maxRunRecords: 200,
+          piCapabilitySets: {},
+        },
+        diagnostics: [],
+      };
+      registerExternalCommand(pi as never, {
+        settings,
+        getRuntimeSettings: () => ({ maxConcurrentSubagents: 12, subagentTimeoutMs: 7_200_000 }),
+        getMaxRunRecords: () => 200,
+        startProfileInterview: vi.fn(async () => {}),
+        externalRuns: { execute: vi.fn() } as never,
+      });
+
+      const notices: string[] = [];
+      const modelRegistry = {
+        find: (provider: string, id: string) => provider === "deepseek" && id === "deepseek-chat" ? { provider, id } : undefined,
+        hasConfiguredAuth: () => true,
+      };
+      const ctx = { cwd: root, isProjectTrusted: () => false, modelRegistry, ui: { notify: (message: string) => notices.push(message) } };
+      await command?.handler("doctor", ctx);
+      expect(notices.at(-1)).toContain('✗ Capability sets: "pi-deepseek-docs" has an invalid capabilitySet:');
+      // The profile itself stays in the roster (retained, not dropped whole).
+      expect(notices.at(-1)).toContain("✓ Profiles: 1 external");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("shows timing/output-availability row detail and Refresh resets pagination to page one without navigating into a run", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-refresh-"));
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -215,7 +376,7 @@ describe("/external command", () => {
       const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
       const settings: LoadedExternalSettings = {
         path: join(root, "pi-flow-external", "settings.json"),
-        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200, piCapabilitySets: {} },
         diagnostics: [],
       };
       let listCalls = 0;
@@ -325,7 +486,7 @@ describe("/external command", () => {
       const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
       const settings: LoadedExternalSettings = {
         path: join(root, "pi-flow-external", "settings.json"),
-        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200, piCapabilitySets: {} },
         diagnostics: [],
       };
       const summaryJson = JSON.stringify({
@@ -391,7 +552,7 @@ describe("/external command", () => {
       const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
       const settings: LoadedExternalSettings = {
         path: join(root, "pi-flow-external", "settings.json"),
-        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200, piCapabilitySets: {} },
         diagnostics: [],
       };
       const externalRuns = {
@@ -451,7 +612,7 @@ describe("/external command", () => {
       const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
       const settings: LoadedExternalSettings = {
         path: join(runsDirectory, "pi-flow-external", "settings.json"),
-        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200 },
+        settings: { version: 3, defaultHarness: "agy", maxConcurrentSubagents: 12, subagentTimeoutMs: 7200000, defaultPermission: "danger", defaultMaxBudgetUsd: null, maxRunRecords: 200, piCapabilitySets: {} },
         diagnostics: [],
       };
       // Real registry/tool — this is a command-route regression through
