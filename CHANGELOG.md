@@ -8,7 +8,10 @@ All notable changes to pi-flow external are documented here.
 
 ### Fixed
 
-- `external_runs` and `external_help` tolerate the exact placeholder pattern reported in #62: a schema-conversion layer downstream of this extension's tool declarations may present optional, mutually exclusive fields as required, and a model forced to fill in the one it means to omit typically sends a blank string or an empty array. `inspect`'s `runId`/`runIds` pair, and `external_help`'s `harness` (invalid alongside `topic: "workflow"`, or naming an unregistered harness), now treat that placeholder as omitted rather than a real conflict — a genuinely non-empty, disagreeing `runId` and `runIds` still fail loudly, unchanged. Scoped narrowly to `inspect` (the one action that already hard-rejected supplying both); `wait` and `cancel` keep their existing, untouched tolerance. This is executor-level input tolerance, not a schema-boundary fix: the downstream conversion layer responsible for the reported required-field promotion remains unidentified, and #62 stays open. See `docs/tool-schema-compatibility.md`.
+- Simplified model-facing run supervision to one `runIds` selector, including singleton output/final inspection and cancellation. Legacy `runId` callers remain supported; conflicting cancellation selectors fail explicitly.
+- Workflow help accepts a supplied harness without blocking, explains its cross-harness scope, and accepts blank filters at the SDK schema boundary.
+- Blank Agent resume arguments no longer conflict with context sharing or trigger resume lookup. Real resume/context conflicts remain errors.
+- Added SDK argument-validation coverage alongside provider-payload tests. Audited workflow source selection: blank sources already normalize away; multiple real sources still fail. Downstream required-field promotion remains unverified, so #62 stays open.
 
 ## [2.4.1-external.0] - 2026-09-23
 

@@ -89,12 +89,13 @@ describe("external_help unknown harness filter", () => {
     });
   });
 
-  it("still rejects an explicit harness filter on the workflow topic regardless of validity", async () => {
+  it("accepts a harness filter on the workflow topic without error, returning workflow help", async () => {
     const agentDir = tempAgentDir();
     await withAgentDir(agentDir, async () => {
       const tool = makeTool();
-      await expect(tool.execute("call-5", { topic: "workflow", harness: "claude" }, undefined, undefined, fakeCtx(agentDir)))
-        .rejects.toThrow(/only valid for roles or permissions/);
+      const result = await tool.execute("call-5", { topic: "workflow", harness: "claude" }, undefined, undefined, fakeCtx(agentDir));
+      expect((result.content[0] as { text: string }).text).toContain("blocking by default");
+      expect(result.details).toEqual({ topic: "workflow", harness: "claude" });
     });
   });
 

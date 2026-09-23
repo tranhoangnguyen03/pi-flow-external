@@ -33,7 +33,7 @@ it("preserves optional selectors in the actual openai-completions provider paylo
   expect(result.errorMessage).toContain(sentinel);
   const payload = captured as { tools: { function: { name: string; strict: boolean; parameters: { required: string[]; properties: Record<string, unknown> } } }[] };
   expect(payload.tools).toHaveLength(2);
-  for (const [index, required, optional] of [[0, "action", ["runId", "runIds"]], [1, "topic", ["harness"]]] as const) {
+  for (const [index, required, optional] of [[0, "action", ["runIds"]], [1, "topic", ["harness"]]] as const) {
     const fn = payload.tools[index]!.function;
     expect(fn.name).toBe(tools[index]!.name);
     expect(fn.strict).toBe(false);

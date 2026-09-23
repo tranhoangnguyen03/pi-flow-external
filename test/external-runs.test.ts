@@ -86,9 +86,12 @@ describe("external_runs", () => {
 
     // A genuinely non-empty runId AND runIds together is a real conflict.
     await expect(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] })).rejects.toThrow(/either runId or runIds/i);
-    // Batch inspect stays summary-only, even for a single-entry runIds — the
-    // one list selector for inspect, singleton included.
-    await expect(execute({ action: "inspect", runIds: [first.runId], view: "output" })).rejects.toThrow(/summary/i);
+    // Single-entry runIds inspect supports output/diagnostics/final views without forcing the caller to switch to runId.
+    const singleOutput = await execute({ action: "inspect", runIds: [first.runId], view: "output" });
+    expect(singleOutput.content[0].text).toBe("answer");
+    expect(singleOutput.details).toMatchObject({ runId: first.runId, view: "output" });
+    // Multi-entry batch inspect stays summary-only.
+    await expect(execute({ action: "inspect", runIds: [first.runId, second.runId], view: "output" })).rejects.toThrow(/summary/i);
     // Ownership is validated for every target before any page returns.
     await expect(execute({ action: "inspect", runIds: [first.runId, "run_unowned"] })).rejects.toThrow(/unknown|unavailable/i);
     await expect(execute({ action: "inspect", runIds: [] })).rejects.toThrow(/1-20/);
@@ -117,9 +120,12 @@ describe("external_runs", () => {
     const emptyRunIds = await execute({ action: "inspect", runId: owned.runId, runIds: [], view: "output" });
     expect(emptyRunIds.details).toMatchObject({ runId: owned.runId, view: "output" });
 
-    // cancel/wait never had this ambiguity and are left untouched: a stray
-    // runId alongside runIds is not newly rejected for them.
-    await expect(execute({ action: "cancel", runId: owned.runId, runIds: [owned.runId] })).resolves.toMatchObject({ details: { status: "terminal" } });
+    // Never guess a cancellation target when both selectors are supplied.
+    await expect(execute({ action: "cancel", runId: owned.runId, runIds: [owned.runId] })).rejects.toThrow(/either runId or runIds/);
+
+    // cancel accepts the unified runIds list selector (singleton) and rejects multi-target cancel.
+    await expect(execute({ action: "cancel", runIds: [owned.runId] })).resolves.toMatchObject({ details: { status: "terminal" } });
+    await expect(execute({ action: "cancel", runIds: [owned.runId, "run_extra"] })).rejects.toThrow(/one run at a time/i);
 
     // Both blank at once still surfaces the batch-empty error, since no
     // target was actually provided either way.

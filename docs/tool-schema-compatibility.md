@@ -87,3 +87,19 @@ tool declarations themselves are unchanged (`required` stays `["action"]`
 and `["topic"]` — see the table above), and the downstream conversion layer
 responsible for the reported required-field promotion remains unidentified.
 Do not read this section as resolving or closing #62.
+
+## Model-facing simplification follow-up
+
+Run supervision now advertises only `runIds`. A singleton supports detailed views
+and cancellation; summary lists retain their batch response shape. Legacy `runId`
+is accepted for programmatic compatibility but is not offered as a competing
+model-facing field. Empty lists validate at the SDK boundary, then actions that
+require targets reject them explicitly. Workflow help accepts a harness and
+explains that workflow syntax is cross-harness. Blank resume arguments normalize
+to absence; nonblank resume/context conflicts still fail. These changes supersede
+the earlier narrow placeholder-only mitigation above.
+
+Audit: Agent role/profile blanks and workflow script/name/scriptPath blanks
+already normalize away. Genuine multiple-source and resume/context choices remain
+validated rather than guessed. This reduces observed traps, not a claim that every
+optional field survives the affected downstream route.
