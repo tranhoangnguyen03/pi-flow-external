@@ -228,24 +228,24 @@ function rolesText(options: ExternalCommandOptions): string {
   return lines.join("\n");
 }
 
-/** Real execution boundary per backend (AGENTS.md): advisory tiers are never presented as enforcement. */
-function backendAuthority(backend: string, permission: string | undefined): string {
+/** Real execution boundary per backend. A role's instructions are intent, not this boundary. */
+function backendAuthority(backend: string, permission: string): string {
   if (backend === "agy") {
-    return "agy runs unsandboxed (--dangerously-skip-permissions); readonly/edit are advisory profile-body instructions, not a boundary. Run only in trusted repositories.";
+    return `agy accepts only autonomous danger (--dangerously-skip-permissions) and rejects ${permission === "danger" ? "readonly and edit" : permission}. The call uses ${permission}. Run only in trusted repositories.`;
   }
   if (backend === "pi") {
-    return `Pi SDK child · host access · curated tools · requested tier ${permission ?? "inherited"}; danger-tier bash is as exposed as on any external CLI.`;
+    return `Pi SDK child · host access · curated tools · call tier ${permission}. The tool list is not an OS sandbox; danger-tier bash is as exposed as on any external CLI. Installed skills load; extensions and prompt templates do not.`;
   }
   if (backend === "claude") {
-    return `Claude headless permission mode · requested tier ${permission ?? "inherited"}; execution lanes (implementer, qa, worker) keep a danger floor so shell authority is not handcuffed.`;
+    return `Claude headless permission mode · call tier ${permission}. readonly and edit deny Bash headlessly. Role names do not raise the tier.`;
   }
   if (backend === "codex") {
-    return `Codex --sandbox axis · requested tier ${permission ?? "inherited"}; never automatically retried by this extension.`;
+    return `Codex --sandbox axis · call tier ${permission}; never automatically retried by this extension.`;
   }
   if (backend === "grok") {
-    return `Grok --sandbox axis (read-only/workspace/off) + bypassPermissions · requested tier ${permission ?? "inherited"}; readonly network-blocking is Linux-only.`;
+    return `Grok --sandbox axis (read-only/workspace/off) + bypassPermissions · call tier ${permission}; readonly network-blocking is Linux-only.`;
   }
-  return `Muse exec approvals bypassed headless · requested tier ${permission ?? "inherited"}; readonly adds --disable-write --disable-shell, danger uses --yolo (also trusts the workspace).`;
+  return `Muse exec approvals bypassed headless · call tier ${permission}; readonly adds --disable-write --disable-shell, danger uses --yolo (also trusts the workspace).`;
 }
 
 function findRoleCandidates(catalog: ExternalCatalog, role: string, harnessNames: readonly string[]): SubagentProfile[] {
@@ -280,8 +280,8 @@ function roleInspectText(options: ExternalCommandOptions, ctx: CommandContextLik
     `Source: ${exact.source ?? "built-in"}`,
     ...(exact.configurationError ? [`Configuration error: ${exact.configurationError}`] : []),
     `Harness: ${exact.harness ?? exact.backend} · backend ${exact.backend}`,
-    `Model: ${exact.model ?? "harness default"} · thinking ${exact.thinking ?? "inherited"} · permission floor ${exact.permission ?? "inherited"}`,
-    backendAuthority(exact.backend === "pi" ? "pi" : exact.backend, exact.permission),
+    `Model: ${exact.model ?? "harness default"} · thinking ${exact.thinking ?? "inherited"} · call permission ${options.settings.settings.defaultPermission} unless the call sets one`,
+    backendAuthority(exact.backend === "pi" ? "pi" : exact.backend, options.settings.settings.defaultPermission),
     "",
     bounded,
   ].join("\n");

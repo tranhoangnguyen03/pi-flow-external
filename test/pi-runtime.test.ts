@@ -425,11 +425,7 @@ describe("pi runtime curated tool tiers", () => {
       model,
       permission,
       ctx: { cwd, modelRegistry } as ExtensionContext,
-      // Deliberately not named *-worker/*-implementer/etc.: those match the
-      // execution-role name convention and would trigger the edit->danger
-      // floor (resolveEffectivePermissionTier), which is tested separately in
-      // permissions.test.ts and would defeat this suite's tool-tier checks.
-      profile: { name: "pi-test-reviewer", description: "x", backend: "pi", harness: "pi-test", permission: "readonly", ...profileOverrides },
+      profile: { name: "pi-test-reviewer", description: "x", backend: "pi", harness: "pi-test", ...profileOverrides },
     }));
     return { result, childContext, session };
   }
@@ -602,6 +598,78 @@ describe("Agent tool reaches a synthesized pi role via legacy exact subagent_typ
     expect(result.details.status).toBe("done");
     expect(result.details.result).toBe("exact selector worked");
     disposeSession(session);
+  });
+});
+
+describe("pi child resource preset", () => {
+  let agentDir = "";
+  let cwd = "";
+  const { createSession } = setupPiSubagentTestHarness((state) => {
+    agentDir = state.agentDir;
+    cwd = state.cwd;
+  });
+
+  function lastUserText(context: Context): string {
+    const message = [...context.messages].reverse().find((item) => item.role === "user");
+    if (!message) return "";
+    return typeof message.content === "string"
+      ? message.content
+      : message.content.filter((part): part is { type: "text"; text: string } => part.type === "text").map((part) => part.text).join("\n");
+  }
+
+  it("loads an installed skill and does not expand prompt templates", async () => {
+    const skillDir = join(agentDir, "skills", "audit");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: audit\ndescription: Audit skill.\n---\n\nAUDIT_NONCE_91\n");
+    mkdirSync(join(agentDir, "prompts"), { recursive: true });
+    writeFileSync(join(agentDir, "prompts", "greet.md"), "---\ndescription: Greet.\n---\n\nHello $1!\n");
+    const { model, modelRegistry, registration } = await createSession();
+    let captured: Context | undefined;
+    registration.setResponses([(context: Context) => {
+      captured = context;
+      return fauxAssistantMessage("done");
+    }]);
+    const result = await spawnSubagent(baseParams({
+      model,
+      ctx: { cwd, modelRegistry } as ExtensionContext,
+      prompt: "/greet World",
+      projectTrusted: false,
+    }));
+    expect((result.details as SubagentToolDetails).status).toBe("done");
+    expect(captured?.systemPrompt ?? "").toContain("Audit skill.");
+    expect(captured?.systemPrompt ?? "").not.toContain("AUDIT_NONCE_91");
+    expect(lastUserText(captured!)).toBe("/greet World");
+  });
+
+  it("loads a project skill only when the caller marks the project trusted", async () => {
+    const skillDir = join(cwd, ".pi", "skills", "localaudit");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: localaudit\ndescription: Local audit skill.\n---\n\nLOCAL_NONCE_44\n");
+    const untrusted = await createSession();
+    let hidden: Context | undefined;
+    untrusted.registration.setResponses([(context: Context) => {
+      hidden = context;
+      return fauxAssistantMessage("done");
+    }]);
+    await spawnSubagent(baseParams({
+      model: untrusted.model,
+      ctx: { cwd, modelRegistry: untrusted.modelRegistry } as ExtensionContext,
+      projectTrusted: false,
+    }));
+    expect(hidden?.systemPrompt ?? "").not.toContain("Local audit skill.");
+
+    const trusted = await createSession();
+    let shown: Context | undefined;
+    trusted.registration.setResponses([(context: Context) => {
+      shown = context;
+      return fauxAssistantMessage("done");
+    }]);
+    await spawnSubagent(baseParams({
+      model: trusted.model,
+      ctx: { cwd, modelRegistry: trusted.modelRegistry } as ExtensionContext,
+      projectTrusted: true,
+    }));
+    expect(shown?.systemPrompt ?? "").toContain("Local audit skill.");
   });
 });
 

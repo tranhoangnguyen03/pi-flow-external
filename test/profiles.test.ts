@@ -390,17 +390,16 @@ describe("named pi harness resolution", () => {
     expect(profile.harness).toBe("pi-deepseek");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
-    expect(profile.permission).toBe("readonly");
+    expect(profile.systemPrompt).toContain("Do not modify files");
   });
 
-  it("prefers an on-disk override for body/permission while still inheriting model/thinking from the registry", () => {
+  it("prefers an on-disk override for the body while still inheriting model/thinking from the registry", () => {
     const onDisk: SubagentProfile = {
       name: "pi-deepseek-reviewer",
       backend: "pi",
       harness: "pi-deepseek",
       description: "Custom reviewer.",
       systemPrompt: "Custom body.",
-      permission: "danger",
     };
     const profiles = new Map([["pi-deepseek-reviewer", onDisk]]);
     const profile = resolveExternalProfile(profiles, { role: "reviewer", harness: "pi-deepseek" }, "agy", {
@@ -408,7 +407,6 @@ describe("named pi harness resolution", () => {
       harnessConfigs,
     });
     expect(profile.systemPrompt).toBe("Custom body.");
-    expect(profile.permission).toBe("danger");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
   });

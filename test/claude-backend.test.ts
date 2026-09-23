@@ -315,7 +315,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     disposeSession(session);
   });
 
-  it("elevates claude execution profiles to danger floor when called with permission: edit", async () => {
+  it("honors an explicit edit request on claude instead of raising it by role name", async () => {
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude-elevate");
     const argsPath = join(tempDir, "claude-elevate-args.json");
@@ -325,7 +325,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 description: General work through Claude Code.
 backend: claude
 model: sonnet
-permission: danger
 ---
 
 Claude worker prompt.`);
@@ -360,17 +359,11 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const claudeArgs = claudeRun.args;
-    // Must NOT be launched with acceptEdits (which would auto-deny Bash headlessly)
-    expect(claudeArgs).not.toContain("acceptEdits");
-    if (process.geteuid?.() === 0) {
-      expect(claudeArgs).toContain("--permission-mode");
-      expect(claudeArgs).toContain("auto");
-    } else {
-      expect(claudeArgs).toContain("--dangerously-skip-permissions");
-    }
-    // The elevation must be disclosed to the caller in the parent-facing text.
+    expect(claudeArgs).toContain("--permission-mode");
+    expect(claudeArgs).toContain("acceptEdits");
+    expect(claudeArgs).not.toContain("--dangerously-skip-permissions");
     const rootMessages = JSON.stringify(rootContinuationContext?.messages);
-    expect(rootMessages).toMatch(/permission elevated edit→danger/);
+    expect(rootMessages).not.toMatch(/permission elevated/);
 
     disposeSession(session);
   });

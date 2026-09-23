@@ -2,7 +2,7 @@
 
 Implementation branch: `feat/configuration-redesign`; proposed release: `2.6.0-external.0` (product-owner decision to stay on v2; breaking command/configuration changes remain disclosed).
 
-PR #59 subsequently merged into main at `19d3d2d`. The checks below predate that merge and do not establish compatibility with its shared Pi roles/capability sets. Integration and fresh verification are required before this PR is merge-ready.
+PR #59 subsequently merged into main at `19d3d2d`. The checks below predate that merge and the later decision to drop capability sets, share every role across harnesses, and stop using roles as permission authority. Fresh verification after that integration is recorded with the implementation, not by the table below.
 
 ## Automated verification
 

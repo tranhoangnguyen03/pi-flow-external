@@ -160,7 +160,7 @@ export interface WorkflowLimits {
 /**
  * The execution-identity-relevant slice of a resolved SubagentProfile, used
  * to widen the workflow replay fingerprint beyond the profile *name* so that
- * editing a profile's model/thinking/body/tools/permission/budget (directly,
+ * editing a profile's model/thinking/body/tools/budget (directly,
  * or via its named pi harness's registered config) invalidates a stale cached
  * fingerprint instead of silently matching it.
  */
@@ -171,7 +171,6 @@ export interface WorkflowSubagentDescriptor {
   thinking?: string;
   systemPrompt?: string;
   tools?: string[];
-  permission?: import("../types.ts").PermissionTier;
   maxBudgetUsd?: number;
 }
 

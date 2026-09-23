@@ -20,7 +20,6 @@ import {
   filterExternalAgentProfiles,
   getSubagentProfiles,
   loadExternalCatalog,
-  mergeSynthesizedPiProfiles,
   resolveExternalProfile,
   selectorHarness,
 } from "./profiles.ts";
@@ -84,7 +83,7 @@ const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier request. Effective permissions take the higher of the profile floor and this request (readonly < edit < danger); a request cannot reduce the profile's authority. Omit to use the profile floor (recommended). Enforcement varies by backend: codex and grok use their --sandbox axis, claude denies shell commands below danger, muse disables approval/write/shell flags per tier (danger additionally trusts the workspace via --yolo), and agy always runs unsandboxed (--dangerously-skip-permissions) — readonly/edit on agy are advisory instructions only, not a boundary. When in doubt, omit.",
+        "Optional permission tier. Omit to use the global defaultPermission (danger unless changed). A role does not grant or limit this. codex and grok map it to --sandbox, claude maps it to a headless permission mode, muse maps it to approval/sandbox flags, and pi maps it to a curated tool list (not an OS sandbox). Antigravity accepts only danger; readonly and edit are rejected.",
     }),
   ),
   max_budget_usd: Type.Optional(
@@ -112,7 +111,7 @@ const agentToolParameters = Type.Object({
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
-type AgentRenderProfile = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
+type AgentRenderProfile = Pick<SubagentProfile, "name" | "backend" | "description">;
 
 interface AgentRenderState {
   selectionKey?: string;
@@ -526,6 +525,13 @@ function createAgentTool(
           maxBudgetUsd,
           resumeRunId: resume,
           executionStartedAt: run.progress.executionStartedAt,
+          projectTrusted: (() => {
+            try {
+              return ctx.isProjectTrusted?.() ?? false;
+            } catch {
+              return false;
+            }
+          })(),
           onProgress: (partial) => {
             const details = partial.details as SubagentToolDetails;
             if (details.progress) run.progress = details.progress;
@@ -612,7 +618,7 @@ function createAgentTool(
         }
         state.selectionKey = selectionKey;
         state.profile = profile
-          ? { name: profile.name, backend: profile.backend, description: profile.description, permission: profile.permission }
+          ? { name: profile.name, backend: profile.backend, description: profile.description }
           : undefined;
       }
       const profile = state.profile;
@@ -624,12 +630,9 @@ function createAgentTool(
         profile,
         options.getDefaultPermission(),
       );
-      const elevatedNote = requestedTier && requestedTier !== tier
-        ? theme.fg("muted", ` (${requestedTier}→${tier} floor)`)
-        : "";
       const tierLabel = permissionLabel(resolvePermission(tier, backend ?? "claude"));
       const lines = [
-        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}${elevatedNote}`,
+        `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`,
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
         profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
         formatSharedContext(args.context) ? `${theme.fg("muted", "Context")} ${formatSharedContext(args.context)}` : "",

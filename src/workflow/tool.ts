@@ -53,7 +53,6 @@ function toDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
     thinking: profile.thinking,
     systemPrompt: profile.systemPrompt,
     tools: profile.tools,
-    permission: profile.permission,
     maxBudgetUsd: profile.maxBudgetUsd,
   };
 }
@@ -194,6 +193,7 @@ export function createWorkflowTool(
       const executeWorkflow = async (runSignal: AbortSignal) => {
         let agentSeq = 0;
         const runAgent: WorkflowAgentRunner = async (call, agentSignal) => {
+        try {
         const profile = profiles.get(call.subagentType);
         if (profile?.configurationError) throw new Error(profile.configurationError);
         if (!profile) {
@@ -243,6 +243,13 @@ export function createWorkflowTool(
           progressEnabled: true,
           permission: call.permission,
           defaultPermission,
+          projectTrusted: (() => {
+            try {
+              return ctx.isProjectTrusted?.() ?? false;
+            } catch {
+              return false;
+            }
+          })(),
           maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
           resumeRunId: call.resumeRunId,
           executionStartedAt: call.executionStartedAt,
@@ -295,6 +302,21 @@ export function createWorkflowTool(
           return capture.value;
         }
         return resultDetails.result ?? "";
+        } catch (error) {
+          if (call.runRecord) {
+            const message = error instanceof Error ? error.message : String(error);
+            await call.runRecord.finish({
+              backend: profiles.get(call.subagentType)?.backend,
+              profile: call.subagentType,
+              description: call.label,
+              status: agentSignal?.aborted ? "aborted" : "error",
+              error: message,
+              queued: true,
+              backendStarted: false,
+            });
+          }
+          throw error;
+        }
         };
 
       // Spinner animation is driven here, by the runtime, not by a UI-render

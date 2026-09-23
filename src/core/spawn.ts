@@ -35,7 +35,7 @@ import type {
   ThinkingClamp,
 } from "../types.ts";
 import { selectorHarness } from "../profiles.ts";
-import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
+import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier, unsupportedPermissionReason } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
@@ -101,6 +101,12 @@ export interface SpawnSubagentParams {
    * reaches the terminal summary and the live progress snapshot.
    */
   executionStartedAt?: number;
+  /**
+   * Real project-trust decision (ctx.isProjectTrusted()). Pi children load
+   * installed skills through the SDK; project-scope skills are visible only
+   * when this is true. Omitted means untrusted.
+   */
+  projectTrusted?: boolean;
 }
 
 interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
@@ -249,6 +255,31 @@ function rewriteTimeoutResult(
   });
 }
 
+/**
+ * Pi child resources: the SDK's minimal surface plus installed skills.
+ * Extensions, prompt templates, and themes stay out. Project skills load only
+ * when projectTrusted is true. Call reload() after this returns.
+ */
+export function createPiChildResourceLoader(options: {
+  cwd: string;
+  agentDir: string;
+  settingsManager: SettingsManager;
+  projectTrusted: boolean;
+  appendSystemPrompt?: string[];
+}): DefaultResourceLoader {
+  options.settingsManager.setProjectTrusted(options.projectTrusted);
+  const extra = options.appendSystemPrompt ?? [];
+  return new DefaultResourceLoader({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    settingsManager: options.settingsManager,
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    appendSystemPromptOverride: (base) => [...base, ...extra],
+  });
+}
+
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
   const startedAt = Date.now();
   let backendEventCount = 0;
@@ -275,6 +306,31 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           ...(params.resumeRunId ? { resumeRequested: params.resumeRunId } : {}),
         },
       });
+  const unsupported = unsupportedPermissionReason(effectiveTier, params.profile.backend);
+  if (unsupported) {
+    const result = textResult(`Subagent "${params.description}" (${params.profile.name}) failed: ${unsupported}`, {
+      description: params.description,
+      subagentType: params.profile.name,
+      backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
+      status: "error",
+      error: unsupported,
+    });
+    if (record) {
+      await record.finish({
+        backend: params.profile.backend,
+        profile: params.profile.name,
+        description: params.description,
+        status: "error",
+        error: unsupported,
+        queued: true,
+        backendStarted: false,
+        durationMs: Date.now() - startedAt,
+      });
+      attachRunRecordIdentity(result, record);
+    }
+    return result;
+  }
   let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
   if (params.resumeRunId) {
     const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
@@ -287,7 +343,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         harness: selectorHarness(params.profile),
         status: "error",
         error,
-      });
+          });
       if (record) {
         await record.finish({
           backend: params.profile.backend,
@@ -298,7 +354,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           queued: true,
           backendStarted: false,
           durationMs: Date.now() - startedAt,
-        });
+              });
         attachRunRecordIdentity(result, record);
       }
       return result;
@@ -416,7 +472,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         ...(details.retryOf ? { retryOf: details.retryOf } : {}),
         ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
         ...(details.thinkingClamped ? { thinkingClamped: details.thinkingClamped } : {}),
-      });
+          });
       attachRunRecord(
         result,
         record,
@@ -449,7 +505,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       nestedActivitySeen,
       nestedTimeoutExtended: timeout.wasExtended(),
       effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
-    });
+      });
     throw error;
   } finally {
     timeout.cleanup();
@@ -703,22 +759,12 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
   const appendPrompts = [
     profile.systemPrompt,
   ].filter((value): value is string => Boolean(value));
-  const resourceLoader = new DefaultResourceLoader({
+  const resourceLoader = createPiChildResourceLoader({
     cwd,
     agentDir,
     settingsManager,
-    // Curated, builtins-only child (design §6): no project/user extensions,
-    // skills, prompt templates, or themes load into a pi child at all, so the
-    // "builtins only" tool-surface claim is mechanically true rather than a
-    // token gesture — a readonly/edit/danger tier bounds real tool names, not
-    // a subset of an otherwise-unbounded extension surface. CHILD_EXCLUDED_TOOLS
-    // stays in excludeTools below purely as defense-in-depth documentation of
-    // intent: it is provably unreachable once no extensions load at all.
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    appendSystemPromptOverride: (base) => [...base, ...appendPrompts],
+    projectTrusted: params.projectTrusted ?? false,
+    appendSystemPrompt: appendPrompts,
   });
 
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -740,11 +786,17 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
+    // minimal + skills: no extensions, prompt templates, or themes. Installed
+    // skills load through the SDK. Project skills follow projectTrusted, which
+    // createPiChildResourceLoader applied before this reload. reload() preserves
+    // that flag and would discard an earlier settings override, so retry stays
+    // disabled after reload.
     await resourceLoader.reload();
-    // Third abort guard: resourceLoader.reload() does real file I/O (context
-    // files, settings) and can be slow; check again before the heavier session
-    // construction so an abort during reload does not proceed to spawn a
-    // session that would immediately need to be torn down anyway.
+    // Third abort guard: the resource loading above does real file I/O
+    // (context files, settings, and skill/prompt-template discovery) and can
+    // be slow; check again before the heavier session construction so an
+    // abort during reload does not proceed to spawn a session that would
+    // immediately need to be torn down anyway.
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }

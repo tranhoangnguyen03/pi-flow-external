@@ -42,12 +42,12 @@ function isProjectTrusted(ctx: ExtensionContext): boolean {
 }
 
 const PERMISSION_HELP_BY_BACKEND: Record<ExternalHarness | "pi", string> = {
-  agy: "agy: every run uses --dangerously-skip-permissions and is unsandboxed; readonly/edit are advisory profile instructions, not an enforced boundary.",
-  claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash; execution roles requested at edit are elevated to danger.",
+  agy: "agy: autonomous only. Every accepted run uses --dangerously-skip-permissions and is unsandboxed. readonly and edit are rejected instead of being broadened to that mode.",
+  claude: "claude: readonly uses --permission-mode plan, edit uses --permission-mode acceptEdits, and danger uses --dangerously-skip-permissions (--permission-mode auto under effective UID 0). Headless readonly/edit deny Bash. The requested tier is used as-is; role names do not raise it.",
   codex: "codex: readonly, edit, and danger map to read-only, workspace-write, and danger-full-access sandboxes. This governs model-generated shell commands, not MCP/plugins/hooks.",
-  grok: "grok: readonly uses --sandbox read-only, edit uses --sandbox workspace, and danger uses --sandbox off, always alongside --permission-mode bypassPermissions. Enforced by a kernel sandbox, but network blocking is Linux-only; edit limits writes to the workspace. No execution-lane danger floor, since edit already permits shell.",
-  muse: "muse: readonly uses --disable-approval --disable-write --disable-shell (approval, non-shell writes, and shell execution all disabled), edit uses --disable-approval alone (the sandbox stays enabled by default; writes and shell remain available within it), and danger uses --yolo, which disables approval and the sandbox and additionally trusts this workspace (loads its skills/rules) for this run — a broader grant than an unsandboxed run alone. No execution-lane danger floor, since edit already permits shell within the sandbox. Native provider retries (up to 10 attempts) are disclosed via activity narration, not performed by this extension.",
-  pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool set (read/bash/edit/write/grep/find/ls) — no project extensions, skills, or MCP tools load into the child. Execution roles requested at edit are elevated to danger, same reasoning as claude. Retry is disabled per child regardless of Pi's own settings, honoring this extension's no-auto-retry contract.",
+  grok: "grok: readonly uses --sandbox read-only, edit uses --sandbox workspace, and danger uses --sandbox off, always alongside --permission-mode bypassPermissions. Enforced by a kernel sandbox, but network blocking is Linux-only; edit limits writes to the workspace.",
+  muse: "muse: readonly uses --disable-approval --disable-write --disable-shell (approval, non-shell writes, and shell execution all disabled), edit uses --disable-approval alone (the sandbox stays enabled by default; writes and shell remain available within it), and danger uses --yolo, which disables approval and the sandbox and additionally trusts this workspace (loads its skills/rules) for this run — a broader grant than an unsandboxed run alone. Native provider retries (up to 10 attempts) are disclosed via activity narration, not performed by this extension.",
+  pi: "pi-* (named Pi harness configs): run in-process, not as a CLI. Tiers gate a curated built-in tool list (read/bash/edit/write/grep/find/ls). That list is not an OS sandbox; danger-tier bash has host access. Installed skills load through the SDK. Extensions, prompt templates, and themes do not. Project skills load only when the project is trusted. Retry is disabled per child regardless of Pi's own settings.",
 };
 
 /** Resolve a requested, already-validated harness name to its permission-semantics backend. */
@@ -65,7 +65,7 @@ function permissionHelp(harness: string | undefined, configuredPiHarnesses: Read
     ? [permissionHelpBackend(harness, configuredPiHarnesses)]
     : [...EXTERNAL_HARNESSES, ...(configuredPiHarnesses.size ? (["pi"] as const) : [])];
   return [
-    "External CLIs and pi-* harnesses run with host access; use them only in trusted repositories. A role's permission is a floor (or the global default when absent); a call can raise it, never lower it. Backend execution-lane floors also apply.",
+    "External CLIs and pi-* harnesses run with host access; use them only in trusted repositories. Permission is the call's explicit tier, otherwise the global defaultPermission (danger unless changed). A role describes intent and does not change that tier. Antigravity rejects readonly and edit.",
     ...backends.map((name) => PERMISSION_HELP_BY_BACKEND[name]),
     "Failed or aborted runs are not silently retried. Only agy may retry once for an infrastructure-classified auth, eligibility, or network failure, and the receipt discloses it.",
   ].join("\n\n");

@@ -32,6 +32,5 @@ export function buildDefaultProfile(name: string): SubagentProfile | undefined {
     description: definition.description.replaceAll("${backendLabel}", BACKEND_LABELS[backend]),
     backend,
     systemPrompt: definition.body,
-    permission: definition.permission,
   };
 }

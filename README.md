@@ -62,14 +62,14 @@ External agents use the effective permission tier and each harness's native mech
 
 - Claude: `--permission-mode plan`, `--permission-mode acceptEdits`, or `--dangerously-skip-permissions`
 - Codex: `--sandbox read-only`, `workspace-write`, or `danger-full-access`
-- Antigravity: always `--dangerously-skip-permissions`
+- Antigravity: only `--dangerously-skip-permissions`. `readonly` and `edit` are rejected.
 - Grok: `--sandbox read-only`, `workspace`, or `off`, always alongside `--permission-mode bypassPermissions` — bypass only skips the interactive approval prompt; the kernel sandbox remains the enforced boundary. `readonly`'s network-blocking guarantee is Linux-only (a no-op on macOS), and sandbox startup can fail closed on some macOS hosts (for example when `/var/run/docker.sock` resolves to a symlink) rather than silently running unsandboxed.
 - Muse: every tier passes `--disable-approval` (approval and Muse's own sandbox are ON by default, and headless runs must not hang on an interactive prompt); `readonly` additionally passes `--disable-write --disable-shell`; `edit` leaves the sandbox enabled with only approval bypassed; `danger` uses `--yolo`, which disables approval and the sandbox and additionally trusts the workspace for this run (loads its skills/rules) — a broader grant than an unsandboxed run alone.
-- Named Pi harnesses: a curated `tools:` allow-list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`
+- Named Pi harnesses: a curated tool list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`. That list is not an OS sandbox. Installed skills load. Extensions, prompt templates, and themes do not.
 
-Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Grok and Muse need no such floor: Grok's `edit` tier (`--sandbox workspace`) and Muse's `edit` tier (sandbox left enabled, only approval bypassed) already permit shell execution, sandboxed to the workspace. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
+The effective tier is the call's `permission`, or settings `defaultPermission` when the call omits it. The default is `danger`. A role does not change the tier. Claude refuses bypass mode when its effective UID is `0`; danger then uses `--permission-mode auto`. Claude `edit` denies Bash headlessly. Pass `danger` on the call when the task needs a shell. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
-The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger and all Agy runs, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and shows `external host access` while workflow work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
+The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and `external host access` while workflow work is active. These labels disclose actual execution authority. A read-only instruction in a role is intent, not that authority.
 
 ## Breaking upgrade
 
@@ -90,7 +90,7 @@ Settings are version 4. This v2 minor release includes breaking configuration an
 Conversion runs once:
 
 1. Combine valid runtime settings and named Pi harness registrations into `settings.json` version 4.
-2. Copy customized external profiles into `pi-flow-external/overrides/` as exact overrides. Unchanged generated content is recognized conservatively. Uncertain valid external content is kept as an override.
+2. Copy customized external profiles into `pi-flow-external/overrides/` as exact overrides, dropping obsolete `permission` and `capabilitySet` fields. A legacy `subagents/pi-<role>.md` template with `harness: "pi-*"` becomes `roles/<role>.md` for every harness. `piCapabilitySets` is not copied. Unchanged generated content is recognized conservatively. Uncertain valid external content is kept as an override.
 3. Record seeded identities you deleted in `disabledProfiles`, using the historical seed cohorts. Those identities stay disabled.
 4. Leave every original file in place as the recovery copy.
 5. Validate before activation. Conflicting destinations or malformed inputs stop with a concrete diagnostic. Copied overrides are installed before version 4 is activated. Until that activation, staged copies are not live catalog inputs. Retrying an interrupted conversion accepts identical copies and rejects a destination whose contents differ.
@@ -102,7 +102,6 @@ A shared role is one file for every harness. `roles/reviewer.md` replaces the bu
 ```md
 ---
 description: Review security-sensitive changes and report actionable findings.
-permission: readonly
 ---
 
 Review the supplied changes without editing files. Prioritize exploitable
@@ -117,7 +116,6 @@ description: Claude-specific review instructions.
 backend: claude
 model: claude-sonnet-5
 thinking: high
-permission: readonly
 ---
 
 Review the supplied changes without editing files. Apply the Claude-only notes in this body.
@@ -136,6 +134,7 @@ It lists the exact candidate paths and whether customized content was copied. No
 | Legacy seeded profiles | The exact 30 `<agy\|claude\|codex\|grok\|muse>-<explorer\|planner\|implementer\|reviewer\|qa\|worker>.md` names under the old `subagents/` directory |
 | Legacy custom CLI profiles | Harness-prefixed Markdown files declaring the matching external backend |
 | Legacy named Pi profiles | `pi-<label>-<role>.md` declaring `backend: pi` and the matching harness, identified from the file |
+| Legacy shared Pi templates | `subagents/pi-<role>.md` declaring `harness: "pi-*"`. Conversion already copied these into `roles/<role>.md` |
 | Seed markers | `.pi-flow-defaults-seeded-v1`, `.pi-flow-defaults-seeded-v2`, and `.pi-flow-defaults-seeded-v3` |
 | Old harness registry | The exact `pi-flow-external/harnesses.json` path |
 
@@ -181,7 +180,7 @@ All user commands use the `/external` namespace:
 | `/external harness create` | Register one named Pi harness. No role interview |
 | `/external roles` | Six built-ins plus user roles, with restrictions and overrides. The list is not the role × harness product |
 | `/external role create` | Author one reusable role |
-| `/external role inspect <role> [harness]` | Effective instructions, source, model, permission floor, and actual backend authority |
+| `/external role inspect <role> [harness]` | Effective instructions, source, model, and the backend's real authority for the default permission |
 | `/external role override <role> <harness>` | Materialize one intentional full override |
 | `/external [danger]purge-old-files` | List and delete obsolete extension files. Secondary maintenance; the brackets are literal |
 | `/external workflows` | List saved workflows |
@@ -229,23 +228,22 @@ At each direct call the extension loads one catalog snapshot. A workflow freezes
 
 An invalid higher-priority override blocks that selection. An unrelated invalid file is reported and does not take a different role offline. Invalid settings JSON, or a settings version this release does not support, blocks delegation. `/external settings`, `/external settings convert`, and `/external role inspect` remain available. The next invocation reads settings, roles, and overrides from disk. A workflow that has already started keeps the snapshot it froze at start. A change to `maxConcurrentSubagents` waits until no subagent is active and none are queued.
 
-Stable identities stay `<harness>-<role>`. Receipts and workflow descriptors use that identity, or the exact legacy `subagent_type` name when that was the selector. Permission floors are unchanged, including each backend's execution-lane floor.
+Stable identities stay `<harness>-<role>`. Receipts and workflow descriptors use that identity, or the exact legacy `subagent_type` name when that was the selector. Permission is the call, or `defaultPermission`. It is not a role field.
 
-Names may contain lowercase letters, numbers, and hyphens. A role `description` is the user-visible reason for selection, so keep it concise. Instructions become the external agent's system instructions. Shared role files accept `description` and `permission` only. `backend`, `model`, and `thinking` on a shared role are rejected with a diagnostic.
+Names may contain lowercase letters, numbers, and hyphens. A role `description` is the user-visible reason for selection, so keep it concise. Instructions become the external agent's system instructions. Shared role files accept `description` only. `permission`, `capabilitySet`, `backend`, `model`, and `thinking` on a shared role are rejected with a diagnostic.
 
 `roles/security-reviewer.md` works with any harness, with no backend prefix:
 
 ```md
 ---
 description: Review security-sensitive changes and report actionable findings.
-permission: readonly
 ---
 
 Review the supplied changes without editing files. Prioritize exploitable
 issues, cite locations, and distinguish verified findings from speculation.
 ```
 
-Role instructions do not erase harness differences. `agy` stays unsandboxed. A CLI harness does not gain a named Pi harness's curated tool list.
+Role instructions do not erase harness differences. Antigravity accepts only autonomous danger. A CLI harness does not gain a named Pi harness's curated tool list. That list is not an OS sandbox.
 
 ### Exact overrides
 
@@ -257,7 +255,6 @@ description: Repository exploration through Claude Code.
 backend: claude
 model: claude-sonnet-5
 thinking: high
-permission: readonly
 ---
 
 Explore the repository read-only. Identify architecture, entry points, tests, configuration, risks, and recommended first-read files.
@@ -330,7 +327,7 @@ A custom role is the one shared file from `/external role create`. Use `/externa
 
 Settings writes use a private staged file and a same-directory replacement, and they preserve unrelated fields. The extension refuses to overwrite a malformed or newer-version file. Replacement avoids a torn write. Concurrent sessions can still overwrite each other's update: there is no inter-process lock. A harness smoke test finishes before that short commit. The writer then rereads and checks for a duplicate or a conflict.
 
-**v1 scope, by design:** a pi child's entire tool surface is the SDK's own builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit` tiers) — no project/user extensions, skills, prompt templates, or themes load into it. This bounds which tool *names* exist; it does not make `bash` at `danger` tier any less exposed than on an external CLI. Retry is disabled per pi child (in-memory, never touching your real Pi settings) so a transient provider error fails immediately. Pi children cannot resume a prior conversation and have no enforced budget cap. Trusted extensions, MCP, skills, resumable sessions, and budget controls remain [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43). Shared roles are the configuration in this release.
+**v1 scope, by design:** a pi child's tools are the SDK builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit`). Installed skills load through the SDK. Extensions, prompt templates, and themes do not. The tool list is not an OS sandbox, and `bash` at `danger` is host access. Retry is disabled per pi child (in-memory, never touching your real Pi settings). Pi children cannot resume a prior conversation and have no enforced budget cap. Trusted extensions, MCP, resumable sessions, and budget controls remain [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
 
 ## Agent usage
 
@@ -503,11 +500,11 @@ Every child selects from one parent snapshot and effective settings frozen at wo
 
 Every `Agent` call and workflow `agent()` child also accepts these optional run parameters (`context` is covered under agent usage above):
 
-- `permission`: `readonly` | `edit` | `danger` (default `danger`). Tiers map onto native harness mechanisms — Claude permission modes and Codex's single-axis `--sandbox`. Antigravity (`agy`) is different: its headless sandbox denies even read-only tools like `read_url_content`, and its only unsandboxed mode is `--dangerously-skip-permissions`, so **every agy run is unsandboxed** and `readonly`/`edit` on agy are advisory instructions in the role or override body, not a boundary. Getting out of the model's way is deliberate; every agy run discloses as `unsandboxed external CLI` rather than claiming a read-only boundary it cannot keep. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
+- `permission`: `readonly` | `edit` | `danger`. Omit it to use settings `defaultPermission` (`danger` unless changed). A role or override `permission` field is obsolete and is rejected. Tiers map onto native harness mechanisms where the backend can enforce them. Antigravity accepts only `danger` (`--dangerously-skip-permissions`) and rejects `readonly` and `edit`. Claude `readonly`/`edit` auto-deny shell commands headlessly; denials are surfaced in the receipt. A named Pi harness restricts tool names. That is not an OS sandbox.
 - `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag. Codex estimates cost from a price map and agy does not report cost at all; Grok reports its own native cost (`total_cost_usd`) but exposes no enforcement flag; Muse has never been observed to report cost at all. For codex, agy, grok, and muse alike, the cap is recorded and marked `budget unenforceable` instead of pretended.
 - `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`, Grok `--resume`, Muse `exec --session-id`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you. Muse's `--session-id` resume was verified directly: two independent `muse exec` processes sharing the same `--session-id` reported the same session, and the second recalled a fact only told to the first. `resume` cannot be combined with `context` sharing — continue an existing child, or start a new one with a snapshot.
 
-Resolution order for tiers and budgets: call > resolved role or exact-override frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
+Resolution order for the tier is call `permission`, then settings `defaultPermission`. Budget order is call `max_budget_usd`, then an exact override's `max_budget_usd`, then the settings default. Conversion of a pre-v4 install drops `permission` and `capabilitySet` from copied overrides, turns `harness: "pi-*"` templates into ordinary roles, and does not copy `piCapabilitySets`.
 
 ## Settings and runtime limits
 

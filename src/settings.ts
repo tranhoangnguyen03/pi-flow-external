@@ -90,6 +90,10 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
     diagnostics.push("Settings require version 4. Run /external settings convert for an older installation.");
   }
   for (const key of Object.keys(record)) {
+    if (key === "piCapabilitySets") {
+      diagnostics.push('Obsolete setting "piCapabilitySets" is ignored. Named capability sets are not used; Pi children load installed skills through the SDK.');
+      continue;
+    }
     if (!KNOWN_SETTING_KEYS.includes(key)) {
       diagnostics.push(`Unknown setting "${key}".`);
     }
@@ -152,7 +156,7 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
   try {
     const raw = JSON.parse(readFileSync(path, "utf8"));
     const parsed = parseSettings(raw);
-    return { path, ...parsed, blocked: parsed.diagnostics.some(d => !d.startsWith("Unknown setting") && !d.startsWith("Invalid harness")), upgradeRequired: [1, 2, 3].includes(raw?.version) };
+    return { path, ...parsed, blocked: parsed.diagnostics.some(d => !d.startsWith("Unknown setting") && !d.startsWith("Obsolete setting") && !d.startsWith("Invalid harness")), upgradeRequired: [1, 2, 3].includes(raw?.version) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {
@@ -162,7 +166,7 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
           if (!name.endsWith(".md")) return false;
           try {
             const { frontmatter } = parseFrontmatter<Record<string, unknown>>(readFileSync(join(legacyDir, name), "utf8"));
-            return EXTERNAL_HARNESSES.includes(frontmatter.backend as ExternalHarness) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && name.startsWith(`${frontmatter.harness}-`));
+            return EXTERNAL_HARNESSES.includes(frontmatter.backend as ExternalHarness) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && (frontmatter.harness === "pi-*" || name.startsWith(`${frontmatter.harness}-`)));
           } catch { return /^(agy|claude|codex|grok|muse)-/.test(name); }
         }));
         return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? ["Legacy configuration found. Run /external settings convert."] : [] };
@@ -256,9 +260,13 @@ function parseProjectSettings(cwd: string): {
     return { record: undefined, path, diagnostics: [`Project settings ${path} must be a JSON object.`] };
   }
   const record = parsed as Record<string, unknown>;
-  const diagnostics = Object.keys(record)
-    .filter((key) => key !== "defaultHarness")
-    .map((key) => `Unknown project setting "${key}". Only defaultHarness is supported in project settings.`);
+  const diagnostics = Object.keys(record).flatMap((key) => {
+    if (key === "defaultHarness") return [];
+    if (key === "piCapabilitySets") {
+      return [`Obsolete project setting "piCapabilitySets" at ${path} is ignored. Named capability sets are not used.`];
+    }
+    return [`Unknown project setting "${key}". Only defaultHarness is supported in project settings.`];
+  });
   return { record, path, diagnostics };
 }
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { SessionManager, Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -337,14 +337,13 @@ describe("runWorkflow", () => {
       return events[0].fingerprint as string;
     };
 
-    const base = { backend: "pi", harness: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "high", systemPrompt: "do x", tools: ["read"], permission: "readonly", maxBudgetUsd: 1 };
+    const base = { backend: "pi", harness: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "high", systemPrompt: "do x", tools: ["read"], maxBudgetUsd: 1 };
     const baseFingerprint = await runOnce(base);
     expect(await runOnce({ ...base })).toBe(baseFingerprint);
     expect(await runOnce({ ...base, model: "deepseek/other-model" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, thinking: "low" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, systemPrompt: "do y" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, tools: ["read", "grep"] })).not.toBe(baseFingerprint);
-    expect(await runOnce({ ...base, permission: "danger" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, maxBudgetUsd: 2 })).not.toBe(baseFingerprint);
   });
 

@@ -33,7 +33,6 @@ afterEach(async () => {
 const role = {
   name: "security-reviewer",
   description: "Reviews code containing: YAML # hazards.",
-  permission: "readonly" as const,
   systemPrompt: "Review code for concrete security defects. Do not modify files.",
 };
 
@@ -82,14 +81,14 @@ describe("shared role authoring", () => {
     const content = compileSharedRole(role);
 
     expect(content).toContain(`description: ${JSON.stringify(role.description)}`);
-    expect(content).toContain(`permission: "readonly"`);
+    expect(content).not.toContain("permission:");
     expect(content).not.toContain("backend:");
     expect(content).not.toContain("model:");
     expect(content).not.toContain("thinking:");
     expect(content).not.toContain("owner:");
     const parsed = parseSubagentProfileContent(content, role.name, { requireBody: true });
     expect(parsed?.description).toBe(role.description);
-    expect(parsed?.permission).toBe("readonly");
+    expect(parsed?.systemPrompt).toContain("Do not modify files");
   });
 
   it("a bare reviewer name is valid without a harness prefix", () => {
@@ -97,11 +96,10 @@ describe("shared role authoring", () => {
     expect(content).toContain('description: "Reviews code containing: YAML # hazards."');
   });
 
-  it("rejects invalid names, missing description/instructions, and bad permission", () => {
+  it("rejects invalid names and missing description or instructions", () => {
     expect(() => compileSharedRole({ ...role, name: "Bad Name" })).toThrow("lowercase letters");
     expect(() => compileSharedRole({ ...role, description: "  " })).toThrow("description is required");
     expect(() => compileSharedRole({ ...role, systemPrompt: "  " })).toThrow("instructions are required");
-    expect(() => compileSharedRole({ ...role, permission: "sometimes" as never })).toThrow("readonly, edit, danger");
   });
 
   it("installs offline with no backend smoke test", async () => {

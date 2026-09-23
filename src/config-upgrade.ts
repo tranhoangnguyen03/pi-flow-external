@@ -24,9 +24,10 @@ import {
   type Dirent,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { buildDefaultProfile } from "./defaults.ts";
 import { HARNESS_NAME_PATTERN, parseHarnessEntry, type HarnessConfig } from "./harnesses.ts";
-import { parseSubagentProfileContent } from "./profiles.ts";
+import { isValidSubagentName, parseSubagentProfileContent } from "./profiles.ts";
 import { externalSettingsPath, parseSettings, type ExternalSettings } from "./settings.ts";
 
 export const CONFIG_VERSION = 4;
@@ -42,6 +43,18 @@ export const LEGACY_SEED_MARKERS = [
 ] as const;
 export const LEGACY_CLI_HARNESSES = ["agy", "claude", "codex", "grok", "muse"] as const;
 export const LEGACY_DEFAULT_ROLES = ["explorer", "planner", "implementer", "reviewer", "qa", "worker"] as const;
+export const ROLES_DIR = "roles";
+const SHARED_PI_HARNESS_MARKER = "pi-*";
+const OBSOLETE_PROFILE_KEYS = new Set(["permission", "capabilitySet"]);
+/** Permission values the historical seeder wrote. Live roles no longer declare them. */
+const HISTORICAL_SEED_PERMISSION: Record<(typeof LEGACY_DEFAULT_ROLES)[number], "readonly" | "danger"> = {
+  explorer: "readonly",
+  planner: "readonly",
+  implementer: "danger",
+  reviewer: "readonly",
+  qa: "danger",
+  worker: "danger",
+};
 
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const LEGACY_FIELD_KEYS = [
@@ -72,7 +85,19 @@ export interface ConfigUpgradeOverride {
   destinationPath: string;
   /** SHA-256 hex of the raw source bytes. */
   fingerprint: string;
+  /** File body to install. Obsolete permission/capabilitySet metadata is already removed. */
+  contents: string;
   reason: ConfigUpgradeOverrideReason;
+}
+
+export interface ConfigUpgradeRole {
+  name: string;
+  sourcePath: string;
+  destinationPath: string;
+  /** SHA-256 hex of the raw source bytes. */
+  fingerprint: string;
+  /** Ordinary cross-harness role markdown. */
+  contents: string;
 }
 
 export interface ConfigUpgradePlan {
@@ -84,6 +109,9 @@ export interface ConfigUpgradePlan {
   /** Legacy settings keys with no v4 meaning, retained on the written file. */
   preservedFields: Record<string, unknown>;
   overrides: ConfigUpgradeOverride[];
+  roles: ConfigUpgradeRole[];
+  /** Explicit obsolete-metadata notes. These do not block conversion. */
+  notes: string[];
   disabledProfiles: string[];
   unchangedDefaults: string[];
   /** Native Pi profiles and seeded names whose metadata contradicts an external profile. */
@@ -98,6 +126,8 @@ export interface ConfigUpgradeApplyResult {
   settingsPath: string;
   /** Override paths that match the conversion set. Includes copies installed before a failed activation. */
   overridesInstalled: string[];
+  rolesInstalled: string[];
+  notes: string[];
   disabledProfiles: string[];
   settings?: ConfigUpgradeSettings;
   preservedFields: Record<string, unknown>;
@@ -107,6 +137,7 @@ export type LegacyPurgeKind =
   | "seeded-profile"
   | "custom-cli-profile"
   | "named-pi-profile"
+  | "shared-pi-template"
   | "nonstandard-profile"
   | "seed-marker"
   | "harness-registry";
@@ -157,12 +188,16 @@ type ReadResult =
   | { kind: "error"; message: string }
   | { kind: "file"; bytes: Buffer };
 
-type ProfileUpgrade = "ignore" | "copy" | "unchanged" | "exclude" | "block";
+type ProfileUpgrade = "ignore" | "copy" | "role" | "unchanged" | "exclude" | "block";
 
 interface ClassifiedProfile {
   name: string;
   path: string;
   bytes?: Buffer;
+  /** Bytes that conversion installs, when different from the legacy source. */
+  writtenBytes?: Buffer;
+  roleName?: string;
+  notes?: string[];
   upgrade: ProfileUpgrade;
   reason?: ConfigUpgradeOverrideReason;
   purge?: { kind: LegacyPurgeKind; inventory: boolean };
@@ -238,13 +273,68 @@ function sameFileBytes(path: string, bytes: Buffer): boolean {
  */
 function canonicalSeededBytes(name: string): Buffer | undefined {
   const profile = buildDefaultProfile(name);
-  if (!profile?.systemPrompt || !profile.permission) return undefined;
+  const role = LEGACY_DEFAULT_ROLES.find((candidate) => name.endsWith(`-${candidate}`));
+  const permission = role ? HISTORICAL_SEED_PERMISSION[role] : undefined;
+  if (!profile?.systemPrompt || !permission) return undefined;
   const frontmatter = [
     `description: ${JSON.stringify(profile.description.trim())}`,
     `backend: ${profile.backend}`,
-    `permission: ${JSON.stringify(profile.permission)}`,
+    `permission: ${JSON.stringify(permission)}`,
   ];
   return Buffer.from(`---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`, "utf8");
+}
+
+function rolePath(root: string, name: string): string {
+  return join(root, CONFIG_DIR, ROLES_DIR, `${name}.md`);
+}
+
+function installedProfileBytes(bytes: Buffer): { bytes: Buffer; removed: string[] } {
+  let parsed: { frontmatter: Record<string, unknown>; body: string };
+  try {
+    parsed = parseFrontmatter<Record<string, unknown>>(bytes.toString("utf8"));
+  } catch {
+    return { bytes, removed: [] };
+  }
+  const removed = Object.keys(parsed.frontmatter).filter((key) => OBSOLETE_PROFILE_KEYS.has(key));
+  if (removed.length === 0) return { bytes, removed };
+  const lines = Object.entries(parsed.frontmatter)
+    .filter(([key]) => !OBSOLETE_PROFILE_KEYS.has(key))
+    .map(([key, value]) => `${key}: ${typeof value === "string" ? JSON.stringify(value) : Array.isArray(value) ? value.join(", ") : String(value)}`);
+  return {
+    bytes: Buffer.from(`---\n${lines.join("\n")}\n---\n\n${parsed.body.trim()}\n`, "utf8"),
+    removed,
+  };
+}
+
+function classifySharedTemplate(name: string, path: string, bytes: Buffer, parsed: NonNullable<ReturnType<typeof parseSubagentProfileContent>>): ClassifiedProfile {
+  const role = name.startsWith("pi-") ? name.slice(3) : "";
+  let dropped: string[] = [];
+  try {
+    dropped = Object.keys(parseFrontmatter<Record<string, unknown>>(bytes.toString("utf8")).frontmatter).filter((key) => key !== "description");
+  } catch {
+    dropped = [];
+  }
+  if (!isValidSubagentName(role) || !parsed.description.trim() || !parsed.systemPrompt?.trim()) {
+    return {
+      name,
+      path,
+      bytes,
+      upgrade: "block",
+      purge: { kind: "shared-pi-template", inventory: true },
+      diagnostic: `${path} declares harness "${SHARED_PI_HARNESS_MARKER}" but cannot be converted to a shared role. It needs a pi-<role>.md name, a description, and instructions.`,
+    };
+  }
+  const writtenBytes = Buffer.from(`---\ndescription: ${JSON.stringify(parsed.description.trim())}\n---\n\n${parsed.systemPrompt.trim()}\n`, "utf8");
+  return {
+    name,
+    path,
+    bytes,
+    writtenBytes,
+    roleName: role,
+    upgrade: "role",
+    notes: [`${path} converts to roles/${role}.md as a cross-harness role. Dropped metadata: ${dropped.join(", ") || "none"}. Review the instructions; they now apply to every harness.`],
+    purge: { kind: "shared-pi-template", inventory: true },
+  };
 }
 
 function cliPrefix(name: string): CliHarness | undefined {
@@ -280,6 +370,9 @@ function classifyRegular(name: string, path: string, bytes: Buffer): ClassifiedP
     };
   }
 
+  if (parsed.backend === "pi" && parsed.harness === SHARED_PI_HARNESS_MARKER) {
+    return classifySharedTemplate(name, path, bytes, parsed);
+  }
   if (namedPiHarness(parsed.backend, parsed.harness, name)) {
     return { name, path, bytes, upgrade: "copy", reason: "named-pi", purge: { kind: "named-pi-profile", inventory: true } };
   }
@@ -312,6 +405,8 @@ function emptyPlan(root: string, status: ConfigUpgradePlan["status"], diagnostic
     settingsPath: settingsPath(root),
     preservedFields: {},
     overrides: [],
+    roles: [],
+    notes: [],
     disabledProfiles: [],
     unchangedDefaults: [],
     excludedProfiles: [],
@@ -324,6 +419,8 @@ function inactiveResult(plan: ConfigUpgradePlan, diagnostics = plan.diagnostics)
     diagnostics,
     settingsPath: plan.settingsPath,
     overridesInstalled: [],
+    rolesInstalled: [],
+    notes: plan.notes ?? [],
     disabledProfiles: [],
     preservedFields: {},
   };
@@ -331,10 +428,12 @@ function inactiveResult(plan: ConfigUpgradePlan, diagnostics = plan.diagnostics)
 
 function preservedLegacyFields(path: string, record: Record<string, unknown> | undefined): {
   diagnostics: string[];
+  notes: string[];
   preserved: Record<string, unknown>;
 } {
-  if (!record) return { diagnostics: [], preserved: {} };
+  if (!record) return { diagnostics: [], notes: [], preserved: {} };
   const diagnostics: string[] = [];
+  const notes: string[] = [];
   if ("harnesses" in record) {
     diagnostics.push(`Settings at ${path} already contain "harnesses". Conversion leaves that file unchanged.`);
   }
@@ -343,11 +442,15 @@ function preservedLegacyFields(path: string, record: Record<string, unknown> | u
   }
   const preserved: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort((a, b) => a.localeCompare(b))) {
+    if (key === "piCapabilitySets") {
+      notes.push(`Obsolete setting "piCapabilitySets" in ${path} was not copied. Pi children load installed skills through the SDK.`);
+      continue;
+    }
     if (key !== "version" && !LEGACY_FIELD_KEYS.includes(key as (typeof LEGACY_FIELD_KEYS)[number]) && key !== "harnesses" && key !== "disabledProfiles") {
       preserved[key] = record[key];
     }
   }
-  return { diagnostics, preserved };
+  return { diagnostics, notes, preserved };
 }
 
 function parseLegacyHarnesses(path: string, value: unknown): {
@@ -453,6 +556,7 @@ interface LegacySnapshot {
   profiles: ClassifiedProfile[];
   markers: { v1: boolean; v2: boolean; v3: boolean };
   digestLines: string[];
+  notes: string[];
 }
 
 function snapshotLegacy(root: string, settingsRecord: Record<string, unknown> | undefined, settingsBytes: Buffer | undefined): LegacySnapshot {
@@ -461,6 +565,7 @@ function snapshotLegacy(root: string, settingsRecord: Record<string, unknown> | 
   let evidence = settingsRecord !== undefined;
   const preservedFields = preservedLegacyFields(settingsPath(root), settingsRecord);
   diagnostics.push(...preservedFields.diagnostics);
+  const notes = [...preservedFields.notes];
   const preserved = preservedFields.preserved;
 
   const harnessFile = harnessesPath(root);
@@ -557,12 +662,13 @@ function snapshotLegacy(root: string, settingsRecord: Record<string, unknown> | 
     digestLines.push(`profile ${name} ${sha256(read.bytes)}`);
     const classified = classifyRegular(name, path, read.bytes);
     if (classified.diagnostic) diagnostics.push(classified.diagnostic);
+    if (classified.notes) notes.push(...classified.notes);
     if (classified.upgrade !== "ignore") profiles.push(classified);
-    if (classified.upgrade === "copy" || classified.upgrade === "unchanged" || classified.upgrade === "block") evidence = true;
+    if (classified.upgrade === "copy" || classified.upgrade === "role" || classified.upgrade === "unchanged" || classified.upgrade === "block") evidence = true;
     if (classified.upgrade === "exclude" && DEFAULT_NAMES.has(name)) evidence = true;
   }
 
-  return { diagnostics, evidence, settingsRecord, preserved, harnesses, profiles, markers, digestLines };
+  return { diagnostics, evidence, settingsRecord, preserved, harnesses, profiles, markers, digestLines, notes };
 }
 
 function conversionDocument(snap: LegacySnapshot, disabledProfiles: string[]): Record<string, unknown> {
@@ -590,16 +696,42 @@ function buildReadyPlan(root: string, snap: LegacySnapshot): ConfigUpgradePlan {
   disabledProfiles.sort((a, b) => a.localeCompare(b));
 
   const overrides: ConfigUpgradeOverride[] = [];
+  const roles: ConfigUpgradeRole[] = [];
+  const notes = [...snap.notes];
   const unchangedDefaults: string[] = [];
   const excludedProfiles: string[] = [];
   const collisions: string[] = [];
+  const roleNames = new Set<string>();
   for (const profile of [...snap.profiles].sort((a, b) => a.name.localeCompare(b.name))) {
     if (profile.upgrade === "unchanged") unchangedDefaults.push(profile.name);
     if (profile.upgrade === "exclude") excludedProfiles.push(profile.name);
+    if (profile.upgrade === "role" && profile.bytes && profile.writtenBytes && profile.roleName) {
+      if (roleNames.has(profile.roleName)) collisions.push(`Two legacy templates convert to role "${profile.roleName}".`);
+      roleNames.add(profile.roleName);
+      const destinationPath = rolePath(root, profile.roleName);
+      const destination = readRegular(destinationPath);
+      if (destination.kind === "file" && !destination.bytes.equals(profile.writtenBytes)) {
+        collisions.push(`Role ${destinationPath} already exists and differs from the converted ${profile.path}.`);
+      } else if (destination.kind === "other" || destination.kind === "error") {
+        collisions.push(`Role ${destinationPath} must be a regular file before conversion can install ${profile.path}.`);
+      }
+      roles.push({
+        name: profile.roleName,
+        sourcePath: profile.path,
+        destinationPath,
+        fingerprint: sha256(profile.bytes),
+        contents: profile.writtenBytes.toString("utf8"),
+      });
+      continue;
+    }
     if (profile.upgrade !== "copy" || !profile.bytes || !profile.reason) continue;
+    const installed = installedProfileBytes(profile.bytes);
+    if (installed.removed.length) {
+      notes.push(`${profile.path}: removed obsolete metadata ${installed.removed.join(", ")} from the override copy.`);
+    }
     const destinationPath = overridePath(root, profile.name);
     const destination = readRegular(destinationPath);
-    if (destination.kind === "file" && !destination.bytes.equals(profile.bytes)) {
+    if (destination.kind === "file" && !destination.bytes.equals(installed.bytes)) {
       collisions.push(`Override ${destinationPath} already exists and differs from ${profile.path}.`);
     } else if (destination.kind === "other" || destination.kind === "error") {
       collisions.push(`Override ${destinationPath} must be a regular file before conversion can install ${profile.path}.`);
@@ -609,6 +741,7 @@ function buildReadyPlan(root: string, snap: LegacySnapshot): ConfigUpgradePlan {
       sourcePath: profile.path,
       destinationPath,
       fingerprint: sha256(profile.bytes),
+      contents: installed.bytes.toString("utf8"),
       reason: profile.reason,
     });
   }
@@ -626,6 +759,8 @@ function buildReadyPlan(root: string, snap: LegacySnapshot): ConfigUpgradePlan {
     settings,
     preservedFields: snap.preserved,
     overrides,
+    roles,
+    notes,
     disabledProfiles,
     unchangedDefaults,
     excludedProfiles,
@@ -670,37 +805,41 @@ export function planConfigUpgrade(agentDir: string): ConfigUpgradePlan {
   }
 }
 
-function installOverrides(overrides: readonly ConfigUpgradeOverride[]): { ok: true; paths: string[] } | { ok: false; diagnostics: string[]; paths: string[] } {
+function installAuthoredFiles(
+  files: readonly { sourcePath: string; destinationPath: string; fingerprint: string; contents: string }[],
+  label: string,
+): { ok: true; paths: string[] } | { ok: false; diagnostics: string[]; paths: string[] } {
   const paths: string[] = [];
-  for (const override of overrides) {
-    const read = readRegular(override.sourcePath);
-    if (read.kind !== "file" || sha256(read.bytes) !== override.fingerprint) {
-      return { ok: false, paths, diagnostics: [`Legacy profile ${override.sourcePath} changed before its override was installed.`] };
+  for (const file of files) {
+    const read = readRegular(file.sourcePath);
+    if (read.kind !== "file" || sha256(read.bytes) !== file.fingerprint) {
+      return { ok: false, paths, diagnostics: [`Legacy profile ${file.sourcePath} changed before its ${label.toLowerCase()} was installed.`] };
     }
-    const destination = readRegular(override.destinationPath);
-    if (destination.kind === "file" && destination.bytes.equals(read.bytes)) {
-      paths.push(override.destinationPath);
+    const contents = Buffer.from(file.contents, "utf8");
+    const destination = readRegular(file.destinationPath);
+    if (destination.kind === "file" && destination.bytes.equals(contents)) {
+      paths.push(file.destinationPath);
       continue;
     }
     if (destination.kind !== "missing") {
       return {
         ok: false,
         paths,
-        diagnostics: [`Override ${override.destinationPath} already exists and differs from ${override.sourcePath}.`],
+        diagnostics: [`${label} ${file.destinationPath} already exists and differs from ${file.sourcePath}.`],
       };
     }
-    ensureDir(dirname(override.destinationPath));
+    ensureDir(dirname(file.destinationPath));
     try {
-      writeFileSync(override.destinationPath, read.bytes, { mode: 0o600, flag: "wx" });
+      writeFileSync(file.destinationPath, contents, { mode: 0o600, flag: "wx" });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" && sameFileBytes(override.destinationPath, read.bytes)) {
-        paths.push(override.destinationPath);
+      if (code === "EEXIST" && sameFileBytes(file.destinationPath, contents)) {
+        paths.push(file.destinationPath);
         continue;
       }
       if (code !== "EEXIST") {
         try {
-          if (!sameFileBytes(override.destinationPath, read.bytes)) unlinkSync(override.destinationPath);
+          if (!sameFileBytes(file.destinationPath, contents)) unlinkSync(file.destinationPath);
         } catch (unlinkError) {
           if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
         }
@@ -709,11 +848,11 @@ function installOverrides(overrides: readonly ConfigUpgradeOverride[]): { ok: tr
         ok: false,
         paths,
         diagnostics: [code === "EEXIST"
-          ? `Override ${override.destinationPath} already exists and differs from ${override.sourcePath}.`
-          : `Override ${override.destinationPath} was not installed: ${errorMessage(error)}`],
+          ? `${label} ${file.destinationPath} already exists and differs from ${file.sourcePath}.`
+          : `${label} ${file.destinationPath} was not installed: ${errorMessage(error)}`],
       };
     }
-    paths.push(override.destinationPath);
+    paths.push(file.destinationPath);
   }
   return { ok: true, paths };
 }
@@ -726,13 +865,28 @@ function applyInner(root: string): ConfigUpgradeApplyResult {
     return inactiveResult(second, ["Legacy sources changed before any upgrade files were written.", ...second.diagnostics]);
   }
 
-  const installed = installOverrides(second.overrides);
+  const installed = installAuthoredFiles(second.overrides, "Override");
   if (!installed.ok) {
     return {
       status: "blocked",
       diagnostics: installed.diagnostics,
       settingsPath: second.settingsPath,
       overridesInstalled: installed.paths,
+      rolesInstalled: [],
+      notes: second.notes,
+      disabledProfiles: [],
+      preservedFields: {},
+    };
+  }
+  const installedRoles = installAuthoredFiles(second.roles, "Role");
+  if (!installedRoles.ok) {
+    return {
+      status: "blocked",
+      diagnostics: installedRoles.diagnostics,
+      settingsPath: second.settingsPath,
+      overridesInstalled: installed.paths,
+      rolesInstalled: installedRoles.paths,
+      notes: second.notes,
       disabledProfiles: [],
       preservedFields: {},
     };
@@ -745,6 +899,8 @@ function applyInner(root: string): ConfigUpgradeApplyResult {
       diagnostics: ["Legacy sources changed after override copies were installed. Settings version 4 was not activated.", ...verified.diagnostics],
       settingsPath: second.settingsPath,
       overridesInstalled: installed.paths,
+      rolesInstalled: installedRoles.paths,
+      notes: second.notes,
       disabledProfiles: [],
       preservedFields: {},
     };
@@ -763,6 +919,8 @@ function applyInner(root: string): ConfigUpgradeApplyResult {
       diagnostics: gate,
       settingsPath: verified.settingsPath,
       overridesInstalled: installed.paths,
+      rolesInstalled: installedRoles.paths,
+      notes: verified.notes,
       disabledProfiles: [],
       preservedFields: {},
     };
@@ -776,6 +934,8 @@ function applyInner(root: string): ConfigUpgradeApplyResult {
       diagnostics: [`Settings version 4 was not activated: ${errorMessage(error)}`],
       settingsPath: verified.settingsPath,
       overridesInstalled: installed.paths,
+      rolesInstalled: installedRoles.paths,
+      notes: verified.notes,
       disabledProfiles: [],
       preservedFields: {},
     };
@@ -786,6 +946,8 @@ function applyInner(root: string): ConfigUpgradeApplyResult {
     diagnostics: [],
     settingsPath: verified.settingsPath,
     overridesInstalled: installed.paths,
+    rolesInstalled: installedRoles.paths,
+    notes: verified.notes,
     disabledProfiles: verified.disabledProfiles,
     settings: verified.settings,
     preservedFields: verified.preservedFields,
@@ -807,6 +969,8 @@ export function applyConfigUpgrade(agentDir: string): ConfigUpgradeApplyResult {
       diagnostics: [`Configuration upgrade stopped: ${errorMessage(error)}`],
       settingsPath: settingsPath(root),
       overridesInstalled: [],
+      rolesInstalled: [],
+      notes: [],
       disabledProfiles: [],
       preservedFields: {},
     };
@@ -878,7 +1042,7 @@ function purgeCandidates(root: string): { diagnostics: string[]; candidates: Leg
       relativePath: relative(root, path),
       kind: classified.purge.kind,
       name,
-      copied: overrideCopied(root, name, classified.bytes),
+      copied: overrideCopied(root, classified),
       inventory: classified.purge.inventory,
       fingerprint: sha256(classified.bytes),
     });
@@ -902,8 +1066,12 @@ function purgeCandidates(root: string): { diagnostics: string[]; candidates: Leg
   return { diagnostics, candidates };
 }
 
-function overrideCopied(root: string, name: string, bytes: Buffer): boolean {
-  return sameFileBytes(overridePath(root, name), bytes);
+function overrideCopied(root: string, classified: ClassifiedProfile): boolean {
+  if (classified.upgrade === "role" && classified.roleName && classified.writtenBytes) {
+    return sameFileBytes(rolePath(root, classified.roleName), classified.writtenBytes);
+  }
+  if (!classified.bytes) return false;
+  return sameFileBytes(overridePath(root, classified.name), installedProfileBytes(classified.bytes).bytes);
 }
 
 /** List legacy files that a confirmed purge may delete. Requires settings version 4. */

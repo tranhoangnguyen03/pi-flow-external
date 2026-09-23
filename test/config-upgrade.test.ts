@@ -40,13 +40,24 @@ function write(root: string, rel: string, content: string): void {
   writeFileSync(path, content);
 }
 
+const HISTORICAL_SEED_PERMISSION: Record<string, "readonly" | "danger"> = {
+  explorer: "readonly",
+  planner: "readonly",
+  implementer: "danger",
+  reviewer: "readonly",
+  qa: "danger",
+  worker: "danger",
+};
+
 function seeded(name: string): string {
   const profile = buildDefaultProfile(name);
-  if (!profile?.systemPrompt || !profile.permission) throw new Error(`No seeded profile for ${name}`);
+  const role = name.slice(name.indexOf("-") + 1);
+  const permission = HISTORICAL_SEED_PERMISSION[role];
+  if (!profile?.systemPrompt || !permission) throw new Error(`No seeded profile for ${name}`);
   const frontmatter = [
     `description: ${JSON.stringify(profile.description.trim())}`,
     `backend: ${profile.backend}`,
-    `permission: ${JSON.stringify(profile.permission)}`,
+    `permission: ${JSON.stringify(permission)}`,
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${profile.systemPrompt.trim()}\n`;
 }
@@ -208,7 +219,14 @@ const cases: Array<{ name: string; run: (agentDir: string) => void }> = [
       ]);
       expect(statSync(applied.settingsPath).mode & 0o777).toBe(0o600);
       for (const override of plan.overrides) {
-        expect(readFileSync(override.destinationPath)).toEqual(readFileSync(override.sourcePath));
+        const source = readFileSync(override.sourcePath, "utf8");
+        const installed = readFileSync(override.destinationPath, "utf8");
+        expect(installed).toBe(override.contents);
+        expect(installed).not.toMatch(/^permission:/m);
+        expect(installed).not.toMatch(/^capabilitySet:/m);
+        if (!/^permission:/m.test(source) && !/^capabilitySet:/m.test(source)) {
+          expect(installed).toBe(source);
+        }
       }
       expect(statSync(join(agentDir, "pi-flow-external/overrides/claude-notes.md")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(agentDir, "pi-flow-external/harnesses.json"), "utf8")).toBe(legacyBefore.harnesses);
@@ -389,6 +407,45 @@ const cases: Array<{ name: string; run: (agentDir: string) => void }> = [
       expect(readFileSync(join(agentDir, "subagents/agy-notes.md"), "utf8")).toBe(agy);
     },
   },
+  {
+    name: "converts a pi-* template into a cross-harness role and drops obsolete settings",
+    run(agentDir) {
+      write(agentDir, "pi-flow-external/settings.json", `${JSON.stringify({
+        version: 3,
+        defaultHarness: "agy",
+        piCapabilitySets: { docs: { skills: ["writer"], promptTemplates: [] } },
+      })}\n`);
+      const template = [
+        "---",
+        "description: Security review.",
+        "backend: pi",
+        'harness: "pi-*"',
+        'permission: "readonly"',
+        'capabilitySet: "docs"',
+        "---",
+        "",
+        "Review the diff.",
+        "",
+      ].join("\n");
+      write(agentDir, "subagents/pi-security-reviewer.md", template);
+      const plan = planConfigUpgrade(agentDir);
+      expect(plan.status, plan.diagnostics.join("\n")).toBe("ready");
+      expect(plan.overrides).toEqual([]);
+      expect(plan.roles.map((role) => role.name)).toEqual(["security-reviewer"]);
+      expect(plan.notes.join("\n")).toMatch(/cross-harness/);
+      expect(plan.notes.join("\n")).toMatch(/piCapabilitySets/);
+      expect(plan.preservedFields).toEqual({});
+      const applied = applyConfigUpgrade(agentDir);
+      expect(applied.status, applied.diagnostics.join("\n")).toBe("applied");
+      const role = readFileSync(join(agentDir, "pi-flow-external/roles/security-reviewer.md"), "utf8");
+      expect(role).toBe('---\ndescription: "Security review."\n---\n\nReview the diff.\n');
+      expect(role).not.toContain("capabilitySet");
+      expect(role).not.toContain("permission");
+      expect(role).not.toContain("backend");
+      expect(JSON.parse(readFileSync(applied.settingsPath, "utf8")).piCapabilitySets).toBeUndefined();
+      expect(readFileSync(join(agentDir, "subagents/pi-security-reviewer.md"), "utf8")).toBe(template);
+    },
+  },
 ];
 
 describe("configuration upgrade", () => {
@@ -444,6 +501,7 @@ describe("legacy purge", () => {
     write(agentDir, "subagents/grok-planner.md", seeded("grok-planner"));
     write(agentDir, "subagents/muse-security.md", museSecurity);
     write(agentDir, "subagents/pi-deepseek-qa.md", piQa);
+    write(agentDir, "subagents/pi-auditor.md", "---\ndescription: Audit.\nbackend: pi\nharness: \"pi-*\"\n---\n\nAudit the diff.\n");
     write(agentDir, "subagents/scout.md", "---\ndescription: Native scout.\n---\n\nLook around.\n");
     write(agentDir, "subagents/notes.md", notes);
     write(agentDir, "subagents/nested/codex-explorer.md", seeded("codex-explorer"));
@@ -483,6 +541,7 @@ describe("legacy purge", () => {
       { relativePath: "subagents/muse-security.md", kind: "custom-cli-profile", inventory: true, copied: false, outcome: "deleted" },
       { relativePath: "subagents/nested/codex-explorer.md", outcome: "kept" },
       { relativePath: "subagents/notes.md", kind: "nonstandard-profile", inventory: false, copied: false, outcome: "kept" },
+      { relativePath: "subagents/pi-auditor.md", kind: "shared-pi-template", inventory: true, copied: false, outcome: "deleted" },
       { relativePath: "subagents/pi-deepseek-qa.md", kind: "named-pi-profile", inventory: true, copied: true, outcome: "deleted" },
       { relativePath: "subagents/scout.md", outcome: "kept" },
     ];

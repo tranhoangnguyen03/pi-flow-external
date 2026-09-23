@@ -157,7 +157,7 @@ describe("/external command", () => {
         let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
         const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
         const profiles = new Map<string, SubagentProfile>([
-          ["agy-reviewer", { name: "agy-reviewer", description: "Review.", backend: "agy", systemPrompt: "Check diffs.", permission: "readonly", source: "built-in" }],
+          ["agy-reviewer", { name: "agy-reviewer", description: "Review.", backend: "agy", systemPrompt: "Check diffs.", source: "built-in" }],
           ["claude-reviewer", { name: "claude-reviewer", description: "Review.", backend: "claude", systemPrompt: "Check diffs.", source: "built-in" }],
         ]);
         const options = commandOptions({
@@ -172,8 +172,8 @@ describe("/external command", () => {
         await command?.handler("role inspect reviewer", ctx);
         expect(notices.at(-1)?.message).toContain("agy-reviewer: Review.");
         expect(notices.at(-1)?.message).toContain("Source: built-in");
-        expect(notices.at(-1)?.message).toContain("permission floor readonly");
-        expect(notices.at(-1)?.message).toContain("unsandboxed");
+        expect(notices.at(-1)?.message).toContain("call permission danger");
+        expect(notices.at(-1)?.message).toContain("autonomous");
         expect(notices.at(-1)?.message).toContain("Check diffs.");
 
         await command?.handler("role inspect reviewer claude", ctx);
@@ -197,7 +197,7 @@ describe("/external command", () => {
         let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
         const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
         const profiles = new Map<string, SubagentProfile>([
-          ["claude-reviewer", { name: "claude-reviewer", description: "Review.", backend: "claude", systemPrompt: "Check diffs.", permission: "readonly", source: "built-in" }],
+          ["claude-reviewer", { name: "claude-reviewer", description: "Review.", backend: "claude", systemPrompt: "Check diffs.", source: "built-in" }],
         ]);
         const options = commandOptions({
           settings: settingsV4(root),

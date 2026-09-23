@@ -19,9 +19,11 @@ import {
   getConfiguredHarnessNames,
   harnessesPath,
   installHarnessConfigWithSmokeTest,
+  isValidHarnessName,
   loadHarnessConfigs,
   VALID_THINKING_LEVELS,
 } from "../src/harnesses.ts";
+
 
 const tempDirs: string[] = [];
 
@@ -140,6 +142,18 @@ describe("installHarnessConfigWithSmokeTest", () => {
     // No residual staged file left behind.
     const dirEntries = readFileSync(harnessesPath(agentDir), "utf8");
     expect(dirEntries).not.toContain(".staged");
+  });
+
+  it("never accepts the wildcard marker \"pi-*\" as a registrable harness name", async () => {
+    expect(isValidHarnessName("pi-*")).toBe(false);
+    const agentDir = tempAgentDir();
+    await expect(installHarnessConfigWithSmokeTest({
+      agentDir,
+      name: "pi-*",
+      model: "deepseek/deepseek-chat",
+      smokeTest: async () => ({ ok: true }),
+    })).rejects.toThrow(/must match/);
+    expect(loadHarnessConfigs(agentDir).harnesses.size).toBe(0);
   });
 
   it("rejects an invalid name before any write", async () => {

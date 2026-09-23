@@ -43,3 +43,4 @@ describe("fingerprintWorkflowAgentCall policy version participation", () => {
     expect(withoutDescriptor).not.toBe(withDescriptor);
   });
 });
+

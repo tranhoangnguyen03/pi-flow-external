@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { EXTERNAL_HARNESSES, type ExternalHarness, type PermissionTier, type SubagentBackend, type SubagentProfile, type ThinkingLevel } from "./types.ts";
+import { EXTERNAL_HARNESSES, type ExternalHarness, type SubagentBackend, type SubagentProfile, type ThinkingLevel } from "./types.ts";
 import { defaultRoleNames, roleDefinition } from "./default-roles.ts";
 import type { HarnessConfig } from "./harnesses.ts";
 import { loadExternalSettings } from "./settings.ts";
@@ -62,16 +62,6 @@ function parseToolList(value: unknown): string[] | "invalid" {
   return tools.length > 0 ? tools : "invalid";
 }
 
-function parsePermission(value: unknown): PermissionTier | "invalid" | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (value === "readonly" || value === "edit" || value === "danger") {
-    return value;
-  }
-  return "invalid";
-}
-
 function parseMaxBudgetUsd(value: unknown): number | "invalid" | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -106,14 +96,12 @@ export function parseSubagentProfileContent(
   const tools = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "tools")
     ? parseToolList(parsed.frontmatter.tools)
     : undefined;
-  const permission = parsePermission(parsed.frontmatter.permission);
   const maxBudgetUsd = parseMaxBudgetUsd(parsed.frontmatter.max_budget_usd);
   const owner = optionalString(parsed.frontmatter.owner);
 
   if (
     !description ||
     tools === "invalid" ||
-    permission === "invalid" ||
     maxBudgetUsd === "invalid" ||
     (options.requireBody && !body)
   ) {
@@ -129,7 +117,6 @@ export function parseSubagentProfileContent(
     thinking,
     tools,
     systemPrompt: body || undefined,
-    permission,
     maxBudgetUsd,
     owner,
   };
@@ -211,7 +198,7 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
   if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses };
   const names = [...EXTERNAL_HARNESSES, ...harnesses.keys()];
   const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code" };
-  const bind = (role: string, definition: { description: string; systemPrompt?: string; permission?: PermissionTier; configurationError?: string }, source: string) => {
+  const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
     for (const harness of names) {
       const config = harnesses.get(harness);
       profiles.set(`${harness}-${role}`, { ...definition, name: `${harness}-${role}`, description: definition.description.replaceAll("${backendLabel}", labels[harness] ?? harness), backend: config ? "pi" : harness as ExternalHarness, ...(config ? { harness, model: config.model, thinking: config.thinking } : {}), source });
@@ -219,7 +206,7 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
   };
   for (const role of defaultRoleNames()) {
     const definition = roleDefinition(role)!;
-    bind(role, { description: definition.description, systemPrompt: definition.body, permission: definition.permission }, "built-in");
+    bind(role, { description: definition.description, systemPrompt: definition.body }, "built-in");
   }
   for (const kind of ["roles", "overrides"] as const) {
     const dir = join(agentDir, "pi-flow-external", kind);
@@ -238,10 +225,21 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
         if (!profile) throw new Error("invalid role metadata or instructions");
         if (kind === "roles") {
           const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
-          if (Object.keys(frontmatter).some(key => !["description", "permission"].includes(key))) throw new Error("shared roles support description and permission only; use an exact override for execution settings");
-        } else if (!isExternalAgentProfile(profile, new Set(harnesses.keys()))) throw new Error("override must declare an external backend or registered Pi harness");
+          const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
+          if (obsolete.length) {
+            throw new Error(`obsolete metadata ${obsolete.join(", ")} does not grant authority. Remove it. A role describes intent; pass permission on the Agent or workflow call, or set defaultPermission. Pi children load installed skills through the SDK.`);
+          }
+          if (Object.keys(frontmatter).some((key) => key !== "description")) throw new Error("shared roles support description only; use an exact override for execution settings");
+        } else {
+          const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+          const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
+          if (obsolete.length) {
+            throw new Error(`obsolete metadata ${obsolete.join(", ")} is not an authority floor or a capability selection. Remove it. Pass permission on the call, or set defaultPermission. Pi children load installed skills through the SDK.`);
+          }
+          if (!isExternalAgentProfile(profile, new Set(harnesses.keys()))) throw new Error("override must declare an external backend or registered Pi harness");
+        }
       } catch (cause) { error = `Invalid ${kind === "roles" ? "role" : "override"} ${path}: ${cause instanceof Error ? cause.message : String(cause)}`; diagnostics.push(error); }
-      if (kind === "roles") bind(name, { description: profile?.description ?? name, systemPrompt: profile?.systemPrompt, permission: profile?.permission, ...(error ? { configurationError: error } : {}) }, path);
+      if (kind === "roles") bind(name, { description: profile?.description ?? name, systemPrompt: profile?.systemPrompt, ...(error ? { configurationError: error } : {}) }, path);
       else {
         const prior = profiles.get(name);
         const harness = [...names].sort((a, b) => b.length - a.length).find(h => name.startsWith(`${h}-`));
@@ -330,7 +328,6 @@ function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: H
     model: harnessConfig.model,
     thinking: harnessConfig.thinking,
     systemPrompt: definition.body,
-    permission: definition.permission,
   };
 }
 
@@ -346,7 +343,10 @@ export function computeReconciledPiProfile(
   profile: SubagentProfile,
   harnessConfigs: ReadonlyMap<string, HarnessConfig>,
 ): { profile: SubagentProfile; conflict?: string } {
-  if (profile.backend !== "pi" || !profile.harness) return { profile };
+  if (profile.backend !== "pi") {
+    return { profile };
+  }
+  if (!profile.harness) return { profile };
   const harnessConfig = harnessConfigs.get(profile.harness);
   if (!harnessConfig) {
     return {

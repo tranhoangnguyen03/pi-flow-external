@@ -23,19 +23,17 @@ import {
   isValidThinkingLevel,
   VALID_THINKING_LEVELS,
 } from "./harnesses.ts";
-import type { PermissionTier, SubagentUsage } from "./types.ts";
+import type { SubagentUsage } from "./types.ts";
 
 export const ROLE_TOOL_NAME = "pi_flow_role_create";
 export const HARNESS_TOOL_NAME = "pi_flow_harness_create";
 const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 
-const VALID_PERMISSIONS: readonly PermissionTier[] = ["readonly", "edit", "danger"];
-
 export const ROLE_INTERVIEW_PROMPT = `Help me create one reusable pi-flow external role through an AI-assisted interview.
 
 A role is shared authoring only: one markdown file under pi-flow-external/roles/ that works with any harness (agy, claude, codex, grok, muse, or a registered pi-* harness). Ask one question at a time, only when the answer is not already known. Collect enough information to write a focused role: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. Suggest a lowercase role name such as security-reviewer (no backend prefix; naming it reviewer replaces the built-in reviewer across harnesses).
 
-Ask about permission floor only when it matters (readonly, edit, or danger); otherwise omit it. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific customizations belong in an exact override created later via /external role override. When ready, summarize once and call ${ROLE_TOOL_NAME}.
+Describe read-only or editing intent in the instructions. Do not ask for a permission tier: a role does not grant authority. The caller passes permission, or the global defaultPermission applies. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific customizations belong in an exact override created later via /external role override. When ready, summarize once and call ${ROLE_TOOL_NAME}.
 
 Do not write files yourself and do not run Agent or workflow. The tool will show what will be created for review, request confirmation, and write it offline without a backend smoke test. A role is not an authenticated connection; readiness smoke testing belongs to harness registration.`;
 
@@ -48,8 +46,7 @@ Do not write files yourself and do not run Agent or workflow in this branch. The
 const roleParameters = Type.Object({
   name: Type.String({ description: "Lowercase shared role name, such as security-reviewer. No backend prefix; reviewer replaces the built-in reviewer." }),
   description: Type.String({ description: "Concise role description shown by external_help and in delegation intent." }),
-  permission: Type.Optional(Type.String({ description: "Optional permission floor: readonly, edit, or danger. Omit to leave unset." })),
-  systemPrompt: Type.String({ description: "Complete focused instructions for the shared role." }),
+  systemPrompt: Type.String({ description: "Complete focused instructions for the shared role. Describe intent, including whether the work should stay read-only. This does not set execution authority." }),
 });
 
 type RoleParameters = Static<typeof roleParameters>;
@@ -65,7 +62,6 @@ type HarnessParameters = Static<typeof harnessParameters>;
 export interface SharedRole {
   name: string;
   description: string;
-  permission?: PermissionTier;
   systemPrompt: string;
 }
 
@@ -90,22 +86,17 @@ export function sharedRolePath(agentDir: string, name: string): string {
 }
 
 function normalizeSharedRole(input: RoleParameters): SharedRole {
-  const permission = optional(input.permission);
-  if (permission !== undefined && !(VALID_PERMISSIONS as readonly string[]).includes(permission)) {
-    throw new Error(`Role permission must be one of: ${VALID_PERMISSIONS.join(", ")}.`);
-  }
   return {
     name: input.name.trim(),
     description: input.description.trim(),
-    ...(permission ? { permission: permission as PermissionTier } : {}),
     systemPrompt: input.systemPrompt.trim(),
   };
 }
 
 /**
  * Compile a shared role to its canonical markdown. Shared roles carry only
- * description and permission; backend/model/thinking/owner fields belong in
- * an exact override and are rejected by the catalog loader.
+ * description; backend/model/thinking/permission/owner fields belong elsewhere
+ * and are rejected by the catalog loader.
  */
 export function compileSharedRole(role: SharedRole): string {
   if (!isValidSubagentName(role.name)) {
@@ -117,21 +108,16 @@ export function compileSharedRole(role: SharedRole): string {
   if (!role.systemPrompt?.trim()) {
     throw new Error("Role instructions are required.");
   }
-  if (role.permission !== undefined && !(VALID_PERMISSIONS as readonly string[]).includes(role.permission)) {
-    throw new Error(`Role permission must be one of: ${VALID_PERMISSIONS.join(", ")}.`);
-  }
   const frontmatter = [
     `description: ${JSON.stringify(role.description.trim())}`,
-    ...(role.permission ? [`permission: ${JSON.stringify(role.permission)}`] : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${role.systemPrompt.trim()}\n`;
 }
 
 /**
- * Serialize an exact execution profile to its canonical markdown: the full
- * existing profile schema (description, backend/harness, model/thinking,
- * tools, permission, budget, owner) plus the complete instruction body.
- * Used for materializing intentional overrides.
+ * Serialize an exact execution profile to its canonical markdown: description,
+ * backend/harness, model/thinking, tools, budget, and owner, plus the
+ * instruction body. permission and capabilitySet are obsolete and are not written.
  */
 export function compileProfile(profile: SubagentProfile): string {
   if (!isValidSubagentName(profile.name)) {
@@ -163,7 +149,6 @@ export function compileProfile(profile: SubagentProfile): string {
     ...(profile.model ? [`model: ${JSON.stringify(profile.model)}`] : []),
     ...(profile.thinking ? [`thinking: ${JSON.stringify(profile.thinking)}`] : []),
     ...(profile.tools && profile.tools.length ? [`tools: ${profile.tools.join(", ")}`] : []),
-    ...(profile.permission ? [`permission: ${JSON.stringify(profile.permission)}`] : []),
     ...(typeof profile.maxBudgetUsd === "number" ? [`max_budget_usd: ${profile.maxBudgetUsd}`] : []),
     ...(profile.owner ? [`owner: ${JSON.stringify(profile.owner)}`] : []),
   ];

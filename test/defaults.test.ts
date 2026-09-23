@@ -30,20 +30,13 @@ describe("built-in profiles with zero generated files", () => {
       const profile = profiles.get(name);
       const expected = buildDefaultProfile(name);
       expect(profile, name).toBeDefined();
-      expect(profile?.permission, name).toBe(expected?.permission);
       expect(profile?.description, name).toBe(expected?.description);
       expect(profile?.systemPrompt, name).toBe(expected?.systemPrompt);
       expect(profile?.backend, name).toBe(expected?.backend);
       expect(profile?.model, name).toBeUndefined();
     }
-    expect(profiles.get("claude-explorer")?.permission).toBe("readonly");
-    expect(profiles.get("claude-qa")?.permission).toBe("danger");
     expect(profiles.get("agy-worker")?.description).toContain("Antigravity");
-    expect(profiles.get("grok-explorer")?.permission).toBe("readonly");
-    expect(profiles.get("grok-qa")?.permission).toBe("danger");
     expect(profiles.get("grok-worker")?.description).toContain("Grok CLI");
-    expect(profiles.get("muse-explorer")?.permission).toBe("readonly");
-    expect(profiles.get("muse-qa")?.permission).toBe("danger");
     expect(profiles.get("muse-worker")?.description).toContain("Muse Code");
     expect(readdirSync(agentDir)).toEqual([]);
 
@@ -123,8 +116,8 @@ describe("default profile content", () => {
       const compiled = compileProfile(profile);
       const parsed = parseSubagentProfileContent(compiled, name, { requireBody: true });
       expect(parsed, `${name}:\n${compiled}`).toBeDefined();
-      expect(parsed?.permission).toBe(profile.permission);
       expect(parsed?.backend).toBe(profile.backend);
+      expect(compiled).not.toContain("permission:");
     }
   });
 });

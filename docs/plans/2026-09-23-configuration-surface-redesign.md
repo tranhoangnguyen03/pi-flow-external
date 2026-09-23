@@ -1,6 +1,6 @@
 # Configuration surface redesign — proposal and delivery plan
 
-**Status:** Implemented. The shipped conversion command is `/external settings convert`; `/external settings` points there. The next invocation reads live settings, roles, and overrides. A `maxConcurrentSubagents` change waits until active and queued work drains. A workflow already running keeps its frozen snapshot. The proposal below is unchanged history except this status line.
+**Status:** Implemented, then amended. The shipped conversion command is `/external settings convert`; `/external settings` points there. A later approval removed permission floors, profile `permission` metadata, and the PR #59 capability-set runtime. Shared roles are cross-harness and describe intent. Pi children load installed skills and not extensions or prompt templates. The proposal below is unchanged history except this status line.
 
 **Goal:** One extension-owned home, one execution-settings file, six built-in roles with zero generated profile files, and one file per genuinely authored role.
 

@@ -219,3 +219,30 @@ describe("external settings", () => {
     }
   });
 });
+
+describe("obsolete capability settings", () => {
+  it("ignores piCapabilitySets without blocking delegation settings", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ ...DEFAULT_EXTERNAL_SETTINGS, piCapabilitySets: { docs: { skills: ["writer"] } } }));
+    const parsed = loadExternalSettings(root);
+    expect(parsed.blocked).toBeFalsy();
+    expect(parsed.settings).not.toHaveProperty("piCapabilitySets");
+    expect(parsed.diagnostics.join(" ")).toMatch(/Obsolete setting "piCapabilitySets"/);
+  });
+
+  it("ignores a project capability overlay and still reads defaultHarness when trusted", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-flow-project-"));
+    roots.push(cwd);
+    mkdirSync(dirname(projectExternalSettingsPath(cwd)), { recursive: true });
+    writeFileSync(projectExternalSettingsPath(cwd), JSON.stringify({
+      defaultHarness: "claude",
+      piCapabilitySets: { docs: { skills: ["writer"] } },
+    }));
+    const resolved = resolveDefaultHarness("agy", cwd, true);
+    expect(resolved.harness).toBe("claude");
+    expect(resolved.source).toBe("project");
+    expect(resolved.diagnostics.join(" ")).toMatch(/Obsolete project setting "piCapabilitySets"/);
+  });
+});
+

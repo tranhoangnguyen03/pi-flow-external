@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPermissionArgs,
-  isExecutionProfile,
   permissionLabel,
   resolveEffectivePermissionTier,
   resolvePermission,
+  unsupportedPermissionReason,
 } from "../src/core/permissions.ts";
 import { buildClaudeArgs } from "../src/core/claude.ts";
 import { buildCodexArgs } from "../src/core/codex.ts";
@@ -42,10 +42,10 @@ describe("permission tier argv mapping", () => {
     expect(buildPermissionArgs("danger", "codex")).toEqual(["--sandbox", "danger-full-access"]);
   });
 
-  it("always passes the agy bypass flag so the sandbox never blocks reads", () => {
-    expect(buildPermissionArgs("readonly", "agy")).toEqual(["--dangerously-skip-permissions"]);
-    expect(buildPermissionArgs("edit", "agy")).toEqual(["--dangerously-skip-permissions"]);
+  it("passes the agy bypass flag only for danger and rejects narrower tiers", () => {
     expect(buildPermissionArgs("danger", "agy")).toEqual(["--dangerously-skip-permissions"]);
+    expect(() => buildPermissionArgs("readonly", "agy")).toThrow(/autonomous/);
+    expect(() => buildPermissionArgs("edit", "agy")).toThrow(/autonomous/);
   });
 
   it("maps every tier onto native grok sandbox flags plus the bypass permission mode", () => {
@@ -117,9 +117,8 @@ describe("permission tier argv mapping", () => {
     expect(resumedReadonly.slice(0, 3)).toEqual(["exec", "--sandbox", "read-only"]);
   });
 
-  it("threads tiers and conversation resume through buildAgyArgs", () => {
-    const edit = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, permission: "edit" });
-    expect(edit).toContain("--dangerously-skip-permissions");
+  it("threads danger and conversation resume through buildAgyArgs", () => {
+    expect(() => buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, permission: "edit" })).toThrow(/autonomous/);
 
     const resumed = buildAgyArgs({
       profile: profile("agy"),
@@ -210,14 +209,13 @@ describe("permission tier argv mapping", () => {
 });
 
 describe("tier enforcement resolution", () => {
-  it("marks agy readonly/edit as advisory — agy runs unsandboxed in every mode", () => {
+  it("marks agy readonly/edit as unsupported rather than an unsandboxed success", () => {
     const readonly = resolvePermission("readonly", "agy");
     expect(readonly.enforced).toBe(false);
-    expect(readonly.caveat).toContain("unsandboxed");
-
-    const edit = resolvePermission("edit", "agy");
-    expect(edit.enforced).toBe(false);
-    expect(edit.caveat).toContain("unsandboxed");
+    expect(readonly.caveat).toContain("unsupported");
+    expect(unsupportedPermissionReason("readonly", "agy")).toMatch(/danger/);
+    expect(unsupportedPermissionReason("danger", "agy")).toBeUndefined();
+    expect(unsupportedPermissionReason("readonly", "claude")).toBeUndefined();
   });
 
   it("keeps danger labels unchanged and claude/codex tiers enforced", () => {
@@ -272,128 +270,15 @@ describe("tier enforcement resolution", () => {
 });
 
 describe("effective permission tier resolution", () => {
-  it("identifies execution-oriented profiles by name convention and danger permission", () => {
-    expect(isExecutionProfile({ name: "claude-implementer", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "claude-qa", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "claude-worker", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "worker", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "custom-implementer", description: "", backend: "claude" })).toBe(true);
-    expect(isExecutionProfile({ name: "custom-runner", description: "", backend: "claude", permission: "danger" })).toBe(true);
-    expect(isExecutionProfile({ name: "claude-explorer", description: "", backend: "claude", permission: "readonly" })).toBe(false);
-    expect(isExecutionProfile({ name: "claude-planner", description: "", backend: "claude", permission: "readonly" })).toBe(false);
-    expect(isExecutionProfile({ name: "claude-reviewer", description: "", backend: "claude", permission: "readonly" })).toBe(false);
-    expect(isExecutionProfile(undefined)).toBe(false);
-  });
-
-  it("elevates claude execution profiles to danger floor when edit tier is requested", () => {
-    const implementer: SubagentProfile = {
-      name: "claude-implementer",
-      description: "implement",
-      backend: "claude",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", implementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("danger", implementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", implementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier(undefined, implementer)).toBe("danger");
-
-    const workerProfile: SubagentProfile = {
-      name: "claude-worker",
-      description: "work",
-      backend: "claude",
-    };
-    expect(resolveEffectivePermissionTier("edit", workerProfile)).toBe("danger");
-  });
-
-  it("takes the least restrictive profile floor and request, using defaults only without a profile tier", () => {
-    const tiers = ["readonly", "edit", "danger"] as const;
-    for (const backend of ["claude", "codex", "grok", "muse", "pi"] as const) {
-      for (const [i, permission] of tiers.entries()) {
-        const profile = { name: "custom-reviewer", description: "", backend, permission };
-        expect(resolveEffectivePermissionTier(undefined, profile)).toBe(permission);
-        for (const [j, request] of tiers.entries()) {
-          expect(resolveEffectivePermissionTier(request, profile)).toBe(tiers[Math.max(i, j)]);
-        }
-      }
-    }
-    expect(resolveEffectivePermissionTier("readonly", undefined)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", undefined, "edit")).toBe("edit");
-  });
-
-  it("elevates every agy tier to danger — agy runs unsandboxed", () => {
-    const explorer: SubagentProfile = {
-      name: "agy-explorer",
-      description: "explore",
-      backend: "agy",
-      permission: "readonly",
-    };
-    expect(resolveEffectivePermissionTier(undefined, explorer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", explorer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("edit", explorer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("danger", explorer)).toBe("danger");
-  });
-
-  it("honors the profile floor across backends while allowing higher requests", () => {
-    const codexImplementer: SubagentProfile = {
-      name: "codex-implementer",
-      description: "implement",
-      backend: "codex",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", codexImplementer)).toBe("danger");
-
-    const claudeExplorer: SubagentProfile = {
-      name: "claude-explorer",
-      description: "explore",
-      backend: "claude",
-      permission: "readonly",
-    };
-    expect(resolveEffectivePermissionTier("edit", claudeExplorer)).toBe("edit");
-  });
-
-  it("keeps grok execution profiles at their danger floor", () => {
-    const grokImplementer: SubagentProfile = {
-      name: "grok-implementer",
-      description: "implement",
-      backend: "grok",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", grokImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", grokImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("danger", grokImplementer)).toBe("danger");
-  });
-
-  it("keeps muse execution profiles at their danger floor", () => {
-    const museImplementer: SubagentProfile = {
-      name: "muse-implementer",
-      description: "implement",
-      backend: "muse",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", museImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", museImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("danger", museImplementer)).toBe("danger");
-  });
-
-  it("elevates pi execution profiles to danger floor when edit tier is requested", () => {
-    const piImplementer: SubagentProfile = {
-      name: "pi-deepseek-implementer",
-      description: "implement",
-      backend: "pi",
-      harness: "pi-deepseek",
-      permission: "danger",
-    };
-    expect(resolveEffectivePermissionTier("edit", piImplementer)).toBe("danger");
-    expect(resolveEffectivePermissionTier("readonly", piImplementer)).toBe("danger");
-
-    const piReviewer: SubagentProfile = {
-      name: "pi-deepseek-reviewer",
-      description: "review",
-      backend: "pi",
-      harness: "pi-deepseek",
-      permission: "readonly",
-    };
-    expect(resolveEffectivePermissionTier("edit", piReviewer)).toBe("edit");
+  it("uses the explicit call tier, otherwise the supplied default, and ignores the profile", () => {
+    const reviewer: SubagentProfile = { name: "claude-reviewer", description: "review", backend: "claude" };
+    const worker: SubagentProfile = { name: "claude-worker", description: "work", backend: "claude" };
+    expect(resolveEffectivePermissionTier("readonly", reviewer)).toBe("readonly");
+    expect(resolveEffectivePermissionTier("edit", worker)).toBe("edit");
+    expect(resolveEffectivePermissionTier("danger", worker, "readonly")).toBe("danger");
+    expect(resolveEffectivePermissionTier(undefined, reviewer, "edit")).toBe("edit");
+    expect(resolveEffectivePermissionTier(undefined, undefined)).toBe("danger");
+    expect(resolveEffectivePermissionTier("readonly", { name: "agy-explorer", description: "explore", backend: "agy" })).toBe("readonly");
   });
 });
 

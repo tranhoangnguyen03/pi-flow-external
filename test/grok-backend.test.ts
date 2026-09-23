@@ -914,6 +914,7 @@ process.exit(1);
         description: "Grok read-only review",
         role: "reviewer",
         harness: "grok",
+        permission: "readonly",
         prompt: "Review PR changes.",
       })], { stopReason: "toolUse" }),
       (context) => {

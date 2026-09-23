@@ -8,10 +8,10 @@ export type SubagentBackend = "pi" | ExternalHarness;
 export type ThinkingLevel = string;
 
 /**
- * Permission tier chosen by the orchestrator. `danger` is the default and
- * matches the historical unsandboxed behavior. Tiers map onto native
- * harness mechanisms where they exist; unsupported combinations are labeled
- * advisory rather than blocked (trust + disclose).
+ * Permission tier chosen by the caller, or the global default when the call
+ * omits one. Roles do not grant this authority. Each backend maps a tier
+ * onto a mode it actually supports and rejects a restriction it cannot
+ * enforce.
  */
 export type PermissionTier = "readonly" | "edit" | "danger";
 
@@ -33,8 +33,6 @@ export interface SubagentProfile {
   thinking?: ThinkingLevel;
   tools?: string[];
   systemPrompt?: string;
-  /** Default tier for calls using this profile; the call parameter wins. */
-  permission?: PermissionTier;
   /** Default USD budget cap for calls using this profile; the call parameter wins. */
   maxBudgetUsd?: number;
   /** Ownership tag. "user" marks profiles authored by the user. */

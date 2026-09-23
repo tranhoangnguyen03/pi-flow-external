@@ -9,6 +9,10 @@ All notable changes to pi-flow external are documented here.
 ### Breaking upgrade
 
 - Removed `/external profiles`, `/external profile create`, and `/pi-flow-profile create` without aliases. Use `/external roles`, `/external role create`, or `/external harness create` instead. Agent/workflow `role`, `harness`, and exact `subagent_type` APIs remain supported.
+- Roles describe intent. They no longer declare or enforce a permission floor, and role names no longer raise `edit` to `danger`. The effective tier is the call's `permission`, otherwise settings `defaultPermission` (`danger` unless changed). `permission` and `capabilitySet` in role or override frontmatter are obsolete and rejected. Conversion strips them from copied overrides.
+- Antigravity accepts only autonomous `danger`. `readonly` and `edit` are rejected instead of being run unsandboxed. Claude, Codex, Grok, Muse, and named Pi harnesses map a requested tier onto the mode they actually support.
+- Named Pi children load installed skills through the SDK's minimal-plus-skills resource preset. Extensions, prompt templates, and themes do not load. Project skills load only when the project is trusted. Curated tool lists are not an OS sandbox.
+- The 2.5.0 `pi-*` shared-role templates and `piCapabilitySets` / project capability overlays are not a second runtime. Conversion turns `subagents/pi-<role>.md` with `harness: "pi-*"` into an ordinary cross-harness role and does not copy `piCapabilitySets`. Trust threading for project resources and pre-spawn failure evidence remain.
 - Execution configuration now has one authoritative file: `pi-flow-external/settings.json` version 4, including named Pi harness model/thinking registrations. Run `/external settings convert` once for an older installation; invalid or conflicting inputs block conversion rather than being discarded.
 - The six built-in roles are synthesized for agy, Claude, Codex, Grok, Muse, and registered Pi harnesses. No default profile files or seed markers are written. Shared authored roles live in `pi-flow-external/roles/`; exact overrides live in `pi-flow-external/overrides/`.
 - Conversion copies custom external profiles and preserves deleted-default intent, leaving original files in place. Once v4 is active, legacy `subagents/` profiles and `harnesses.json` are ignored, not fallback configuration.
@@ -19,6 +23,16 @@ All notable changes to pi-flow external are documented here.
 - Unified role discovery, inspection, offline shared-role authoring, exact override creation, harness registration, and validated settings editing. All execution/discovery consumers use the same effective catalog.
 - Frozen workflow catalog/model snapshots and explicit invalid/disabled selection errors prevent hidden fallback to a built-in role or another harness.
 - Isolated v4 E2E fixtures and explicit permission selection, including Grok `danger` checks without sandbox workarounds.
+
+## [2.5.0-external.0] - 2026-09-22
+
+Shipped on main as 2.5.0-external.0 (shared Pi role templates and capability sets). 2.6.0-external.0 above replaces that runtime. This entry stays as the record of what 2.5.0 shipped.
+
+### Added
+
+- Shared custom Pi roles as `subagents/pi-<role>.md` with `harness: "pi-*"`, materialized onto registered Pi harnesses only.
+- Named `piCapabilitySets` in global settings and trusted project settings, selected by profile `capabilitySet`.
+- Pre-spawn workflow failures finish the queued run record instead of leaving it incomplete.
 
 ## [2.4.2-external.0] - 2026-09-23
 

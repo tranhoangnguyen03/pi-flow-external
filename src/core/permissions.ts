@@ -23,63 +23,36 @@ export interface PermissionResolution {
   backend?: SubagentBackend;
 }
 
-/**
- * Known execution-oriented roles that require command/Bash execution
- * (running tests, build tools, git inspection, etc.).
- */
-export const EXECUTION_ROLES: readonly string[] = ["implementer", "qa", "worker"];
-
-/** Minimal profile shape needed to reason about permission tiers. */
-export type PermissionProfileRef = Pick<SubagentProfile, "name" | "backend" | "description" | "permission">;
-
-export function isExecutionProfile(profile?: PermissionProfileRef): boolean {
-  if (!profile) return false;
-  if (profile.permission === "danger") return true;
-  const name = profile.name.toLowerCase();
-  return EXECUTION_ROLES.some((role) => name === role || name.endsWith(`-${role}`) || name.startsWith(`${role}-`));
-}
+/** Minimal profile shape kept so callers can pass the resolved profile without granting it authority. */
+export type PermissionProfileRef = Pick<SubagentProfile, "name" | "backend" | "description">;
 
 /**
- * Resolve effective permission tier for a profile run.
- *
- * Pragmatic execution principle: do not get in the way of external agents
- * doing good work. Claude in headless mode auto-denies all Bash commands at
- * `edit` (acceptEdits); execution profiles (such as implementer, qa,
- * worker) require shell access to inspect repositories, run tests, and validate
- * fixes. An override to `edit` on these lanes would handcuff the model into
- * headless permission denials. We elevate to `danger` so the agent has the
- * necessary authority, and truthfully disclose `unsandboxed external CLI`.
+ * Effective tier is the caller's explicit permission, otherwise the global
+ * default (`danger` unless settings say otherwise). A role name or a profile
+ * file cannot raise or lower it.
  */
 export function resolveEffectivePermissionTier(
   requestedTier: PermissionTier | undefined,
-  profile: PermissionProfileRef | undefined,
+  _profile?: PermissionProfileRef,
   defaultTier: PermissionTier = "danger",
 ): PermissionTier {
-  // Profile permissions are a floor: parent requests can grant more, never less.
-  const floor = profile?.permission ?? defaultTier;
-  const tiers: readonly PermissionTier[] = ["readonly", "edit", "danger"];
-  const baseTier = tiers[Math.max(tiers.indexOf(floor), tiers.indexOf(requestedTier ?? floor))]!;
-  if (profile?.backend === "agy") {
-    // Get out of the way: agy's only unsandboxed headless mode is
-    // --dangerously-skip-permissions, and its default sandbox denies even
-    // read-only tools (read_url_content). Every agy run is therefore
-    // unsandboxed; any readonly/edit tier is an advisory instruction carried
-    // by the profile body, not a harness boundary.
-    return "danger";
-  }
-  if ((profile?.backend === "claude" || profile?.backend === "pi") && isExecutionProfile(profile) && baseTier === "edit") {
-    // Same floor as claude, for the same reason: §6's curated pi tool table
-    // strips `bash` at `edit` tier, so an execution-lane pi profile (implementer,
-    // qa, worker) requested at `edit` would otherwise lose shell
-    // access entirely. Elevate rather than silently handcuff the agent.
-    return "danger";
-  }
-  return baseTier;
+  return requestedTier ?? defaultTier;
 }
 
 /**
- * Resolve a tier for one backend. Trust + disclose: unsupported tiers are
- * advisory (instruction-only), never a launch failure.
+ * Backends that cannot enforce a requested restriction refuse it.
+ * Antigravity's only headless mode is unsandboxed autonomous execution.
+ */
+export function unsupportedPermissionReason(tier: PermissionTier, backend: SubagentBackend): string | undefined {
+  if (backend === "agy" && tier !== "danger") {
+    return `Antigravity supports only autonomous danger mode (--dangerously-skip-permissions). It cannot enforce ${tier}. Pass permission "danger" or omit it to use the global default.`;
+  }
+  return undefined;
+}
+
+/**
+ * Describe how one backend maps a tier it supports. Antigravity's non-danger
+ * tiers are unsupported and are rejected before launch.
  */
 export function resolvePermission(tier: PermissionTier, backend: SubagentBackend): PermissionResolution {
   switch (backend) {
@@ -100,16 +73,13 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         caveat: tier === "danger" ? undefined : "shell commands only",
       };
     case "agy":
-      // agy has no granular headless permission mode: its default sandbox
-      // denies even read-only tools, and --dangerously-skip-permissions is the
-      // only unsandboxed mode. resolveEffectivePermissionTier elevates every
-      // agy run to danger, so a non-danger tier reaching this branch is
-      // advisory metadata only, never a harness boundary.
+      // Only danger is launchable. A non-danger tier here was not mapped onto
+      // the bypass flag; spawn rejects it before process start.
       return {
         tier,
         enforced: tier === "danger",
         backend,
-        caveat: tier === "danger" ? undefined : "runs unsandboxed; tier advisory only",
+        caveat: tier === "danger" ? undefined : "unsupported; Antigravity is autonomous only",
       };
     case "grok":
       // --sandbox is a real kernel-level sandbox on the grok CLI, enforced at
@@ -160,7 +130,7 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         tier,
         enforced: true,
         backend,
-        caveat: tier === "danger" ? undefined : `${PI_TIER_ACTIVE_TOOLS[tier].join("/")} tools only; no project extensions`,
+        caveat: tier === "danger" ? undefined : `${PI_TIER_ACTIVE_TOOLS[tier].join("/")} tools only; curated tool names, not an OS sandbox`,
       };
     default:
       return { tier, enforced: false, backend, caveat: "advisory, not enforced" };
@@ -183,9 +153,9 @@ export function buildPermissionArgs(
       if (tier === "edit") return ["--sandbox", "workspace-write"];
       return ["--sandbox", "danger-full-access"];
     case "agy":
-      // Get out of the way: agy's default headless sandbox (proceed-in-sandbox)
-      // hard-denies read-only tools like read_url_content, so we always pass the
-      // bypass flag and treat readonly/edit as advisory profile-body instructions.
+      if (tier !== "danger") {
+        throw new Error(unsupportedPermissionReason(tier, "agy"));
+      }
       return ["--dangerously-skip-permissions"];
     case "grok":
       if (tier === "readonly") return ["--sandbox", "read-only", "--permission-mode", "bypassPermissions"];
