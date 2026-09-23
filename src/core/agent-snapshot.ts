@@ -24,6 +24,7 @@ export function applySubagentProgressToWorkflowAgent(agent: WorkflowAgentSnapsho
   agent.sessionId = progress.sessionId;
   agent.resumedFrom = progress.resumedFrom;
   agent.context = progress.context;
+  if (progress.capabilities !== undefined) agent.capabilities = progress.capabilities;
   if (progress.thinkingClamped) agent.thinkingClamped = progress.thinkingClamped;
 }
 

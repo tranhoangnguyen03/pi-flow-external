@@ -147,7 +147,7 @@ export async function loadCapabilityResources(params: LoadCapabilityResourcesPar
     ];
     throw new Error(
       `capabilitySet "${set}" is not fully resolvable: ${parts.join(", ")} ${parts.length === 1 ? "is" : "are"} not discoverable ` +
-      `(checked global skills/prompts directories, plus project ones only because this project ${settingsManager.isProjectTrusted() ? "is" : "is not"} trusted). ` +
+      `(checked global skills/prompts directories; project directories ${settingsManager.isProjectTrusted() ? "included because the project is trusted" : "excluded because the project is not trusted"}). ` +
       "Fix the set in settings.json, or remove/correct the profile's capabilitySet selection.",
     );
   }

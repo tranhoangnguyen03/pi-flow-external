@@ -608,6 +608,8 @@ export function createWorkflowTool(
               };
               snapshot.agents.push(agent);
             }
+            const capabilities = profile?.capabilitySet ? resolvedCapabilities.get(profile.capabilitySet) : undefined;
+            if (capabilities) agent.capabilities = capabilities;
             agent.status = event.cached ? "done" : "running";
             if (event.runId) agent.externalRunId = event.runId;
             agent.startedAt = Date.now();

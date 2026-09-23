@@ -1273,6 +1273,14 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     const ctx = { cwd, modelRegistry, sessionManager: session.sessionManager, isProjectTrusted: () => true } as unknown as ExtensionContext;
 
+    // Persist the workflow journal in this test's temp directory so replay
+    // exercises the real cached-child snapshot path without a second model call.
+    ctx.sessionManager = {
+      isPersisted: () => true,
+      getSessionFile: () => join(cwd, "disclose-session.jsonl"),
+      getSessionId: () => "disclose-session",
+      getBranch: () => session.sessionManager.getBranch(),
+    } as unknown as typeof ctx.sessionManager;
     let sawCapabilitiesWhileRunning = false;
     const onUpdate = (partial: { details: WorkflowToolDetails }) => {
       const agent = partial.details.agents.find((item) => item.subagentType === "pi-deepseek-docs");
@@ -1303,6 +1311,15 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
 
     expect(result.details.status).toBe("completed");
     expect(sawCapabilitiesWhileRunning).toBe(true);
+    registration.setResponses([() => { throw new Error("Cached child must not execute"); }]);
+    const replay = await tool.execute(
+      "call-disclose-replay",
+      { scriptPath: result.details.scriptPath!, resumeFromRunId: result.details.runId! },
+      undefined, undefined, ctx,
+    );
+    expect(replay.details.status, replay.details.error).toBe("completed");
+    expect(replay.details.cachedAgentCount).toBe(1);
+    expect(replay.details.agents[0].capabilities).toEqual(result.details.agents[0].capabilities);
   });
 
   it("rejects a workflow child whose selected SKILL.md content changed since this run started", async () => {

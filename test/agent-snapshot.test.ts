@@ -79,11 +79,13 @@ describe("workflow agent snapshot copy", () => {
 
   it("keeps the running-progress copy and the finished-result copy from drifting apart on which fields they carry", () => {
     const agent = baseAgent();
-    const progress = baseProgress({ thinkingClamped: { requested: "high", effective: "low" } });
+    const capabilities: ResolvedCapabilities = { set: "docs", skills: ["writer"], promptTemplates: [] };
+    const progress = baseProgress({ thinkingClamped: { requested: "high", effective: "low" }, capabilities });
 
     applySubagentProgressToWorkflowAgent(agent, progress);
 
     expect(agent.status).toBe("running");
+    expect(agent.capabilities).toEqual(capabilities);
     expect(agent.activity).toEqual(["did a thing"]);
     expect(agent.thinkingClamped).toEqual({ requested: "high", effective: "low" });
   });
