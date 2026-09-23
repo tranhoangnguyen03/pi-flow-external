@@ -84,16 +84,52 @@ describe("external_runs", () => {
     expect(batch.details.entries[2]).toMatchObject({ runId: "run_live_third", kind: "agent", live: true });
     expect(batch.details.nextCursor).toBeUndefined();
 
-    // runId and runIds are mutually exclusive.
+    // A genuinely non-empty runId AND runIds together is a real conflict.
     await expect(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] })).rejects.toThrow(/either runId or runIds/i);
-    // Batch inspect stays summary-only.
-    await expect(execute({ action: "inspect", runIds: [first.runId], view: "output" })).rejects.toThrow(/summary/i);
+    // Single-entry runIds inspect supports output/diagnostics/final views without forcing the caller to switch to runId.
+    const singleOutput = await execute({ action: "inspect", runIds: [first.runId], view: "output" });
+    expect(singleOutput.content[0].text).toBe("answer");
+    expect(singleOutput.details).toMatchObject({ runId: first.runId, view: "output" });
+    // Multi-entry batch inspect stays summary-only.
+    await expect(execute({ action: "inspect", runIds: [first.runId, second.runId], view: "output" })).rejects.toThrow(/summary/i);
     // Ownership is validated for every target before any page returns.
     await expect(execute({ action: "inspect", runIds: [first.runId, "run_unowned"] })).rejects.toThrow(/unknown|unavailable/i);
     await expect(execute({ action: "inspect", runIds: [] })).rejects.toThrow(/1-20/);
     await expect(execute({ action: "inspect", runIds: Array.from({ length: 21 }, (_, index) => `run_${index}`) })).rejects.toThrow(/1-20/);
 
     finishThird("done");
+  });
+
+  it("treats a blank runId or empty runIds as omitted rather than a conflict, matching the #62 forced-placeholder reproduction", async () => {
+    const { execute, runsDirectory } = setup();
+    const owned = await completedRecord(runsDirectory);
+
+    // A downstream schema-conversion layer may present runId/runIds as both
+    // required (#62); a model forced to fill in the one it means to omit
+    // sends a blank string or empty array for it ("an empty runId did not
+    // help" from the #62 reproduction). Neither should conflict with a
+    // genuinely populated selector.
+    const blankRunId = await execute({ action: "inspect", runId: "", runIds: [owned.runId] });
+    expect(blankRunId.details.entries.map((entry: any) => entry.runId)).toEqual([owned.runId]);
+
+    // A whitespace-only placeholder is just as much "not a real run ID" as
+    // an empty string, so it is normalized the same way.
+    const whitespaceRunId = await execute({ action: "inspect", runId: "   ", runIds: [owned.runId] });
+    expect(whitespaceRunId.details.entries.map((entry: any) => entry.runId)).toEqual([owned.runId]);
+
+    const emptyRunIds = await execute({ action: "inspect", runId: owned.runId, runIds: [], view: "output" });
+    expect(emptyRunIds.details).toMatchObject({ runId: owned.runId, view: "output" });
+
+    // Never guess a cancellation target when both selectors are supplied.
+    await expect(execute({ action: "cancel", runId: owned.runId, runIds: [owned.runId] })).rejects.toThrow(/either runId or runIds/);
+
+    // cancel accepts the unified runIds list selector (singleton) and rejects multi-target cancel.
+    await expect(execute({ action: "cancel", runIds: [owned.runId] })).resolves.toMatchObject({ details: { status: "terminal" } });
+    await expect(execute({ action: "cancel", runIds: [owned.runId, "run_extra"] })).rejects.toThrow(/one run at a time/i);
+
+    // Both blank at once still surfaces the batch-empty error, since no
+    // target was actually provided either way.
+    await expect(execute({ action: "inspect", runId: "", runIds: [] })).rejects.toThrow(/1-20/);
   });
 
   it("paginates a small batch limitBytes one target at a time without dropping any target, bounding the FULL returned text (entries wrapper and nextCursor, not just entry sizes) including under multi-byte UTF-8, and fails actionably rather than overflowing or returning a non-advancing empty page when even one entry cannot fit", async () => {

@@ -22,8 +22,7 @@ const externalHelpParameters = Type.Object({
     description: "Help topic: role descriptions/configured profile availability, harness permissions, or workflow syntax and saved workflows.",
   }),
   harness: Type.Optional(Type.String({
-    minLength: 1,
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. Do not use with topic workflow.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. Workflows orchestrate across harnesses.",
   })),
 });
 
@@ -131,14 +130,18 @@ export function createExternalHelpTool(
     promptSnippet: EXTERNAL_HELP_PROMPT_SNIPPET,
     parameters: externalHelpParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.topic === "workflow" && params.harness) {
-        throw new Error("external_help harness is only valid for roles or permissions.");
-      }
+      // A schema-conversion layer downstream of this tool's declaration may
+      // present `harness` as required (#62); treat a blank/whitespace
+      // placeholder as omitted. Furthermore, do not reject an explicit
+      // harness on topic "workflow": workflows orchestrate across all
+      // harnesses, so passing a harness filter gracefully returns workflow
+      // guidance without error.
+      const harness = params.harness?.trim() ? params.harness.trim() : undefined;
       let text: string;
       const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
       const configuredPiHarnesses = new Set(harnessConfigs.keys());
       if (params.topic !== "workflow") {
-        validateHarnessFilter(params.harness, configuredPiHarnesses);
+        validateHarnessFilter(harness, configuredPiHarnesses);
       }
       if (params.topic === "roles") {
         const profiles = mergeSynthesizedPiProfiles(
@@ -148,19 +151,22 @@ export function createExternalHelpTool(
           ),
           harnessConfigs,
         );
-        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), params.harness);
+        text = formatExternalRoleHelp(profiles, options.getDefaultHarness(ctx), harness);
       } else if (params.topic === "permissions") {
-        text = permissionHelp(params.harness, configuredPiHarnesses);
+        text = permissionHelp(harness, configuredPiHarnesses);
       } else {
-        text = workflowHelp(options.workflowEnabled, listSavedWorkflows({
+        const wfText = workflowHelp(options.workflowEnabled, listSavedWorkflows({
           agentDir: getAgentDir(),
           cwd: ctx.cwd,
           projectTrusted: isProjectTrusted(ctx),
         }));
+        text = harness
+          ? `${wfText}\n\nNote: Workflows orchestrate across multiple harnesses (including "${harness}"); workflow syntax is uniform across backends.`
+          : wfText;
       }
       return {
         content: [{ type: "text" as const, text }],
-        details: { topic: params.topic, ...(params.harness ? { harness: params.harness } : {}) },
+        details: { topic: params.topic, ...(harness ? { harness } : {}) },
       };
     },
   });

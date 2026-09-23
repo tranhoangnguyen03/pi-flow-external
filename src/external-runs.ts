@@ -28,13 +28,9 @@ const externalRunsParameters = Type.Object({
   action: StringEnum(["list", "inspect", "wait", "cancel"] as const, {
     description: "list: page runs/workflows; inspect: read one run; wait: block until selected terminal outcomes; cancel: stop one run.",
   }),
-  runId: Type.Optional(Type.String({
-    description: "Target run ID (run_... agent, wf_... workflow). Required for inspect/cancel/wait of a single run.",
-  })),
   runIds: Type.Optional(Type.Array(Type.String(), {
-    minItems: 1,
     maxItems: MAX_TARGETS,
-    description: "wait: target set for mode any|all, up to 100, deduplicated; already-terminal targets return immediately. inspect: batch summary target set, up to 20, deduplicated, order preserved; cannot combine with runId, and view must stay summary.",
+    description: "Target run IDs (run_... agent, wf_... workflow). For inspect: a single-entry list [\"run_...\"] inspects that run with any view (summary, output, diagnostics, final); multiple entries (1-20 targets) batch summary inspect. For cancel: a single-entry list [\"run_...\"]. For wait: any|all of up to 100 targets.",
   })),
   view: Type.Optional(StringEnum(["summary", "output", "diagnostics", "final"] as const, {
     description: "inspect view: summary (state/timing/freshness/refs, default), output (assistant text plus canonical result, partial or final), diagnostics (tool activity/errors), final (only the verified canonical terminal answer, empty until a successful terminal boundary exists). Batch inspect (runIds) only supports summary.",
@@ -67,7 +63,10 @@ const externalRunsParameters = Type.Object({
   })),
 });
 
-export type ExternalRunsParams = Static<typeof externalRunsParameters>;
+export type ExternalRunsParams = Static<typeof externalRunsParameters> & {
+  /** Legacy single-target selector; preserved for backwards-compatible programmatic/test callers. */
+  runId?: string;
+};
 type ExternalRunsDetails = Record<string, unknown>;
 
 export interface CreateExternalRunsToolOptions {
@@ -518,9 +517,12 @@ function renderExternalRunsCall(args: Record<string, unknown>, theme: Theme): Te
     const ids = Array.isArray(args.runIds) ? args.runIds : args.runId ? [args.runId] : [];
     detail = `waiting for ${ids.length} task(s) · mode ${typeof args.mode === "string" ? args.mode : "all"}`;
   } else if (action === "cancel") {
-    detail = `cancel ${String(args.runId ?? "")}`;
+    const target = Array.isArray(args.runIds) && args.runIds.length ? args.runIds[0] : String(args.runId ?? "");
+    detail = `cancel ${target}`;
   } else if (action === "inspect") {
-    const target = Array.isArray(args.runIds) ? `${args.runIds.length} run(s) (batch)` : String(args.runId ?? "");
+    const target = Array.isArray(args.runIds)
+      ? args.runIds.length === 1 ? args.runIds[0] : `${args.runIds.length} run(s) (batch)`
+      : String(args.runId ?? "");
     detail = `inspect ${target} · ${typeof args.view === "string" ? args.view : "summary"}`;
   } else {
     detail = `list${typeof args.workflowRunId === "string" ? ` · workflow ${args.workflowRunId}` : ""}`;
@@ -626,6 +628,33 @@ function renderExternalRunsResult(toolResult: { content: Array<{ type: string; t
   return new Text(textFromToolResult(toolResult), 0, 0);
 }
 
+/**
+ * Reconcile the `runId`/`runIds` selector pair for `inspect` only — the one
+ * action that already hard-rejects supplying both (`wait` treats a stray
+ * `runId` alongside `runIds` as a harmless one-element convenience, and
+ * `cancel` never reads `runIds` at all, so neither gets a new conflict
+ * check here). A schema-conversion layer downstream of this tool's
+ * declaration may present both mutually exclusive optional selectors as
+ * required (#62); a model forced to fill in the one it means to omit
+ * typically sends a blank string or an empty array. Neither can name an
+ * actual run, so treat that placeholder as omitted rather than a real
+ * conflict — this is narrower than guessing between two genuinely
+ * populated, disagreeing selectors, which still fails loudly exactly as
+ * before (including when both name the very same run: inspect has always
+ * rejected supplying the pair at all, on purpose).
+ */
+function normalizeInspectSelectors(params: ExternalRunsParams): ExternalRunsParams {
+  const runId = params.runId === undefined || params.runId.trim() === "" ? undefined : params.runId;
+  const runIds = runId !== undefined && (params.runIds === undefined || params.runIds.length === 0)
+    ? undefined
+    : params.runIds;
+  if (runId !== undefined && runIds !== undefined && runIds.length > 0) {
+    throw new Error("inspect accepts either runId or runIds, not both");
+  }
+  if (runId === params.runId && runIds === params.runIds) return params;
+  return { ...params, runId, runIds };
+}
+
 export function createExternalRunsTool(
   options: CreateExternalRunsToolOptions,
 ): ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails> {
@@ -636,6 +665,12 @@ export function createExternalRunsTool(
     promptSnippet: EXTERNAL_RUNS_PROMPT_SNIPPET,
     parameters: externalRunsParameters,
     async execute(_toolCallId, params: ExternalRunsParams, signal, onUpdate, ctx) {
+      if (params.action === "inspect") {
+        params = normalizeInspectSelectors(params);
+        if (params.runId === undefined && params.runIds !== undefined && params.runIds.length === 1 && params.view !== undefined && params.view !== "summary") {
+          params = { ...params, runId: params.runIds[0], runIds: undefined };
+        }
+      }
       const { sessionId, project } = scope(ctx);
       const runsDirectory = options.runsDirectory();
 
@@ -670,7 +705,7 @@ export function createExternalRunsTool(
       }
 
       if (params.action === "inspect" && params.runIds !== undefined) {
-        if (params.runId !== undefined) throw new Error("inspect accepts either runId or runIds, not both");
+        // normalizeInspectSelectors already guarantees runId is unset here.
         if (params.view !== undefined && params.view !== "summary") throw new Error('Batch inspect (runIds) only supports view: "summary"');
         const runIds = [...new Set(params.runIds)];
         if (runIds.length === 0 || runIds.length > MAX_BATCH_INSPECT_TARGETS) {
@@ -812,26 +847,35 @@ export function createExternalRunsTool(
       }
 
       if (params.action === "cancel") {
-        assertRunId(params.runId);
-        const entry = options.registry.get(params.runId);
+        const rawRunIds = params.runIds;
+        if (rawRunIds?.length && params.runId?.trim()) {
+          throw new Error("cancel accepts either runId or runIds, not both");
+        }
+        if (rawRunIds && rawRunIds.length > 1) {
+          throw new Error("cancel targets one run at a time");
+        }
+        const targetRunId = (rawRunIds && rawRunIds.length === 1 ? rawRunIds[0] : undefined)
+          ?? (typeof params.runId === "string" && params.runId.trim() !== "" ? params.runId.trim() : undefined);
+        assertRunId(targetRunId);
+        const entry = options.registry.get(targetRunId);
         if (entry) {
           assertOwned(entry, sessionId, project);
-          const status = options.registry.cancel(params.runId, params.reason ?? "cancelled by external_runs");
-          return result(status === "requested" ? `Cancellation requested for ${params.runId}.` : `${params.runId} is already terminal.`, { runId: params.runId, status });
+          const status = options.registry.cancel(targetRunId, params.reason ?? "cancelled by external_runs");
+          return result(status === "requested" ? `Cancellation requested for ${targetRunId}.` : `${targetRunId} is already terminal.`, { runId: targetRunId, status });
         }
-        const isWorkflowId = WORKFLOW_ID.test(params.runId);
+        const isWorkflowId = WORKFLOW_ID.test(targetRunId);
         const workflowDir = getSessionWorkflowDir(ctx);
-        const historicalWorkflow = isWorkflowId && workflowDir ? await loadWorkflowJournal(workflowDir, params.runId) : undefined;
+        const historicalWorkflow = isWorkflowId && workflowDir ? await loadWorkflowJournal(workflowDir, targetRunId) : undefined;
         if (historicalWorkflow) {
           if (historicalWorkflow.project !== project) throw new Error("Run is unknown or unavailable in this session");
-          if (historicalWorkflow.status !== "running") return result(`${params.runId} is already terminal.`, { runId: params.runId, status: "terminal" });
+          if (historicalWorkflow.status !== "running") return result(`${targetRunId} is already terminal.`, { runId: targetRunId, status: "terminal" });
           throw new Error("Run is no longer live in this session; cancellation cannot be confirmed");
         }
         // An unresolved wf_... ID is unknown, not an unowned agent record.
         if (isWorkflowId) throw new Error("Run is unknown or unavailable in this session");
-        const durable = await getRunRecord(runsDirectory, params.runId);
+        const durable = await getRunRecord(runsDirectory, targetRunId);
         assertOwnedRecord(durable, sessionId, project);
-        if (terminalRecord(durable)) return result(`${params.runId} is already terminal.`, { runId: params.runId, status: "terminal" });
+        if (terminalRecord(durable)) return result(`${targetRunId} is already terminal.`, { runId: targetRunId, status: "terminal" });
         throw new Error("Run is no longer live in this session; cancellation cannot be confirmed");
       }
 

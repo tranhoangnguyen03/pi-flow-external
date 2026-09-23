@@ -4,6 +4,15 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.4.2-external.0] - 2026-09-23
+
+### Fixed
+
+- Simplified model-facing run supervision to one `runIds` selector, including singleton output/final inspection and cancellation. Legacy `runId` callers remain supported; conflicting cancellation selectors fail explicitly.
+- Workflow help accepts a supplied harness without blocking, explains its cross-harness scope, and accepts blank filters at the SDK schema boundary.
+- Blank Agent resume arguments no longer conflict with context sharing or trigger resume lookup. Real resume/context conflicts remain errors.
+- Added SDK argument-validation coverage alongside provider-payload tests. Audited workflow source selection: blank sources already normalize away; multiple real sources still fail. Downstream required-field promotion remains unverified, so #62 stays open.
+
 ## [2.4.1-external.0] - 2026-09-23
 
 ### Fixed
