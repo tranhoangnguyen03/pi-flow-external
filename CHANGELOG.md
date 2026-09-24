@@ -6,7 +6,7 @@ All notable changes to pi-flow external are documented here.
 
 ### Added
 
-- OpenCode (`opencode`) as a sixth CLI backend, with JSONL progress, verified-final-step completion, session resume, native root-step usage, cancellation, and durable receipts. Targets CLI 1.18.32. Restricted tiers use native deny-by-default tool rules, not an OS sandbox. Explicit thinking pins and structured schemas are rejected; nested-task total cost is unknown and budgets are unenforceable.
+- OpenCode (`opencode`) as a sixth CLI backend, with JSONL progress, verified-final-step completion, session resume, native root-step usage, cancellation, and durable receipts. Targets OpenCode 2 only (verified against `@opencode/cli` 2.0.16); OpenCode 1.x is not supported. Every run uses `--standalone`, a private server the run owns, and never touches the shared background service. Restricted tiers use native deny-by-default tool rules, not an OS sandbox. A pinned thinking level is passed as the pinned model's `#variant`, which OpenCode validates. Structured schemas are rejected. Nested-subagent total cost is unknown, and budgets are unenforceable.
 - Whole-harness toggles through `/external config enable|disable <harness>` and settings v4 `disabledHarnesses`. Disabling preserves definitions, hides executable availability, and rejects direct/exact/resumed selections and new workflow replay without fallback. Active work retains its snapshot. `/external config default <harness>` selects an enabled global default; doctor skips disabled readiness checks.
 
 ### Changed — command migration

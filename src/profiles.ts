@@ -168,18 +168,22 @@ export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, Subag
 }
 
 /**
- * OpenCode takes `--model provider/model`. Its `--variant` names are
- * model-specific, and it ignores an unknown one without an error
- * (session/llm/request.ts), so a pinned thinking level is refused instead of
- * being passed where it might silently do nothing.
+ * OpenCode 2 takes `--model provider/model#variant`. Variant names are
+ * model-specific, and OpenCode rejects an unknown one before the prompt runs
+ * (core/src/model-resolver.ts "Variant unavailable"). A pinned thinking level is
+ * therefore forwarded as that model's variant, which is only possible when the
+ * model itself is pinned. The inherited Pi thinking level is never forwarded.
  */
 export function opencodeProfileProblem(profile: SubagentProfile): string | undefined {
   if (profile.backend !== "opencode") return undefined;
   if (profile.model !== undefined && !/^[^/\s]+\/\S+$/.test(profile.model)) {
     return `OpenCode profile "${profile.name}" pins model "${profile.model}". Use the provider/model form, such as anthropic/claude-sonnet-4-5.`;
   }
-  if (profile.thinking !== undefined) {
-    return `OpenCode profile "${profile.name}" pins thinking "${profile.thinking}". OpenCode variants are model-specific and an unknown one is ignored, so thinking is not supported on opencode. Remove it; the model's own default variant applies.`;
+  if (profile.thinking !== undefined && profile.model === undefined) {
+    return `OpenCode profile "${profile.name}" pins thinking "${profile.thinking}" without a model. OpenCode variants are model-specific; pin model provider/model too, or remove thinking.`;
+  }
+  if (profile.thinking !== undefined && profile.model?.includes("#")) {
+    return `OpenCode profile "${profile.name}" pins both a #variant in model "${profile.model}" and thinking "${profile.thinking}". Keep one.`;
   }
   return undefined;
 }

@@ -50,7 +50,7 @@ Defaults:
 | Agy | `gemini-3.7-flash-high` | `high` |
 | Grok | `grok-4.6` | `high` |
 | Muse | `muse-spark-1.3-contributor` | `high` |
-| OpenCode | Its configured default; use `--model provider/model` to pin | Not forwarded; explicit pins rejected |
+| OpenCode | Its configured default; use `--model provider/model` to pin | Not forwarded; `--thinking` with `--model` pins that model's variant |
 
 Override with `--model`/`--thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary path printed by the runner.
 
@@ -60,7 +60,9 @@ Muse Code 1.3.0 accepts `none` in help text but its `meta` provider rejects `--r
 
 Muse's `meta` provider performs its own internal retries (observed up to 10 attempts with growing backoff on transient 503/504 errors) entirely inside the `muse` process; this is unrelated to and invisible from this extension's own no-auto-retry contract, and shows up only as activity narration (e.g. "retrying meta model stream in 60000ms (attempt 3/10)"). A run that never reports usage/cost is expected — Muse has never been observed to report either.
 
-OpenCode targets CLI 1.18.32. Check direct, workflow, interruption, and a two-process resume with a codeword known only to the first process. Permission checks must exercise native readonly/edit rules with an authenticated provider: free `opencode/*-free` models may reject restricted tool lists with 403. That is not a passing restricted-tier check. Verify an intermediate `tool-calls` step cannot finalize the receipt. Native task-child cost is not streamed; total cost must become unknown. Structured output schemas and explicit thinking pins must fail clearly before launch. Offline source/debug probes do not replace authenticated restricted-tier validation.
+OpenCode targets OpenCode 2 only (`@opencode/cli` 2.0.16; `opencode --version` prints `opencode v2.0.16`). Every child is `opencode run --standalone`, so it must never start, stop, or reuse the shared `opencode service`: note the service PID before a lane and confirm it is unchanged afterwards, and confirm that no `opencode serve --stdio` process outlives the lane. Check direct, workflow, interruption, a readonly direct lane (`--permission readonly`), and a two-process resume with a codeword known only to the first process. `opencode/space-bunny-free` accepts the restricted tool lists on 2.0.16, so free-model restricted runs are valid tier evidence. A 1.x free model rejected them with 403, which is not a passing check. Verify an intermediate `tool-calls` step cannot finalize the receipt, and that a run whose final `step_finish` was dropped still finalizes from exit 0 with unknown cost. Native subagent-child cost is not streamed; total cost must become unknown. Structured output schemas must fail clearly before launch. An unknown `#variant` must fail clearly from OpenCode itself.
+
+Give the runner a bounded child timeout and a longer outer deadline, for example `--timeout-ms 120000` under a command limit of at least 180 seconds, so an outer kill never lands before the runner's own watchdog and cleanup. A 1.x direct lane with a slow free model took 214 seconds; an outer 180-second limit killed that runner before cleanup.
 
 ### Named Pi harness receipt
 

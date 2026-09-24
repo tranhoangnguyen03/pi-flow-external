@@ -117,7 +117,7 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
               : undefined,
       };
     case "opencode":
-      // readonly/edit run under an injected OpenCode agent whose permission
+      // readonly/edit run under an injected OpenCode 2 agent whose permission
       // rules deny every tool but the tier's file tools (see opencode.ts).
       // These are OpenCode's own application rules, not an OS sandbox, and
       // project/user plugins and MCP servers still load and run their code.
@@ -129,7 +129,7 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
           tier === "readonly"
             ? "read/grep/glob tools only; OpenCode permission rules, not an OS sandbox"
             : tier === "edit"
-              ? "file read/edit tools only, no bash; OpenCode permission rules, not an OS sandbox"
+              ? "file read/edit tools only, no shell; OpenCode permission rules, not an OS sandbox"
               : undefined,
       };
     case "pi":

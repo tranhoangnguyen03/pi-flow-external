@@ -319,7 +319,7 @@ function backendAuthority(backend: string, permission: string): string {
     return `Grok --sandbox axis (read-only/workspace/off) + bypassPermissions · call tier ${permission}; readonly network-blocking is Linux-only.`;
   }
   if (backend === "opencode") {
-    return `OpenCode permission rules · call tier ${permission}; readonly/edit use an injected deny-by-default agent (not an OS sandbox; plugins and MCP servers still load), danger uses --auto.`;
+    return `OpenCode 2 standalone run · permission rules · call tier ${permission}; readonly/edit use an injected deny-by-default agent (not an OS sandbox; plugins and MCP servers still load), danger uses --auto.`;
   }
   return `Muse exec approvals bypassed headless · call tier ${permission}; readonly adds --disable-write --disable-shell, danger uses --yolo (also trusts the workspace).`;
 }

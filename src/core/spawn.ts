@@ -690,8 +690,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     });
   }
   if (params.profile.backend === "opencode") {
-    // Thinking is not forwarded: OpenCode variants are model-specific and an
-    // unknown one is ignored (see opencodeProfileProblem).
+    // The inherited thinking level is not forwarded: OpenCode variants are
+    // model-specific. A profile pin becomes `#variant` (see opencodeProfileProblem).
     return spawnOpencodeSubagent({
       toolCallId: params.toolCallId,
       description: params.description,

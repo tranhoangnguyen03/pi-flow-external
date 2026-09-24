@@ -14,7 +14,8 @@ const defaults = {
   grok: { model: "grok-4.6", thinking: "high" },
   muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
   // OpenCode needs no pinned model (its own configured default applies; pass
-  // --model provider/model to pin one) and refuses a thinking pin.
+  // --model provider/model to pin one). Thinking is a model variant, so it
+  // needs --model too.
   opencode: {},
   // No fixed model/thinking default: a named pi harness pins its own model and
   // thinking in the caller's real settings.json (version 4) harnesses map;
@@ -71,7 +72,7 @@ function parseArgs(argv) {
   if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
   if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 4");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
-  if (options.backend === "opencode" && options.thinking !== undefined) throw new Error("--thinking does not apply to --backend opencode, which refuses a thinking pin");
+  if (options.backend === "opencode" && options.thinking !== undefined && options.model === undefined) throw new Error("--thinking on --backend opencode names a model variant and needs --model provider/model");
   if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
     throw new Error("--permission must be readonly, edit, or danger");
   }

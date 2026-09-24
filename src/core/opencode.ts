@@ -21,12 +21,12 @@ import { opencodeProfileProblem, selectorHarness } from "../profiles.ts";
 const OPENCODE_COMMAND = "opencode";
 
 /**
- * OpenCode's permission rule names for the tools each restricted tier keeps
- * (verified against opencode 1.18.32 src/tool/*.ts: `edit` also covers
- * write and apply_patch). Everything else, including bash, task, web, MCP,
- * plugin, and custom tools, falls under the leading `"*": "deny"` rule and is
- * hidden from the model. Rules are last-match-wins
- * (src/permission/index.ts `evaluate` uses findLast).
+ * OpenCode 2 permission actions for the tools each restricted tier keeps
+ * (verified against @opencode/cli 2.0.16, packages/core/src/tool/plugin/*.ts:
+ * write and patch also check `edit`). Everything else, including shell,
+ * subagent, web, MCP, the session-management `opencode` tool, and plugin
+ * tools, falls under the leading `*` deny. Rules are last-match-wins
+ * (packages/core/src/permission.ts `evaluate` uses findLast).
  */
 const OPENCODE_TIER_ALLOWED: Readonly<Record<Exclude<PermissionTier, "danger">, readonly string[]>> = {
   readonly: ["read", "grep", "glob"],
@@ -45,15 +45,16 @@ function asFiniteNumber(value: unknown): number {
 
 /**
  * readonly/edit run under a primary agent injected through
- * OPENCODE_CONFIG_CONTENT and selected with `default_agent`. That source is
- * merged after global, project, and `.opencode/` config
- * (src/config/config.ts), so it overrides a project `default_agent`. The
- * agent name is random per run: agent-level permission objects are
- * deep-merged by key, so a project file that predefined rules for a fixed
- * name could keep an `allow` after our `"*": "deny"`. A missing default
- * agent fails the run (src/agent/agent.ts `defaultInfo`) instead of falling
- * back to `build`. `--agent` is not used because an unknown `--agent` falls
- * back to the default agent with only a warning.
+ * OPENCODE_CONFIG_CONTENT and selected with `default_agent`. OpenCode 2 loads
+ * that source after global, project, and `.opencode/` config
+ * (packages/core/src/config.ts), so its `default_agent` wins and its agent
+ * rules are appended after every other document's rules
+ * (core/src/config/plugin/agent.ts). The agent name is random per run, so a
+ * project file cannot pre-seed later-appended rules for it.
+ *
+ * The env reaches only the private `--standalone` server this process
+ * spawns. The shared background service never sees it, which is why every
+ * run is standalone.
  *
  * danger injects nothing. `--auto` approves every `ask` rule. Explicit
  * denies in the user's own config still apply.
@@ -70,40 +71,41 @@ export function buildOpencodeEnv(
     );
   }
   const agent = `pi-flow-${permission}-${agentSuffix}`;
-  const rules: Record<string, string> = { "*": "deny" };
-  for (const tool of OPENCODE_TIER_ALLOWED[permission]) rules[tool] = "allow";
+  const permissions = [
+    { action: "*", resource: "*", effect: "deny" },
+    ...OPENCODE_TIER_ALLOWED[permission].map((action) => ({ action, resource: "*", effect: "allow" })),
+  ];
   return {
     ...baseEnv,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ default_agent: agent, agent: { [agent]: { mode: "primary", permission: rules } } }),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ default_agent: agent, agents: { [agent]: { mode: "primary", permissions } } }),
   };
 }
 
 export function buildOpencodeArgs({
-  workspace,
   profile,
   permission = "danger",
   resumeSessionId,
 }: {
-  workspace: string;
   profile: SubagentProfile;
   permission?: PermissionTier;
   resumeSessionId?: string;
 }): string[] {
   const problem = opencodeProfileProblem(profile);
   if (problem) throw new Error(problem);
-  // The prompt goes over stdin. `--dir` pins the project directory, because
-  // opencode otherwise resolves it from an inherited $PWD.
-  const args = ["run", "--format", "json", "--dir", workspace];
+  // The prompt goes over stdin. OpenCode 2 has no --dir; it takes the project
+  // from $PWD, then cwd, so spawn sets both (see opencodeSpawnEnv).
+  const args = ["run", "--standalone", "--format", "json"];
   if (resumeSessionId) args.push("--session", resumeSessionId);
-  if (profile.model) args.push("--model", profile.model);
+  if (profile.model) args.push("--model", profile.thinking ? `${profile.model}#${profile.thinking}` : profile.model);
   args.push(...buildPermissionArgs(permission, "opencode"));
   return args;
 }
 
 /**
  * `opencode run --format json` writes one `{type, timestamp, sessionID, ...}`
- * object per line, only for parts whose own `sessionID` is the root session
- * (src/cli/cmd/run.ts). Child `task` sessions are not streamed.
+ * object per line, only for the root session
+ * (packages/cli/src/run/noninteractive.ts). Child `subagent` sessions are not
+ * streamed.
  */
 export function parseOpencodeJsonLine(line: string): Record<string, unknown> | undefined {
   const trimmed = line.trim();
@@ -128,30 +130,36 @@ export function extractOpencodeText(event: Record<string, unknown>): string | un
   return typeof part?.text === "string" && part.text ? part.text : undefined;
 }
 
+/** OpenCode 2 errors are `{type, message}`. */
 export function extractOpencodeError(event: Record<string, unknown>): string | undefined {
   if (event.type !== "error") return undefined;
   const error = asRecord(event.error);
-  const message = asRecord(error?.data)?.message;
+  const message = error?.message;
   const reason = typeof message === "string" && message.trim()
     ? message.trim()
-    : typeof error?.name === "string" && error.name
-      ? error.name
+    : typeof error?.type === "string" && error.type
+      ? error.type
       : "unknown error";
   return `opencode failed: ${reason}`;
 }
 
-/** `task` is OpenCode's subagent tool. `tool_use` is emitted only once the tool finishes. */
+/** `subagent` is OpenCode 2's delegation tool. `tool_use` is emitted only once the tool finishes. */
 export function opencodeHasNestedAgentActivity(event: Record<string, unknown>): boolean {
-  return event.type === "tool_use" && partOf(event)?.tool === "task";
+  return event.type === "tool_use" && partOf(event)?.tool === "subagent";
 }
 
 function isPermissionDenial(part: Record<string, unknown>): boolean {
   const state = asRecord(part.state);
-  if (state?.status !== "error" || typeof state.error !== "string") return false;
-  // PermissionRejectedError / PermissionDeniedError messages (packages/core/src/v1/permission.ts).
-  return state.error.includes("The user rejected permission to use this specific tool call") ||
-    state.error.includes("The user has specified a rule which prevents you from using this specific tool call");
+  // Permission.BlockedError (packages/core/src/permission.ts).
+  return state?.status === "error" && typeof state.error === "string" && state.error.startsWith("Permission denied");
 }
+
+/**
+ * Without --auto, a permission ask is rejected and the session interrupted,
+ * yet the CLI still exits 0. It prints only this stderr notice
+ * (packages/cli/src/run/noninteractive.ts replyPermission).
+ */
+const AUTO_REJECT_NOTICE = /permission requested: .*; auto-rejecting/;
 
 export function opencodeActivityFromEvent(event: Record<string, unknown>): string | undefined {
   if (event.type === "tool_use") {
@@ -202,16 +210,15 @@ export async function spawnOpencodeSubagent(params: {
   const progress = emitter.progress;
 
   // Tokens and cost come from root-session step_finish parts. OpenCode prices
-  // them from its own model catalog. Child `task` sessions are not streamed,
-  // so their usage is missing and cost becomes unknown once one ran.
+  // them from its own model catalog. Cost is unknown when the final step's
+  // step_finish never arrived (see the terminal check below) or once a
+  // `subagent` ran, because child sessions are not streamed.
   const latestUsage: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: false, costEstimated: false };
-  let sawUsage = false;
-  let nestedTaskSeen = false;
+  let nestedSeen = false;
   let sessionId: string | undefined;
+  let sawStep = false;
   let stepText: string[] = [];
-  let inStep = false;
-  let finishReason: string | undefined;
-  let finalText = "";
+  let stepFinish: string | undefined;
   const allText: string[] = [];
   let permissionDenials = 0;
   let eventError: string | undefined;
@@ -226,24 +233,35 @@ export async function spawnOpencodeSubagent(params: {
     } catch {
       // Observation hooks must not change the backend result.
     }
-    if (typeof event.sessionID !== "string" || !event.sessionID) return;
+    if (typeof event.sessionID !== "string") return;
+    // A failure before any session exists (e.g. an unknown --session) carries
+    // an empty sessionID.
+    if (event.type === "error" && (event.sessionID === "" || event.sessionID === (sessionId ?? event.sessionID))) {
+      const message = extractOpencodeError(event)!;
+      eventError = eventError ? `${eventError}; ${message}` : message;
+      emitter.addActivity(message);
+      emitter.emitSoon();
+      return;
+    }
+    if (!event.sessionID) return;
     // The first event fixes the root session. Anything else is foreign.
     sessionId ??= event.sessionID;
     if (event.sessionID !== sessionId) return;
     const part = partOf(event);
     if (event.type === "step_start") {
-      inStep = true;
+      sawStep = true;
       stepText = [];
+      stepFinish = undefined;
     } else if (event.type === "text") {
+      // Text reconciled after the stream closes arrives after step_finish; it
+      // still belongs to the step that produced it.
       const text = extractOpencodeText(event);
       if (text) {
         stepText.push(text);
         allText.push(text);
       }
     } else if (event.type === "step_finish" && part) {
-      inStep = false;
-      finishReason = typeof part.reason === "string" ? part.reason : "unknown";
-      finalText = stepText.join("\n\n");
+      stepFinish = typeof part.reason === "string" ? part.reason : "unknown";
       const tokens = asRecord(part.tokens);
       const cache = asRecord(tokens?.cache);
       latestUsage.input += asFiniteNumber(tokens?.input);
@@ -251,15 +269,11 @@ export async function spawnOpencodeSubagent(params: {
       latestUsage.cacheRead += asFiniteNumber(cache?.read);
       latestUsage.cacheWrite += asFiniteNumber(cache?.write);
       latestUsage.cost += asFiniteNumber(part.cost);
-      sawUsage = true;
     } else if (event.type === "tool_use" && part) {
-      if (part.tool === "task") nestedTaskSeen = true;
+      if (part.tool === "subagent") nestedSeen = true;
       if (isPermissionDenial(part)) permissionDenials++;
-    } else if (event.type === "error") {
-      const message = extractOpencodeError(event);
-      eventError = eventError ? `${eventError}; ${message}` : message;
     }
-    latestUsage.costKnown = sawUsage && !nestedTaskSeen;
+    latestUsage.costKnown = stepFinish !== undefined && !nestedSeen;
     const activity = opencodeActivityFromEvent(event);
     if (activity) {
       emitter.addActivity(activity);
@@ -274,12 +288,12 @@ export async function spawnOpencodeSubagent(params: {
     }
     const permission = params.permission ?? "danger";
     const args = buildOpencodeArgs({
-      workspace: params.ctx.cwd,
       profile: params.profile,
       permission,
       resumeSessionId: params.resumeSessionId,
     });
-    const env = buildOpencodeEnv(permission, process.env);
+    // OpenCode 2 resolves the project from $PWD before cwd.
+    const env = { ...buildOpencodeEnv(permission, process.env), PWD: params.ctx.cwd };
 
     const proc = spawn(OPENCODE_COMMAND, args, {
       cwd: params.ctx.cwd,
@@ -367,18 +381,25 @@ export async function spawnOpencodeSubagent(params: {
         `opencode exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`,
       );
     }
+    if (AUTO_REJECT_NOTICE.test(stderrBuffer.text())) {
+      throw new Error("opencode auto-rejected a permission request and interrupted the run");
+    }
     if (params.resumeSessionId && sessionId !== params.resumeSessionId) {
       throw new Error(`opencode reported session ${sessionId ?? "(none)"}, not the resumed session ${params.resumeSessionId}`);
     }
-    // step_finish closes one model step, not the turn. Intermediate steps end
-    // with "tool-calls". The turn is complete only when the last step
-    // finished with "stop" and nothing started after it.
-    if (finishReason === undefined || inStep) {
-      throw new Error("opencode exited without a completed final step");
+    // OpenCode 2 exits 0 only after session.wait reports the session idle and
+    // the run reconciles its messages. It may drop the final step_finish on
+    // that path (noninteractive.ts skips non-execution events once
+    // finalizing), so a missing final finish is accepted. A final finish that
+    // did arrive must be "stop": "tool-calls" marks an intermediate step, and
+    // length/content-filter/error/unknown are not a completed answer.
+    if (!sawStep) {
+      throw new Error("opencode exited without running a model step");
     }
-    if (finishReason !== "stop") {
-      throw new Error(`opencode's final step ended with reason "${finishReason}", not "stop"`);
+    if (stepFinish !== undefined && stepFinish !== "stop") {
+      throw new Error(`opencode's final step ended with reason "${stepFinish}", not "stop"`);
     }
+    const finalText = stepText.join("\n\n");
     if (!finalText.trim()) {
       throw new Error("opencode reported completion without a final result");
     }
