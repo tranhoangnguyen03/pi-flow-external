@@ -35,16 +35,14 @@ import type {
   ThinkingClamp,
 } from "../types.ts";
 import { selectorHarness } from "../profiles.ts";
-import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier } from "./permissions.ts";
+import { PI_TIER_ACTIVE_TOOLS, resolvePermission, resolveEffectivePermissionTier, unsupportedPermissionReason } from "./permissions.ts";
 import { resolveResume } from "./resume.ts";
 import { formatParentContext, type ParentContextReceipt } from "./parent-context.ts";
 import { createRunRecord, type RunRecord } from "./run-record.ts";
 import { runRecordsDirectory } from "./retention.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 import type { PermissionResolution } from "./permissions.ts";
-import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../harnesses.ts";
-import { loadCapabilityResources } from "./capabilities.ts";
-import type { ResolvedCapabilities } from "../types.ts";
+import { effectivePiResourcePreset, isValidThinkingLevel, VALID_THINKING_LEVELS } from "../harnesses.ts";
 
 
 /**
@@ -104,19 +102,11 @@ export interface SpawnSubagentParams {
    */
   executionStartedAt?: number;
   /**
-   * Real project-trust decision (ctx.isProjectTrusted()), threaded explicitly
-   * so a pi child's capabilitySet resource discovery only sees project-scope
-   * skills/prompt templates when the caller's own project is actually
-   * trusted. Ignored when the profile declares no capabilitySet.
+   * Real project-trust decision (ctx.isProjectTrusted()). The skills preset
+   * loads project-scope skills only when this is true. The minimal preset
+   * leaves skills unloaded either way. Omitted means untrusted.
    */
   projectTrusted?: boolean;
-  /**
-   * Exact selected skill/prompt-template names, already resolved and
-   * validated by the caller (see src/core/capabilities.ts) for the profile's
-   * declared capabilitySet. Undefined means the unchanged default: no
-   * skills/prompt templates load into a pi child.
-   */
-  capabilities?: ResolvedCapabilities;
 }
 
 interface SpawnSubagentRuntimeParams extends SpawnSubagentParams {
@@ -192,12 +182,10 @@ function attachRunRecord(
   recordingError: string | undefined,
   extras: {
     permission: PermissionResolution | undefined;
-    requestedTier: PermissionTier | undefined;
     maxBudgetUsd: number | undefined;
     resumedFrom: string | undefined;
     sessionId: string | undefined;
     permissionDenials: number | undefined;
-    capabilities: ResolvedCapabilities | undefined;
   },
 ): void {
   const apply = (details: SubagentToolDetails | SubagentProgressNode) => {
@@ -206,15 +194,9 @@ function attachRunRecord(
     details.nestedTimeoutExtended = nestedTimeoutExtended;
     details.effectiveTimeoutMs = effectiveTimeoutMs;
     details.recordingError = recordingError;
-    if (extras.capabilities) {
-      details.capabilities = extras.capabilities;
-    }
     if (extras.permission) {
       details.permission = extras.permission.tier;
       details.permissionEnforced = extras.permission.enforced;
-    }
-    if (extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier) {
-      details.permissionRequested = extras.requestedTier;
     }
     if (extras.permissionDenials !== undefined) {
       details.permissionDenials = extras.permissionDenials;
@@ -237,20 +219,85 @@ function attachRunRecord(
   const denials = details.permissionDenials ?? 0;
   const blocked =
     denials > 0 ? ` · ${denials} permission denials — commands may have been blocked` : "";
-  const elevatedNote = extras.requestedTier && extras.permission && extras.requestedTier !== extras.permission.tier
-    ? ` · permission elevated ${extras.requestedTier}→${extras.permission.tier}`
-    : "";
   const clampedNote = details.thinkingClamped
     ? ` · thinking clamped ${details.thinkingClamped.requested}→${details.thinkingClamped.effective}`
     : "";
   attachRunRecordIdentity(result, record);
   const first = result.content[0];
   if (first?.type === "text") {
-    first.text = first.text.replace(`[run ${record.runId}]`, `[run ${record.runId}${blocked}${elevatedNote}${clampedNote}]`);
+    first.text = first.text.replace(`[run ${record.runId}]`, `[run ${record.runId}${blocked}${clampedNote}]`);
   }
   if (details.progress) {
     apply(details.progress);
   }
+}
+
+/** Permission, context, and budget fields shared by every terminal summary. */
+function resolvedRunReceipt(input: {
+  backend: SubagentBackend;
+  permission: PermissionResolution;
+  context: ParentContextReceipt | undefined;
+  maxBudgetUsd: number | undefined;
+}): {
+  context?: ParentContextReceipt;
+  permission: { tier: PermissionTier; enforced: boolean; caveat: string | undefined };
+  maxBudgetUsd?: number;
+  budgetEnforceable?: false;
+} {
+  return {
+    ...(input.context ? { context: input.context } : {}),
+    permission: {
+      tier: input.permission.tier,
+      enforced: input.permission.enforced,
+      caveat: input.permission.caveat,
+    },
+    ...(input.maxBudgetUsd !== undefined ? { maxBudgetUsd: input.maxBudgetUsd } : {}),
+    // Budgets are enforced mid-run only where the backend supports a native cap (claude).
+    ...(input.maxBudgetUsd !== undefined && input.backend !== "claude" ? { budgetEnforceable: false as const } : {}),
+  };
+}
+
+function attachResolvedContext(result: AgentToolResult, context: ParentContextReceipt | undefined): void {
+  if (!context) return;
+  const details = result.details as SubagentToolDetails;
+  details.context = context;
+  if (details.progress) details.progress.context = context;
+  result.content.push({ type: "text", text: formatParentContext(context) });
+}
+
+/** Failure before process start still keeps the same receipt evidence as a launched finish. */
+async function finishUnlaunchedRun(
+  record: RunRecord,
+  result: AgentToolResult,
+  params: SpawnSubagentParams,
+  permission: PermissionResolution,
+  startedAt: number,
+  error: string,
+): Promise<void> {
+  attachResolvedContext(result, params.context);
+  await record.finish({
+    backend: params.profile.backend,
+    profile: params.profile.name,
+    description: params.description,
+    status: "error",
+    error,
+    queued: true,
+    backendStarted: false,
+    durationMs: Date.now() - startedAt,
+    ...resolvedRunReceipt({
+      backend: params.profile.backend,
+      permission,
+      context: params.context,
+      maxBudgetUsd: params.maxBudgetUsd,
+    }),
+  });
+  attachRunRecord(result, record, 0, false, false, params.timeoutMs, record.writeError?.message, {
+    permission,
+    maxBudgetUsd: params.maxBudgetUsd,
+    resumedFrom: undefined,
+    sessionId: undefined,
+    permissionDenials: undefined,
+  });
 }
 
 function rewriteTimeoutResult(
@@ -269,13 +316,40 @@ function rewriteTimeoutResult(
   });
 }
 
+/**
+ * Pi child resources for one registration preset.
+ * `minimal` sets `noSkills`. `skills` leaves skills enabled and still threads
+ * `projectTrusted`, so project skills load only when that flag is true.
+ * Extensions, prompt templates, and themes stay out either way.
+ * Call reload() after this returns.
+ */
+export function createPiChildResourceLoader(options: {
+  cwd: string;
+  agentDir: string;
+  settingsManager: SettingsManager;
+  projectTrusted: boolean;
+  preset: "minimal" | "skills";
+  appendSystemPrompt?: string[];
+}): DefaultResourceLoader {
+  options.settingsManager.setProjectTrusted(options.projectTrusted);
+  const extra = options.appendSystemPrompt ?? [];
+  return new DefaultResourceLoader({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    settingsManager: options.settingsManager,
+    noExtensions: true,
+    noSkills: options.preset === "minimal",
+    noPromptTemplates: true,
+    noThemes: true,
+    appendSystemPromptOverride: (base) => [...base, ...extra],
+  });
+}
+
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
   const startedAt = Date.now();
   let backendEventCount = 0;
   let nestedActivitySeen = false;
-  const requestedTier = params.permission;
-  const effectiveTier = resolveEffectivePermissionTier(requestedTier, params.profile, params.defaultPermission ?? "danger");
-  const elevated = requestedTier !== undefined && requestedTier !== effectiveTier;
+  const effectiveTier = resolveEffectivePermissionTier(params.permission, params.profile, params.defaultPermission ?? "danger");
   const permission = resolvePermission(effectiveTier, params.profile.backend);
   const record = params.recordRun === false
     ? undefined
@@ -290,11 +364,27 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           profile: params.profile,
           harness: selectorHarness(params.profile),
           permission: permission.tier,
-          ...(elevated ? { permissionRequested: requestedTier } : {}),
           ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
           ...(params.resumeRunId ? { resumeRequested: params.resumeRunId } : {}),
         },
       });
+  const unsupported = unsupportedPermissionReason(effectiveTier, params.profile.backend);
+  if (unsupported) {
+    const result = textResult(`Subagent "${params.description}" (${params.profile.name}) failed: ${unsupported}`, {
+      description: params.description,
+      subagentType: params.profile.name,
+      backend: params.profile.backend,
+      harness: selectorHarness(params.profile),
+      status: "error",
+      error: unsupported,
+    });
+    if (record) {
+      await finishUnlaunchedRun(record, result, params, permission, startedAt, unsupported);
+    } else {
+      attachResolvedContext(result, params.context);
+    }
+    return result;
+  }
   let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
   if (params.resumeRunId) {
     const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
@@ -307,21 +397,11 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         harness: selectorHarness(params.profile),
         status: "error",
         error,
-        ...(params.capabilities ? { capabilities: params.capabilities } : {}),
       });
       if (record) {
-        await record.finish({
-          backend: params.profile.backend,
-          profile: params.profile.name,
-          description: params.description,
-          status: "error",
-          error,
-          queued: true,
-          backendStarted: false,
-          durationMs: Date.now() - startedAt,
-          ...(params.capabilities ? { capabilities: params.capabilities } : {}),
-        });
-        attachRunRecordIdentity(result, record);
+        await finishUnlaunchedRun(record, result, params, permission, startedAt, error);
+      } else {
+        attachResolvedContext(result, params.context);
       }
       return result;
     }
@@ -393,18 +473,12 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         }
       }
     }
-    if (params.context) {
-      const details = result.details as SubagentToolDetails;
-      details.context = params.context;
-      if (details.progress) details.progress.context = params.context;
-      result.content.push({ type: "text", text: formatParentContext(params.context) });
-    }
+    attachResolvedContext(result, params.context);
     if (record) {
       const details = result.details as SubagentToolDetails;
       await record.finish({
         backend: params.profile.backend,
         profile: params.profile.name,
-        ...(params.context ? { context: params.context } : {}),
         model: params.profile.model,
         description: params.description,
         status: details.status,
@@ -424,21 +498,18 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         nestedTimeoutExtended: timeout.wasExtended(),
         configuredTimeoutMs: params.timeoutMs,
         effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
-        permission: { tier: permission.tier, enforced: permission.enforced, caveat: permission.caveat },
+        ...resolvedRunReceipt({
+          backend: params.profile.backend,
+          permission,
+          context: params.context,
+          maxBudgetUsd: params.maxBudgetUsd,
+        }),
         ...(details.permissionDenials !== undefined ? { permissionDenials: details.permissionDenials } : {}),
-        ...(params.maxBudgetUsd !== undefined ? { maxBudgetUsd: params.maxBudgetUsd } : {}),
-        // Budgets are enforced mid-run only where the backend supports a
-        // native cap (claude). Everywhere else record honestly that the
-        // budget could not be enforced, regardless of local cost estimates.
-        ...(params.maxBudgetUsd !== undefined && params.profile.backend !== "claude"
-          ? { budgetEnforceable: false }
-          : {}),
         ...(details.sessionId ? { sessionId: details.sessionId } : {}),
         ...(details.retries !== undefined ? { retries: details.retries } : {}),
         ...(details.retryOf ? { retryOf: details.retryOf } : {}),
         ...(resumeSession ? { resumedFrom: resumeSession.runId } : {}),
         ...(details.thinkingClamped ? { thinkingClamped: details.thinkingClamped } : {}),
-        ...(params.capabilities ? { capabilities: params.capabilities } : {}),
       });
       attachRunRecord(
         result,
@@ -450,12 +521,10 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         record.writeError?.message,
         {
           permission,
-          requestedTier,
           maxBudgetUsd: params.maxBudgetUsd,
           resumedFrom: resumeSession?.runId,
           sessionId: details.sessionId,
           permissionDenials: details.permissionDenials,
-          capabilities: params.capabilities,
         },
       );
     }
@@ -473,7 +542,12 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       nestedActivitySeen,
       nestedTimeoutExtended: timeout.wasExtended(),
       effectiveTimeoutMs: timeout.effectiveTimeoutMs(),
-      ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+      ...resolvedRunReceipt({
+        backend: params.profile.backend,
+        permission,
+        context: params.context,
+        maxBudgetUsd: params.maxBudgetUsd,
+      }),
     });
     throw error;
   } finally {
@@ -635,33 +709,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
   } = params;
   const subagentType = profile.name;
 
-  // A profile that declares capabilitySet must never silently execute with
-  // the builtins-only default because a caller forgot to resolve and pass it
-  // through: that would run against a stale/wrong instruction set with no
-  // error at all. Both Agent (pi-subagent.ts) and workflow (workflow/tool.ts)
-  // resolve params.capabilities before reaching this function; a mismatch or
-  // omission here means a wiring bug, not a user-facing configuration error.
-  if (profile.capabilitySet && !params.capabilities) {
-    const error = `Profile "${profile.name}" declares capabilitySet "${profile.capabilitySet}" but no resolved capabilities were provided to spawnSubagent (internal wiring error).`;
-    return textResult(`Subagent "${description}" (${subagentType}) failed: ${error}`, {
-      description,
-      subagentType,
-      backend: profile.backend,
-      status: "error",
-      error,
-    });
-  }
-  if (profile.capabilitySet && params.capabilities && params.capabilities.set !== profile.capabilitySet) {
-    const error = `Profile "${profile.name}" declares capabilitySet "${profile.capabilitySet}" but resolved capabilities were for "${params.capabilities.set}" (internal wiring error).`;
-    return textResult(`Subagent "${description}" (${subagentType}) failed: ${error}`, {
-      description,
-      subagentType,
-      backend: profile.backend,
-      status: "error",
-      error,
-    });
-  }
-
   // Thinking preflight: a valid-but-unsupported-by-this-model level is
   // legitimately clamped by createAgentSession itself (checked after session
   // creation below); a value outside the SDK's own closed set is not a
@@ -739,7 +786,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
-  if (params.capabilities && progress) progress.capabilities = params.capabilities;
 
   const agentDir = getAgentDir();
   const cwd = ctx.cwd;
@@ -753,15 +799,17 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
   // in-process `settings` view only — it never calls markModified()/save(),
   // so this can never reach the user's real settings file on disk.
   const settingsManager = SettingsManager.create(cwd, agentDir);
-  // SettingsManager.create defaults to projectTrusted:true when never told
-  // otherwise; thread the caller's real ctx.isProjectTrusted() decision
-  // through explicitly so project-scope skills/prompt templates (below) are
-  // only visible when the project genuinely is trusted.
-  settingsManager.setProjectTrusted(params.projectTrusted ?? false);
   const appendPrompts = [
     profile.systemPrompt,
   ].filter((value): value is string => Boolean(value));
-  const appendSystemPromptOverride = (base: string[]) => [...base, ...appendPrompts];
+  const resourceLoader = createPiChildResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    projectTrusted: params.projectTrusted ?? false,
+    preset: effectivePiResourcePreset(profile.preset),
+    appendSystemPrompt: appendPrompts,
+  });
 
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -782,53 +830,11 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
-    // Curated child (design §6, extended by issue #43 slice 2): extensions,
-    // MCP, and themes never load into a pi child — that boundary is
-    // unconditional. Skills/prompt templates load only when the profile's
-    // resolved capabilitySet actually selects some, via the same
-    // authoritative loadCapabilityResources used for the up-front freeze
-    // validation (src/core/capabilities.ts) — so a resource that disappeared
-    // between freeze and this actual spawn (e.g. while queued on the shared
-    // concurrency limiter) fails loudly here instead of a second, unvalidated
-    // loader silently loading fewer resources than declared. CHILD_EXCLUDED_TOOLS
-    // stays in excludeTools below purely as defense-in-depth documentation of
-    // intent: recursive delegation is provably unreachable once no extensions
-    // load at all, independent of the skills/prompt-templates toggle.
-    let resourceLoader: DefaultResourceLoader;
-    if (params.capabilities) {
-      const loaded = await loadCapabilityResources({
-        cwd,
-        agentDir,
-        settingsManager,
-        set: params.capabilities.set,
-        names: { skills: params.capabilities.skills, promptTemplates: params.capabilities.promptTemplates },
-        appendSystemPromptOverride,
-      });
-      // Close the resolve-then-spawn drift window: the caller (Agent tool or
-      // workflow) resolved params.capabilities.contentHash earlier — possibly
-      // before waiting on the shared concurrency limiter for a slot — so the
-      // on-disk selection this actual load just read may no longer match what
-      // was disclosed/frozen. Compare before touching createAgentSession so a
-      // drifted skill/prompt template never reaches a live session.
-      if (params.capabilities.contentHash !== undefined && loaded.contentHash !== params.capabilities.contentHash) {
-        throw new Error(
-          `capabilitySet "${params.capabilities.set}" changed (selected skill/prompt-template content differs) since it was resolved for this run; refusing to launch "${profile.name}" with drifted instructions.`,
-        );
-      }
-      resourceLoader = loaded.loader;
-    } else {
-      resourceLoader = new DefaultResourceLoader({
-        cwd,
-        agentDir,
-        settingsManager,
-        noExtensions: true,
-        noThemes: true,
-        noSkills: true,
-        noPromptTemplates: true,
-        appendSystemPromptOverride,
-      });
-      await resourceLoader.reload();
-    }
+    // Preset was applied on the loader: minimal sets noSkills, skills does not.
+    // Project trust was applied before this reload and only affects the skills
+    // preset. reload() preserves that flag and would discard an earlier settings
+    // override, so retry stays disabled after reload.
+    await resourceLoader.reload();
     // Third abort guard: the resource loading above does real file I/O
     // (context files, settings, and skill/prompt-template discovery) and can
     // be slow; check again before the heavier session construction so an
@@ -861,11 +867,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     }));
 
     // Legitimate model-capability clamping (createAgentSession's own
-    // documented contract: "clamped to model capabilities"), disclosed the
-    // same way permission elevation already is. This only ever fires for a
-    // requested level that already passed the six-literal preflight above —
-    // a typo/stale value fails outright there and never reaches this
-    // comparison.
+    // documented contract: "clamped to model capabilities"). The receipt
+    // records thinkingClamped. This only fires for a requested level that
+    // already passed the six-literal preflight above — a typo fails there
+    // and never reaches this comparison.
     if (thinkingLevel !== undefined && session.thinkingLevel !== thinkingLevel) {
       thinkingClamped = { requested: thinkingLevel, effective: session.thinkingLevel };
     }

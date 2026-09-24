@@ -220,7 +220,7 @@ export async function runWorkflow<T = unknown>(
     const effectivePermission = options.getDefaultPermission
       ? resolveEffectivePermissionTier(
         call.permission,
-        descriptor ? { name: subagentType, description: "", backend: descriptor.backend, permission: descriptor.permission } : undefined,
+        descriptor ? { name: subagentType, description: "", backend: descriptor.backend } : undefined,
         options.getDefaultPermission(),
       )
       : undefined;

@@ -1,5 +1,7 @@
 # Design: named Pi harness configurations (`pi-*`)
 
+> **Superseded for configuration:** the separate `harnesses.json` registry and `/external profile create` registration path are replaced by the settings v4 `harnesses` object and `/external harness create`. Named in-process `pi-*` execution remains. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 Status: design ready for review. No code changes made by this document. Supersedes the earlier draft at `~/.claude/plans/parent-conversation-snapshot-recent-zippy-kazoo.md`, which is read-only input to this doc and is not part of this repository.
 
 ## 1. What this adds

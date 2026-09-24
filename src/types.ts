@@ -8,14 +8,25 @@ export type SubagentBackend = "pi" | ExternalHarness;
 export type ThinkingLevel = string;
 
 /**
- * Permission tier chosen by the orchestrator. `danger` is the default and
- * matches the historical unsandboxed behavior. Tiers map onto native
- * harness mechanisms where they exist; unsupported combinations are labeled
- * advisory rather than blocked (trust + disclose).
+ * Permission tier chosen by the caller, or the global default when the call
+ * omits one. Roles do not grant this authority. Each backend maps a tier
+ * onto a mode it actually supports and rejects a restriction it cannot
+ * enforce.
  */
 export type PermissionTier = "readonly" | "edit" | "danger";
 
+/**
+ * Resource preset stored on a named Pi harness registration.
+ * `minimal` leaves skills unloaded. `skills` loads installed skills.
+ * An absent field on a legacy registration is `minimal`.
+ */
+export const PI_RESOURCE_PRESETS = ["minimal", "skills"] as const;
+export type PiResourcePreset = (typeof PI_RESOURCE_PRESETS)[number];
+
 export interface SubagentProfile {
+  /** Invalid/disabled catalog entries block selection instead of exposing a fallback. */
+  configurationError?: string;
+  source?: string;
   name: string;
   description: string;
   backend: SubagentBackend;
@@ -28,47 +39,17 @@ export interface SubagentProfile {
   harness?: string;
   model?: string;
   thinking?: ThinkingLevel;
+  /**
+   * Named Pi harness resource preset, copied from the registration.
+   * The registration is authoritative. Absence at execution is `minimal`.
+   */
+  preset?: PiResourcePreset;
   tools?: string[];
   systemPrompt?: string;
-  /** Default tier for calls using this profile; the call parameter wins. */
-  permission?: PermissionTier;
   /** Default USD budget cap for calls using this profile; the call parameter wins. */
   maxBudgetUsd?: number;
   /** Ownership tag. "user" marks profiles authored by the user. */
   owner?: string;
-  /**
-   * Name of a reusable piCapabilitySets entry (see src/settings.ts) selecting
-   * exact skills/prompt templates for a pi-backed profile. Absent means the
-   * unchanged default: a builtins-only pi child with no skills/prompt
-   * templates loaded, regardless of harness.
-   */
-  capabilitySet?: string;
-  /**
-   * Set instead of `capabilitySet` when frontmatter declared the field but its
-   * value was malformed (not a non-empty string). The profile is deliberately
-   * kept in the roster rather than dropped whole — parseSubagentProfileContent
-   * returning undefined here would make an on-disk `<harness>-<role>` override
-   * or a shared `pi-<role>` template vanish entirely, silently falling back to
-   * canonical synthesis instead of failing loudly. `computeReconciledPiProfile`
-   * turns this into a conflict the moment the profile is actually selected;
-   * an unrelated profile in the same roster is never affected.
-   */
-  capabilitySetError?: string;
-}
-
-/** A capabilitySet's resolved selection, disclosed on the intent card and recorded in receipts. */
-export interface ResolvedCapabilities {
-  set: string;
-  skills: string[];
-  promptTemplates: string[];
-  /**
-   * sha256 fingerprint (see src/core/capabilities.ts) over the selected
-   * skill/prompt-template raw file bytes plus resource identity/trust, taken
-   * at resolution time. When present, spawnSubagent recomputes it over what
-   * is actually loaded at spawn time and refuses to launch on a mismatch,
-   * closing the resolve-then-spawn drift window.
-   */
-  contentHash?: string;
 }
 
 export interface SubagentExtensionOptions {
@@ -155,8 +136,6 @@ export interface WorkflowAgentSnapshot {
   resumedFrom?: string;
   /** Set when a pi child's requested thinking level was clamped by model capability. */
   thinkingClamped?: ThinkingClamp;
-  /** Selected skills/prompt templates actually resolved for this run, when the profile declares a capabilitySet. */
-  capabilities?: ResolvedCapabilities;
   /** Attempts retried for this run (agy infra failures retry once). */
   retries?: number;
   /** Error message of the retried-away first attempt, for transparency. */
@@ -261,8 +240,6 @@ export interface SubagentProgressNode {
   resumedFrom?: string;
   /** Set when a pi child's requested thinking level was clamped by model capability. */
   thinkingClamped?: ThinkingClamp;
-  /** Selected skills/prompt templates actually resolved for this run, when the profile declares a capabilitySet. */
-  capabilities?: ResolvedCapabilities;
 }
 
 export interface SubagentToolDetails {
@@ -315,6 +292,4 @@ export interface SubagentToolDetails {
   resumedFrom?: string;
   /** Set when a pi child's requested thinking level was clamped by model capability. */
   thinkingClamped?: ThinkingClamp;
-  /** Selected skills/prompt templates actually resolved for this run, when the profile declares a capabilitySet. */
-  capabilities?: ResolvedCapabilities;
 }

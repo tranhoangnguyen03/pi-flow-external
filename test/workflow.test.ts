@@ -17,7 +17,7 @@ import {
   type WorkflowAgentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
-import { createWorkflowTool } from "../src/workflow/tool.ts";
+import { createWorkflowTool, toWorkflowSubagentDescriptor } from "../src/workflow/tool.ts";
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { prepareWorkflowToolSource } from "../src/workflow/source.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
@@ -337,15 +337,16 @@ describe("runWorkflow", () => {
       return events[0].fingerprint as string;
     };
 
-    const base = { backend: "pi", harness: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "high", systemPrompt: "do x", tools: ["read"], permission: "readonly", maxBudgetUsd: 1 };
+    const base = { backend: "pi", harness: "pi-deepseek", model: "deepseek/deepseek-chat", thinking: "high", systemPrompt: "do x", tools: ["read"], maxBudgetUsd: 1 };
     const baseFingerprint = await runOnce(base);
     expect(await runOnce({ ...base })).toBe(baseFingerprint);
     expect(await runOnce({ ...base, model: "deepseek/other-model" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, thinking: "low" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, systemPrompt: "do y" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, tools: ["read", "grep"] })).not.toBe(baseFingerprint);
-    expect(await runOnce({ ...base, permission: "danger" })).not.toBe(baseFingerprint);
     expect(await runOnce({ ...base, maxBudgetUsd: 2 })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, preset: "minimal" })).not.toBe(baseFingerprint);
+    expect(await runOnce({ ...base, preset: "skills" })).not.toBe(await runOnce({ ...base, preset: "minimal" }));
   });
 
   it("reflects the resolved effectivePermission (not just the raw request) in the fingerprint", async () => {
@@ -1079,6 +1080,32 @@ describe("saved workflow registry", () => {
   });
 });
 
+describe("workflow frozen Pi descriptor", () => {
+  it("carries the registration preset for Pi profiles and omits it for CLI profiles", () => {
+    const skills = toWorkflowSubagentDescriptor({
+      name: "pi-deepseek-reviewer",
+      description: "x",
+      backend: "pi",
+      harness: "pi-deepseek",
+      preset: "skills",
+    });
+    const legacy = toWorkflowSubagentDescriptor({
+      name: "pi-deepseek-reviewer",
+      description: "x",
+      backend: "pi",
+      harness: "pi-deepseek",
+    });
+    const claude = toWorkflowSubagentDescriptor({
+      name: "claude-reviewer",
+      description: "x",
+      backend: "claude",
+    });
+    expect(skills.preset).toBe("skills");
+    expect(legacy.preset).toBe("minimal");
+    expect(claude.preset).toBeUndefined();
+  });
+});
+
 describe("workflow tool registration", () => {
   function fakeApi(names: string[]) {
     const flags = new Map<string, boolean | string>();
@@ -1106,7 +1133,7 @@ describe("workflow tool registration", () => {
   it("omits the workflow tool when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_profile_create", "pi_flow_harness_create"]);
+    expect(names).toEqual(["Agent", "external_help", "external_runs", "pi_flow_role_create", "pi_flow_harness_create"]);
   });
 });
 
@@ -1127,7 +1154,6 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
       getDefaultMaxBudgetUsd: () => undefined,
-      getPiCapabilitySets: () => ({}),
       updateStatus: () => {},
     });
   }
@@ -1140,7 +1166,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     registration.setResponses([() => fauxAssistantMessage("CUSTOM_PI_WORKFLOW_OK")]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
 
     // 1. An on-disk custom profile that omits model and thinking (inheriting from harness pi-deepseek)
@@ -1202,190 +1228,13 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     expect(result.details.result).toEqual({ resp: "CUSTOM_PI_WORKFLOW_OK" });
   });
 
-  it("fails only the child that selects a profile with an unknown capabilitySet, not the whole roster eagerly", async () => {
-    const { session, modelRegistry } = await createSession({
-      piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
-    });
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(
-      join(subagentsDir, "pi-deepseek-docs.md"),
-      "---\ndescription: Docs writer.\nbackend: pi\nharness: pi-deepseek\ncapabilitySet: missing-set\n---\nWrite docs.\n",
-    );
-
-    const tool = makeWorkflowTool();
-    const ctx = { cwd, modelRegistry, sessionManager: session.sessionManager, isProjectTrusted: () => true } as unknown as ExtensionContext;
-
-    const result = await tool.execute(
-      "call-unknown-capset",
-      {
-        script: `
-          export const meta = { apiVersion: 1, name: "unknown-capset", description: "should fail at that child" };
-          const resp = await agent("test task", { role: "docs", harness: "pi-deepseek" });
-          return { resp };
-        `,
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain('Unknown capabilitySet "missing-set"');
-
-    // The child's durable RunRecord was allocated at queue time (onAgentQueued),
-    // before this capabilitySet-resolution failure ever reached spawnSubagent —
-    // the only place that otherwise calls record.finish(). Without finishing it
-    // here too, the record would be stuck "incomplete" forever instead of a
-    // recognizable failure receipt.
-    const child = result.details.agents.find((agent) => agent.subagentType === "pi-deepseek-docs");
-    expect(child?.recordPath).toBeTruthy();
-    const summary = JSON.parse(readFileSync(join(child!.recordPath!, "summary.json"), "utf8"));
-    expect(summary.summary.status).toBe("error");
-    expect(summary.summary.error).toContain('Unknown capabilitySet "missing-set"');
-  });
-
-  it("discloses a workflow child's resolved capabilities on its snapshot row before spawnSubagent launches it, not only after it completes", async () => {
-    const { session, modelRegistry, registration } = await createSession({
-      piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
-    });
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(
-      join(subagentsDir, "pi-deepseek-docs.md"),
-      "---\ndescription: Docs writer.\nbackend: pi\nharness: pi-deepseek\ncapabilitySet: docs\n---\nWrite docs.\n",
-    );
-    const skillDir = join(agentDir, "skills", "writer");
-    mkdirSync(skillDir, { recursive: true });
-    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: writer\ndescription: Writes docs.\n---\n\nBody.\n");
-    registration.setResponses([() => fauxAssistantMessage("done")]);
-
-    const tool = createWorkflowTool({
-      registry: new RunRegistry(),
-      getLimiter: () => new ConcurrencyLimiter(2),
-      getThinkingLevel: () => "high",
-      getSubagentTimeoutMs: () => 60_000,
-      getDefaultPermission: () => "edit",
-      getDefaultHarness: () => "pi-deepseek",
-      getDefaultMaxBudgetUsd: () => undefined,
-      getPiCapabilitySets: () => ({ docs: { skills: ["writer"], promptTemplates: [] } }),
-      updateStatus: () => {},
-    });
-    const ctx = { cwd, modelRegistry, sessionManager: session.sessionManager, isProjectTrusted: () => true } as unknown as ExtensionContext;
-
-    // Persist the workflow journal in this test's temp directory so replay
-    // exercises the real cached-child snapshot path without a second model call.
-    ctx.sessionManager = {
-      isPersisted: () => true,
-      getSessionFile: () => join(cwd, "disclose-session.jsonl"),
-      getSessionId: () => "disclose-session",
-      getBranch: () => session.sessionManager.getBranch(),
-    } as unknown as typeof ctx.sessionManager;
-    let sawCapabilitiesWhileRunning = false;
-    const onUpdate = (partial: { details: WorkflowToolDetails }) => {
-      const agent = partial.details.agents.find((item) => item.subagentType === "pi-deepseek-docs");
-      if (agent?.status === "running" && agent.capabilities) {
-        sawCapabilitiesWhileRunning = true;
-        expect(agent.capabilities).toEqual({
-          set: "docs",
-          skills: ["writer"],
-          promptTemplates: [],
-          contentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-        });
-      }
-    };
-
-    const result = await tool.execute(
-      "call-disclose",
-      {
-        script: `
-          export const meta = { apiVersion: 1, name: "disclose", description: "discloses capabilities before launch" };
-          const resp = await agent("test task", { role: "docs", harness: "pi-deepseek" });
-          return { resp };
-        `,
-      },
-      undefined,
-      onUpdate,
-      ctx,
-    );
-
-    expect(result.details.status).toBe("completed");
-    expect(sawCapabilitiesWhileRunning).toBe(true);
-    registration.setResponses([() => { throw new Error("Cached child must not execute"); }]);
-    const replay = await tool.execute(
-      "call-disclose-replay",
-      { scriptPath: result.details.scriptPath!, resumeFromRunId: result.details.runId! },
-      undefined, undefined, ctx,
-    );
-    expect(replay.details.status, replay.details.error).toBe("completed");
-    expect(replay.details.cachedAgentCount).toBe(1);
-    expect(replay.details.agents[0].capabilities).toEqual(result.details.agents[0].capabilities);
-  });
-
-  it("rejects a workflow child whose selected SKILL.md content changed since this run started", async () => {
-    const { session, modelRegistry, registration } = await createSession({
-      piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
-    });
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(
-      join(subagentsDir, "pi-deepseek-docs.md"),
-      "---\ndescription: Docs writer.\nbackend: pi\nharness: pi-deepseek\ncapabilitySet: docs\n---\nWrite docs.\n",
-    );
-    const skillDir = join(agentDir, "skills", "writer");
-    mkdirSync(skillDir, { recursive: true });
-    const skillPath = join(skillDir, "SKILL.md");
-    writeFileSync(skillPath, "---\nname: writer\ndescription: Writes docs.\n---\n\nBody.\n");
-
-    registration.setResponses([
-      () => {
-        // Simulate the selected skill's file changing mid-run, between two workflow children.
-        writeFileSync(skillPath, "---\nname: writer\ndescription: Writes docs, but different now.\n---\n\nBody.\n");
-        return fauxAssistantMessage("first done");
-      },
-      () => fauxAssistantMessage("second done"),
-    ]);
-
-    const tool = createWorkflowTool({
-      registry: new RunRegistry(),
-      getLimiter: () => new ConcurrencyLimiter(2),
-      getThinkingLevel: () => "high",
-      getSubagentTimeoutMs: () => 60_000,
-      getDefaultPermission: () => "edit",
-      getDefaultHarness: () => "pi-deepseek",
-      getDefaultMaxBudgetUsd: () => undefined,
-      getPiCapabilitySets: () => ({ docs: { skills: ["writer"], promptTemplates: [] } }),
-      updateStatus: () => {},
-    });
-    const ctx = { cwd, modelRegistry, sessionManager: session.sessionManager, isProjectTrusted: () => true } as unknown as ExtensionContext;
-
-    const result = await tool.execute(
-      "call-drift",
-      {
-        script: `
-          export const meta = { apiVersion: 1, name: "drift", description: "detects mid-run capability drift" };
-          const first = await agent("first task", { role: "docs", harness: "pi-deepseek", label: "first" });
-          const second = await agent("second task", { role: "docs", harness: "pi-deepseek", label: "second" });
-          return { first, second };
-        `,
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("changed");
-    expect(result.details.error).toContain("docs");
-  });
-
   it("keeps a workflow child's queued state and queuedAt visible in the registry before its concurrency slot is granted", async () => {
     const { session, modelRegistry, registration } = await createSession({
       piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } },
     });
     registration.setResponses([() => fauxAssistantMessage("done")]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "pi-deepseek-custom.md"),
@@ -1406,7 +1255,6 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
       getDefaultMaxBudgetUsd: () => undefined,
-      getPiCapabilitySets: () => ({}),
       updateStatus: () => {},
     });
     const ctx = {
@@ -1462,7 +1310,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     const heldResponse = new Promise<AssistantMessage>((resolve) => { resolveResponse = resolve; });
     registration.setResponses([() => heldResponse]);
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "pi-deepseek-custom.md"),
@@ -1488,7 +1336,6 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
       getDefaultMaxBudgetUsd: () => undefined,
-      getPiCapabilitySets: () => ({}),
       updateStatus: () => {},
     });
     const ctx = {
@@ -1558,7 +1405,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       },
     });
 
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
 
     writeFileSync(

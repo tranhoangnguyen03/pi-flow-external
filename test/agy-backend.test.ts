@@ -15,6 +15,8 @@ import {
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { MAX_STDOUT_LINE_CHARS } from "../src/core/stream.ts";
 import { inspectRun } from "../src/core/run-inspection.ts";
+import { spawnSubagent } from "../src/core/spawn.ts";
+import type { SubagentToolDetails } from "../src/types.ts";
 
 describe("pi-subagent agy backend", () => {
   let tempDir = "";
@@ -125,7 +127,7 @@ describe("pi-subagent agy backend", () => {
   });
 
   it("runs an agy-backed subagent through the Agent tool", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy");
     const argsPath = join(tempDir, "agy-args.json");
     mkdirSync(subagentsDir, { recursive: true });
@@ -336,7 +338,7 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
   });
 
   it("retries an agy infrastructure failure once and reports the retry", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-retry");
     const counterPath = join(tempDir, "agy-retry-count.txt");
     const argsPath = join(tempDir, "agy-retry-args");
@@ -387,7 +389,7 @@ if (count === 1) {
   });
 
   it("does not retry a non-transient agy failure", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-no-retry");
     const counterPath = join(tempDir, "agy-no-retry-count.txt");
     mkdirSync(subagentsDir, { recursive: true });
@@ -427,7 +429,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-no
   });
 
   it("retries a transient agy failure only once", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-agy-retry-bounded");
     const counterPath = join(tempDir, "agy-retry-bounded-count.txt");
     mkdirSync(subagentsDir, { recursive: true });
@@ -578,5 +580,70 @@ setTimeout(() => {
     expect(signal.addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("rejects an unsupported agy tier before process launch and keeps the receipt", async () => {
+    const binDir = join(tempDir, "bin-agy-unsupported");
+    const markerPath = join(tempDir, "agy-unsupported-launched");
+    mkdirSync(binDir, { recursive: true });
+    const fakeAgyPath = join(binDir, "agy");
+    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(markerPath)}, 'launched');
+`);
+    chmodSync(fakeAgyPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+    const context = {
+      mode: "recent" as const,
+      requestedTurns: 2,
+      sharedTurns: 1,
+      messages: 2,
+      bytes: 40,
+      compacted: false,
+    };
+
+    const result = await spawnSubagent({
+      toolCallId: "agy-unsupported-tier",
+      description: "Restricted agy",
+      prompt: "Stay read-only.",
+      profile: { name: "agy-reviewer", description: "Review.", backend: "agy" },
+      thinkingLevel: undefined,
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      timeoutMs: 5_000,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+      permission: undefined,
+      defaultPermission: "readonly",
+      maxBudgetUsd: 3,
+      context,
+    });
+
+    const details = result.details as SubagentToolDetails;
+    expect(details.status).toBe("error");
+    expect(details.permission).toBe("readonly");
+    expect(details.permissionEnforced).toBe(false);
+    expect(details.maxBudgetUsd).toBe(3);
+    expect(details.context).toEqual(context);
+    expect(result.content[0]?.text).toMatch(/defaultPermission/);
+    expect(result.content[0]?.text).not.toMatch(/omit/i);
+    expect(existsSync(markerPath)).toBe(false);
+    const summary = JSON.parse(readFileSync(join(details.recordPath!, "summary.json"), "utf8"));
+    const events = readFileSync(join(details.recordPath!, "events.ndjson"), "utf8");
+    expect(summary.summary).toMatchObject({
+      status: "error",
+      backendStarted: false,
+      permission: { tier: "readonly", enforced: false, caveat: expect.stringContaining("unsupported") },
+      maxBudgetUsd: 3,
+      budgetEnforceable: false,
+      context,
+    });
+    expect(summary.metadata).toMatchObject({
+      permission: "readonly",
+      maxBudgetUsd: 3,
+      context,
+    });
+    expect(events).not.toContain("process_started");
   });
 });

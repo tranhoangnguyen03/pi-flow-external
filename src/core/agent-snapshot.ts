@@ -24,7 +24,6 @@ export function applySubagentProgressToWorkflowAgent(agent: WorkflowAgentSnapsho
   agent.sessionId = progress.sessionId;
   agent.resumedFrom = progress.resumedFrom;
   agent.context = progress.context;
-  if (progress.capabilities !== undefined) agent.capabilities = progress.capabilities;
   if (progress.thinkingClamped) agent.thinkingClamped = progress.thinkingClamped;
 }
 
@@ -66,7 +65,6 @@ export function applySubagentResultToWorkflowAgent(agent: WorkflowAgentSnapshot,
   if (resultDetails.permissionRequested !== undefined) agent.permissionRequested = resultDetails.permissionRequested;
   if (resultDetails.retries !== undefined) agent.retries = resultDetails.retries;
   if (resultDetails.retryOf !== undefined) agent.retryOf = resultDetails.retryOf;
-  if (resultDetails.capabilities !== undefined) agent.capabilities = resultDetails.capabilities;
   const thinkingClamped = resultDetails.thinkingClamped ?? progress?.thinkingClamped;
   if (thinkingClamped) agent.thinkingClamped = thinkingClamped;
   if (progress) {

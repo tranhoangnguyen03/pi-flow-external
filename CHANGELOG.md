@@ -4,16 +4,42 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
-## [2.5.0-external.0] - 2026-09-22
+### Fixed
 
-Partially addresses issue #43 (named Pi harness follow-up capability expansion): shared custom Pi roles and reusable capability sets. Trusted extensions/MCP, resumable sessions, and real per-child budget controls remain out of scope and stay tracked on issue #43 for a later slice.
+- Antigravity's unsupported-tier error tells the caller to pass `permission: "danger"` or change `defaultPermission`. Omitting the call tier keeps the global default.
+- Unsupported-permission and resume failures keep resolved permission, parent context, and budget on the run receipt. The same fields are written on a launched finish.
+- Conversion reports a malformed short `pi-<role>.md` wildcard template and leaves it in place. Parsed native profiles stay excluded.
+- An unresolved delegation intent shows the tier as unresolved instead of borrowing another harness's enforcement label.
+
+## [2.6.0-external.0] - 2026-09-23
+
+### Breaking upgrade
+
+- Removed `/external profiles`, `/external profile create`, and `/pi-flow-profile create` without aliases. Use `/external roles`, `/external role create`, or `/external harness create` instead. Agent/workflow `role`, `harness`, and exact `subagent_type` APIs remain supported.
+- Roles describe intent. They no longer declare or enforce a permission floor, and role names no longer raise `edit` to `danger`. The effective tier is the call's `permission`, otherwise settings `defaultPermission` (`danger` unless changed). `permission` and `capabilitySet` in role or override frontmatter are obsolete and rejected. Conversion strips them from copied overrides.
+- Antigravity accepts only autonomous `danger`. `readonly` and `edit` are rejected instead of being run unsandboxed. Claude, Codex, Grok, Muse, and named Pi harnesses map a requested tier onto the mode they actually support.
+- Named Pi harness registrations select a resource preset, `minimal` or `skills`. `minimal` is the default, including a legacy entry that omits the field, and leaves skills unloaded. `skills` loads installed skills; project skills load only when the project is trusted. Extensions, prompt templates, and themes stay unloaded. The catalog, frozen workflow descriptor, replay fingerprint, and spawn use the registration value. Curated tool lists are not an OS sandbox.
+- The 2.5.0 `pi-*` shared-role templates and `piCapabilitySets` / project capability overlays are not a second runtime. Conversion turns `subagents/pi-<role>.md` with `harness: "pi-*"` into an ordinary cross-harness role and does not copy `piCapabilitySets`. Trust threading for project resources and pre-spawn failure evidence remain.
+- Execution configuration now has one authoritative file: `pi-flow-external/settings.json` version 4, including named Pi harness model/thinking registrations. Run `/external settings convert` once for an older installation; invalid or conflicting inputs block conversion rather than being discarded.
+- The six built-in roles are synthesized for agy, Claude, Codex, Grok, Muse, and registered Pi harnesses. No default profile files or seed markers are written. Shared authored roles live in `pi-flow-external/roles/`; exact overrides live in `pi-flow-external/overrides/`.
+- Conversion copies custom external profiles and preserves deleted-default intent, leaving original files in place. Once v4 is active, legacy `subagents/` profiles and `harnesses.json` are ignored, not fallback configuration.
+- Optional `/external [danger]purge-old-files` explicitly deletes the listed legacy profiles (including customized copies), seed markers, and old harness registry. Nonstandard names require individual selection. Native/unrelated files and current configuration/evidence are excluded. Downgrading after purge requires your own backup; simultaneous old/new-version configuration is unsupported.
 
 ### Added
 
-- **Shared custom Pi roles**: a custom (non-canonical) role can now be authored once as `~/.pi/agent/subagents/pi-<role>.md`, declaring `backend: pi` and the literal marker `harness: "pi-*"` instead of one concrete harness name. `mergeSynthesizedPiProfiles` materializes it into a concrete `<harness>-<role>` profile for every currently-registered `pi-*` harness that lacks its own on-disk override for that role, pinned to that harness's registered model/thinking. Precedence: harness-specific on-disk file > shared template > synthesized canonical body. The marker deliberately fails `isValidHarnessName`, so a shared template can never itself become externally selectable or admitted as a native profile. A malformed shared template (wrong `pi-<role>.md` filename, or one that pins `model`/`thinking`) is dropped with a diagnostic surfaced by `/external doctor` rather than failing the whole roster. `/external profile create` supports authoring one directly, smoke-tested against one representative already-registered harness.
-- **Reusable capability sets** (`piCapabilitySets`): a named `{ skills: string[]; promptTemplates: string[] }` entry in the existing global `pi-flow-external/settings.json`, and, for a trusted project, in `.pi/pi-flow-external/settings.json` (a project entry replaces the same-named global entry wholesale, never merging arrays). A profile opts in via frontmatter `capabilitySet: <name>`, on any harness including a shared `pi-*` role template. Selected resources are discovered through the installed Pi SDK's own `DefaultResourceLoader` (extensions/MCP/themes never load), post-filtered to exactly the named skills/prompt templates, with project-scope resources visible only when the caller's project is genuinely trusted. An unknown set name or an undiscoverable resource fails before any prompt/session exists, naming exactly what's missing. A skill is a lazy file read, so both a direct `Agent` call and a workflow run content-hash the selected skill/prompt-template bytes at resolution time and again immediately before each child spawn, refusing to launch a child whose selection drifted since it was resolved/frozen; a workflow's replay fingerprint is widened by that same hash. Selected names are disclosed on the intent card before launch and recorded as `capabilities` in both the `Agent` tool's and workflow child receipts. `/external settings` lists configured sets; `/external doctor` also reports unknown-set references and malformed `capabilitySet` declarations. `/external profiles` includes materialized shared roles.
-- A workflow child that fails before `spawnSubagent` ever runs (unknown `capabilitySet`, or any other pre-spawn resolution error) now still finishes its already-queued durable run record as a recognizable failure, instead of leaving it stuck "incomplete" forever.
-- Offline coverage in `test/capabilities.test.ts`, extended `test/pi-runtime.test.ts` (including real-SDK tests of the installed SDK's own explicit `/name args` prompt-template expansion and `/skill:name` skill invocation semantics, unaffected by `capabilitySet` filtering), `test/profiles.test.ts`, `test/settings.test.ts`, `test/workflow.test.ts`, `test/replay-cache.test.ts`, and `test/external-command.test.ts`. Verified against a real registered `pi-*` harness with real credentials: a real child resolved a project-scope `capabilitySet`, read and followed the selected skill's content (not guessable — an unpredictable nonce), and both the returned result and the persisted receipt disclosed matching `capabilities` (set, skills, content hash).
+- Unified role discovery, inspection, offline shared-role authoring, exact override creation, harness registration, and validated settings editing. All execution/discovery consumers use the same effective catalog.
+- Frozen workflow catalog/model snapshots and explicit invalid/disabled selection errors prevent hidden fallback to a built-in role or another harness.
+- Isolated v4 E2E fixtures and explicit permission selection, including Grok `danger` checks without sandbox workarounds.
+
+## [2.5.0-external.0] - 2026-09-22
+
+Shipped on main as 2.5.0-external.0 (shared Pi role templates and capability sets). 2.6.0-external.0 above replaces that runtime. This entry stays as the record of what 2.5.0 shipped.
+
+### Added
+
+- Shared custom Pi roles as `subagents/pi-<role>.md` with `harness: "pi-*"`, materialized onto registered Pi harnesses only.
+- Named `piCapabilitySets` in global settings and trusted project settings, selected by profile `capabilitySet`.
+- Pre-spawn workflow failures finish the queued run record instead of leaving it incomplete.
 
 ## [2.4.2-external.0] - 2026-09-23
 

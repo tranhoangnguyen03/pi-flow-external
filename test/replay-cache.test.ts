@@ -44,19 +44,3 @@ describe("fingerprintWorkflowAgentCall policy version participation", () => {
   });
 });
 
-describe("fingerprintWorkflowAgentCall capabilitySet content-hash participation", () => {
-  it("invalidates the fingerprint when a selected skill/prompt-template's content hash changes", async () => {
-    const { fingerprintWorkflowAgentCall } = await import("../src/workflow/replay-cache.ts");
-    const call = { cwd: "/tmp", prompt: "p", label: "l", subagentType: "x" };
-    const base = { backend: "pi" as const, capabilities: { set: "docs", skills: ["writer"], promptTemplates: [], contentHash: "hash-a" } };
-    const changed = { ...base, capabilities: { ...base.capabilities, contentHash: "hash-b" } };
-    expect(fingerprintWorkflowAgentCall(call, base)).not.toBe(fingerprintWorkflowAgentCall(call, changed));
-  });
-
-  it("does not change the fingerprint when the capabilitySet selection is stable", async () => {
-    const { fingerprintWorkflowAgentCall } = await import("../src/workflow/replay-cache.ts");
-    const call = { cwd: "/tmp", prompt: "p", label: "l", subagentType: "x" };
-    const descriptor = { backend: "pi" as const, capabilities: { set: "docs", skills: ["writer"], promptTemplates: [], contentHash: "hash-a" } };
-    expect(fingerprintWorkflowAgentCall(call, descriptor)).toBe(fingerprintWorkflowAgentCall(call, { ...descriptor }));
-  });
-});

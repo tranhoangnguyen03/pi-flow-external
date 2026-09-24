@@ -1,5 +1,7 @@
 # Grok CLI External Agent Implementation Plan
 
+> **Superseded for seeding:** default profile files and seed-marker migration in this plan are replaced by in-memory built-in roles and `/external settings convert`. The Grok adapter notes stay historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Add `grok` as a fully supported external harness using the installed official Grok Build CLI.

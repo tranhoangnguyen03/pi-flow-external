@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -5,20 +6,37 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { extractSharedPiRoleProfiles, filterExternalAgentProfiles, getSubagentProfiles, mergeSynthesizedPiProfiles } from "./profiles.ts";
-import { loadHarnessConfigs } from "./harnesses.ts";
-import { projectExternalSettingsPath, resolveCtxCapabilitySets, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
+import { isValidSubagentName, loadExternalCatalog } from "./profiles.ts";
+import { isValidHarnessName, loadHarnessConfigs } from "./harnesses.ts";
+import { saveExternalSettings } from "./settings.ts";
+import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
+import { compileProfile } from "./profile-creator.ts";
+import {
+  applyConfigUpgrade,
+  planConfigUpgrade,
+  planLegacyPurge,
+  purgeLegacyFiles,
+  type LegacyPurgeCandidate,
+} from "./config-upgrade.ts";
 import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
+import type { SubagentProfile } from "./types.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
 import { formatDurationMs, formatRunRow } from "./core/run-render.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 
 const COMMANDS = [
-  { value: "doctor", description: "Check configured external harnesses" },
+  { value: "doctor", description: "Validate config/catalog and report runtime readiness" },
   { value: "settings", description: "Show effective extension settings" },
-  { value: "profiles", description: "List configured external agent profiles" },
-  { value: "profile create", description: "Create an external profile" },
+  { value: "settings edit", description: "Edit and validate canonical settings with the standard editor" },
+  { value: "settings convert", description: "Preview and apply the one-time v4 configuration conversion" },
+  { value: "harnesses", description: "List CLI and named Pi harnesses" },
+  { value: "harness create", description: "Register a named Pi harness" },
+  { value: "roles", description: "List built-in and user roles" },
+  { value: "role create", description: "Author a reusable role" },
+  { value: "role inspect", description: "Show effective instructions for a role" },
+  { value: "role override", description: "Materialize one intentional full override" },
+  { value: "[danger]purge-old-files", description: "Delete obsolete extension files (explicit maintenance)" },
   { value: "workflows", description: "List saved workflows" },
   { value: "runs", description: "Browse session runs and their complete paged output" },
   { value: "runs summary", description: "Summarize durable receipts" },
@@ -28,13 +46,24 @@ const COMMANDS = [
 
 const FIELD_REPORT_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "field-report.mjs");
 
+/** Canonical catalog snapshot composed by loadExternalCatalog
+ * (one composition for Agent, workflows, help, roles, and doctor). Optional
+ * injection via options.getCatalog takes precedence so tests can supply a
+ * snapshot without touching the filesystem. */
+export type ExternalCatalog = ReturnType<typeof loadExternalCatalog>;
+
 type RuntimeSettings = { maxConcurrentSubagents: number; subagentTimeoutMs: number };
 export type ExternalCommandOptions = {
   settings: LoadedExternalSettings;
   getRuntimeSettings: () => RuntimeSettings;
   getMaxRunRecords: () => number;
-  startProfileInterview: (ctx: ExtensionCommandContext) => Promise<void>;
+  startRoleInterview: (ctx: ExtensionCommandContext) => Promise<void>;
+  startHarnessInterview: (ctx: ExtensionCommandContext) => Promise<void>;
   externalRuns: ReturnType<typeof createExternalRunsTool>;
+  /** Canonical catalog override for isolated command tests. */
+  getCatalog?: (agentDir: string) => ExternalCatalog;
+  /** Validated writer override for isolated command tests. */
+  saveSettings?: (agentDir: string, record: unknown, options?: { repair?: boolean }) => string;
 };
 
 type CommandContextLike = { cwd: string; isProjectTrusted?: () => boolean };
@@ -59,20 +88,65 @@ function helpText(): string {
   ].join("\n");
 }
 
+function usageText(): string {
+  return `Usage: ${COMMANDS.map((command) => `/external ${command.value}`).join(" | ")}`;
+}
+
+export function loadCatalogSnapshot(agentDir: string, options?: Pick<ExternalCommandOptions, "getCatalog">): ExternalCatalog {
+  if (options?.getCatalog) {
+    return options.getCatalog(agentDir);
+  }
+  return loadExternalCatalog(agentDir);
+}
+
+function knownHarnessNames(agentDir: string): string[] {
+  const { harnesses } = loadHarnessConfigs(agentDir);
+  return [...EXTERNAL_HARNESSES_LIST as readonly string[], ...harnesses.keys()];
+}
+
+function roleSuffix(profileName: string, harnessName: string): string | undefined {
+  const prefix = `${harnessName}-`;
+  return profileName.startsWith(prefix) && profileName.length > prefix.length
+    ? profileName.slice(prefix.length)
+    : undefined;
+}
+
+function groupByRole(profiles: ReadonlyMap<string, SubagentProfile>, harnessNames: readonly string[]): Map<string, { harnesses: string[]; profiles: SubagentProfile[] }> {
+  const groups = new Map<string, { harnesses: string[]; profiles: SubagentProfile[] }>();
+  for (const profile of profiles.values()) {
+    const candidates = [profile.harness, profile.backend, ...harnessNames].filter((name): name is string => Boolean(name));
+    let role: string | undefined;
+    let usedHarness = "";
+    for (const harness of candidates) {
+      const suffix = roleSuffix(profile.name, harness);
+      if (suffix) {
+        role = suffix;
+        usedHarness = profile.harness ?? (harness === profile.backend ? harness : profile.backend);
+        break;
+      }
+    }
+    const key = role ?? profile.name;
+    const harnessLabel = usedHarness || profile.harness || profile.backend;
+    const group = groups.get(key) ?? { harnesses: [], profiles: [] };
+    if (!group.harnesses.includes(harnessLabel)) group.harnesses.push(harnessLabel);
+    group.profiles.push(profile);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
 function formatHarnessesLine(harnessConfigs: ReadonlyMap<string, import("./harnesses.ts").HarnessConfig>): string {
   if (harnessConfigs.size === 0) return "Pi harnesses: none configured";
   const entries = [...harnessConfigs]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking})`);
+    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking} · ${config.preset ?? "minimal"})`);
   return `Pi harnesses: ${entries.join(", ")}`;
 }
 
-function formatCapabilitySetsLine(sets: ReadonlyMap<string, import("./settings.ts").PiCapabilitySet>): string {
-  if (sets.size === 0) return "Pi capability sets: none configured";
-  const entries = [...sets]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, set]) => `${name} (${set.skills.length} skill(s), ${set.promptTemplates.length} prompt template(s))`);
-  return `Pi capability sets: ${entries.join(", ")}`;
+function catalogProblems(catalog: ExternalCatalog): string[] {
+  return catalog.blocked
+    ? [`Configuration is blocked: ${catalog.diagnostics.join(" ") || "the external catalog could not be composed."}`]
+    : [...catalog.diagnostics];
 }
 
 function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
@@ -82,12 +156,18 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
   const harnessSource = harness.source === "project"
     ? ` (project: ${harness.projectPath})`
     : " (global)";
-  const { harnesses: harnessConfigs, diagnostics: harnessDiagnostics } = loadHarnessConfigs(getAgentDir());
-  const staleDefault = !(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness.harness) && !harnessConfigs.has(harness.harness)
+  const catalog = loadCatalogSnapshot(getAgentDir(), options);
+  const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
+  const staleDefault = !(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness.harness) && ![...catalog.profiles.values()].some((profile) => (profile.harness ?? profile.backend) === harness.harness) && !harnessConfigs.has(harness.harness)
     ? [`Configured default harness "${harness.harness}" is not currently registered.`]
     : [];
-  const capabilitySets = resolveCtxCapabilitySets(settings.piCapabilitySets, ctx);
-  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...harnessDiagnostics, ...staleDefault, ...capabilitySets.diagnostics];
+  const upgradePlan = planConfigUpgrade(getAgentDir());
+  const upgradeHint = upgradePlan.status === "ready"
+    ? ["A one-time configuration conversion is ready: run /external settings convert to preview it."]
+    : upgradePlan.status === "blocked"
+      ? ["Configuration conversion is blocked:", ...upgradePlan.diagnostics.map((item) => `- ${item}`)]
+      : [];
+  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog), ...staleDefault, ...upgradeHint];
   return [
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
@@ -96,63 +176,370 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
     formatHarnessesLine(harnessConfigs),
-    formatCapabilitySetsLine(capabilitySets.sets),
     `Settings: ${options.settings.path}`,
-    `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness and piCapabilitySets only; a project set replaces the same-named global set)`,
+    `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness only)`,
     ...(warnings.length ? ["Warnings:", ...warnings.map((item) => `- ${item}`)] : []),
-    "Edit the file, then run /reload. CLI flags override file values.",
+    "Edit via /external settings edit, then run /reload. CLI flags override file values.",
   ].join("\n");
 }
 
-async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<string> {
-  const { harnesses: harnessConfigs, diagnostics: harnessDiagnostics } = loadHarnessConfigs(getAgentDir());
-  const allProfiles = getSubagentProfiles(getAgentDir());
-  const profiles = filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys()));
-  const { templates: sharedRoleTemplates, diagnostics: sharedRoleDiagnostics } = extractSharedPiRoleProfiles(allProfiles);
-  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi");
-  const settingsErrors = [
-    ...options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting")),
-    ...harnessDiagnostics,
-    ...sharedRoleDiagnostics,
+function overviewText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
+  const settings = options.settings.settings;
+  const harness = resolveCtxDefaultHarness(settings.defaultHarness, ctx);
+  const harnessSource = harness.source === "project" ? "project" : "global";
+  const agentDir = getAgentDir();
+  const catalog = loadCatalogSnapshot(agentDir, options);
+  const harnesses = catalog.harnessConfigs ?? loadHarnessConfigs(agentDir).harnesses;
+  const groups = groupByRole(catalog.profiles, knownHarnessNames(agentDir));
+  const problems = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog)];
+  return [
+    "External agents",
+    `Default: ${harness.harness} (${harnessSource})`,
+    `Roles: ${groups.size} known${problems.length ? " · configuration has warnings (see /external doctor)" : ""}`,
+    `Harnesses: ${EXTERNAL_HARNESSES_LIST.length} CLI · ${harnesses.size} named Pi`,
+    `Settings: ${options.settings.path}`,
+    ...(problems.length ? ["Problems:", ...problems.map((item) => `- ${item}`)] : []),
+  ].join("\n");
+}
+
+function harnessesText(options: ExternalCommandOptions): string {
+  const catalog = loadCatalogSnapshot(getAgentDir(), options);
+  const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
+  const lines = [
+    `CLI harnesses: ${(EXTERNAL_HARNESSES_LIST as readonly string[]).join(", ")} (readiness is separate; see /external doctor)`,
+    formatHarnessesLine(harnessConfigs),
   ];
-  // Effective capability config: the same trust-aware global+project merge
-  // settingsText already shows, plus a check that every profile/shared
-  // template actually referencing a capabilitySet names one that exists in
-  // that effective set — an unknown reference here would otherwise only
-  // surface later, mid-delegation, as a per-call failure.
-  const capabilitySets = resolveCtxCapabilitySets(options.settings.settings.piCapabilitySets, ctx);
-  const capabilitySetRefs = new Map<string, string>();
-  for (const profile of [...profiles.values(), ...sharedRoleTemplates.values()]) {
-    if (profile.capabilitySet && !capabilitySetRefs.has(profile.capabilitySet)) {
-      capabilitySetRefs.set(profile.capabilitySet, profile.name);
-    }
+  if (catalog.diagnostics.length) lines.push("Warnings:", ...catalog.diagnostics.map((item) => `- ${item}`));
+  return lines.join("\n");
+}
+
+function rolesText(options: ExternalCommandOptions): string {
+  const agentDir = getAgentDir();
+  const catalog = loadCatalogSnapshot(agentDir, options);
+  if (catalog.blocked) {
+    return `Roles are unavailable: ${catalog.diagnostics.join(" ") || "the external catalog could not be composed."}`;
   }
-  const unknownCapabilitySetRefs = [...capabilitySetRefs].filter(([set]) => !capabilitySets.sets.has(set));
-  // A profile kept in the roster with a malformed capabilitySet field (see
-  // capabilitySetError on SubagentProfile) never silently vanishes back to
-  // canonical/shared-template synthesis, but it also raises no error until
-  // someone actually selects it — surface it here too, the same way a bad
-  // shared-template filename or pinned model/thinking already is.
-  const invalidCapabilitySetProfiles = [...profiles.values(), ...sharedRoleTemplates.values()]
-    .filter((profile) => profile.capabilitySetError)
-    .map((profile) => `"${profile.name}" has an invalid capabilitySet: ${profile.capabilitySetError}`);
-  const capabilitySetIssues = [
-    ...unknownCapabilitySetRefs.map(([set, profile]) => `"${set}" referenced by "${profile}" is not configured`),
-    ...invalidCapabilitySetProfiles,
+  if (!catalog.profiles.size) return "No roles are available. Run /external role create to author one.";
+  const groups = groupByRole(catalog.profiles, knownHarnessNames(agentDir));
+  const lines = [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([role, group]) => `${role}: ${group.harnesses.length} harness(es) (${[...group.harnesses].sort((a, b) => a.localeCompare(b)).join(", ")})`);
+  if (catalog.diagnostics.length) lines.push("Warnings:", ...catalog.diagnostics.map((item) => `- ${item}`));
+  return lines.join("\n");
+}
+
+/** Real execution boundary per backend. A role's instructions are intent, not this boundary. */
+function backendAuthority(backend: string, permission: string): string {
+  if (backend === "agy") {
+    return `agy accepts only autonomous danger (--dangerously-skip-permissions) and rejects ${permission === "danger" ? "readonly and edit" : permission}. The call uses ${permission}. Run only in trusted repositories.`;
+  }
+  if (backend === "pi") {
+    return `Pi SDK child · host access · curated tools · call tier ${permission}. The tool list is not an OS sandbox; danger-tier bash is as exposed as on any external CLI. The harness preset is minimal (skills stay unloaded) or skills (installed skills load; project skills require a trusted project). Extensions and prompt templates stay unloaded.`;
+  }
+  if (backend === "claude") {
+    return `Claude headless permission mode · call tier ${permission}. readonly and edit deny Bash headlessly. Role names do not raise the tier.`;
+  }
+  if (backend === "codex") {
+    return `Codex --sandbox axis · call tier ${permission}; never automatically retried by this extension.`;
+  }
+  if (backend === "grok") {
+    return `Grok --sandbox axis (read-only/workspace/off) + bypassPermissions · call tier ${permission}; readonly network-blocking is Linux-only.`;
+  }
+  return `Muse exec approvals bypassed headless · call tier ${permission}; readonly adds --disable-write --disable-shell, danger uses --yolo (also trusts the workspace).`;
+}
+
+function findRoleCandidates(catalog: ExternalCatalog, role: string, harnessNames: readonly string[]): SubagentProfile[] {
+  return [...catalog.profiles.values()].filter((profile) => {
+    const candidates = [profile.harness, profile.backend, ...harnessNames].filter((name): name is string => Boolean(name));
+    return candidates.some((harness) => roleSuffix(profile.name, harness) === role);
+  });
+}
+
+function roleInspectText(options: ExternalCommandOptions, ctx: CommandContextLike, roleArg: string, harnessArg: string | undefined): string {
+  const agentDir = getAgentDir();
+  const catalog = loadCatalogSnapshot(agentDir, options);
+  if (catalog.blocked) {
+    return `Role inspection is unavailable: ${catalog.diagnostics.join(" ") || "the external catalog could not be composed."}`;
+  }
+  const role = roleArg.trim();
+  if (!role) return "Usage: /external role inspect <role> [harness]";
+  const harness = harnessArg?.trim() || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).harness;
+  const exact = catalog.profiles.get(`${harness}-${role}`);
+  if (!exact) {
+    const candidates = findRoleCandidates(catalog, role, knownHarnessNames(agentDir));
+    if (candidates.length) {
+      const names = candidates.map((profile) => profile.name).sort((a, b) => a.localeCompare(b)).join(", ");
+      return `Role "${role}" is not bound to harness "${harness}". Available bindings: ${names}. Try /external role inspect ${role} <harness>.`;
+    }
+    return `Unknown role "${role}" on harness "${harness}". See /external roles (${catalog.profiles.size} execution identities known).`;
+  }
+  const instructions = (exact.systemPrompt ?? "").trim() || "(no authored instructions)";
+  const bounded = instructions.length > 4000 ? `${instructions.slice(0, 4000)}\n… (truncated; full instructions are the stored profile body)` : instructions;
+  return [
+    `${exact.name}: ${exact.description}`,
+    `Source: ${exact.source ?? "built-in"}`,
+    ...(exact.configurationError ? [`Configuration error: ${exact.configurationError}`] : []),
+    `Harness: ${exact.harness ?? exact.backend} · backend ${exact.backend}`,
+    `Model: ${exact.model ?? "harness default"} · thinking ${exact.thinking ?? "inherited"}${exact.backend === "pi" ? ` · preset ${exact.preset ?? "minimal"}` : ""} · call permission ${options.settings.settings.defaultPermission} unless the call sets one`,
+    backendAuthority(exact.backend === "pi" ? "pi" : exact.backend, options.settings.settings.defaultPermission),
+    "",
+    bounded,
+  ].join("\n");
+}
+
+function roleOverride(options: ExternalCommandOptions, roleArg: string, harnessArg: string | undefined): string {
+  const agentDir = getAgentDir();
+  const catalog = loadCatalogSnapshot(agentDir, options);
+  if (catalog.blocked) {
+    return `Role override is unavailable: ${catalog.diagnostics.join(" ") || "the external catalog could not be composed."}`;
+  }
+  const role = roleArg?.trim();
+  const harness = harnessArg?.trim();
+  if (!role || !harness) return "Usage: /external role override <role> <harness>";
+  if (!isValidSubagentName(role)) return `Invalid role name ${JSON.stringify(role)}: use lowercase letters, numbers, and hyphens.`;
+  if (!(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness) && !isValidHarnessName(harness)) {
+    return `Unknown harness ${JSON.stringify(harness)}: use one of ${(EXTERNAL_HARNESSES_LIST as readonly string[]).join(", ")}, or a registered pi-* harness.`;
+  }
+  const exact = catalog.profiles.get(`${harness}-${role}`);
+  if (!exact) {
+    return `Cannot materialize ${harness}-${role}: no effective role "${role}" is bound to harness "${harness}". See /external role inspect ${role}.`;
+  }
+  const dir = join(agentDir, "pi-flow-external", "overrides");
+  const finalPath = join(dir, `${harness}-${role}.md`);
+  if (existsSync(finalPath)) {
+    return `Override ${harness}-${role} already exists at ${finalPath}; edit it directly. The existing override was not changed.`;
+  }
+  mkdirSync(dir, { recursive: true });
+  if (existsSync(finalPath)) {
+    return `Override ${harness}-${role} already exists at ${finalPath}; edit it directly. The existing override was not changed.`;
+  }
+  let content: string;
+  try {
+    content = compileProfile({ ...exact, name: `${harness}-${role}`, systemPrompt: (exact.systemPrompt ?? "").trim() || exact.description });
+  } catch (error) {
+    return `Cannot materialize ${harness}-${role}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const stagedPath = `${finalPath}.${process.pid}.staged`;
+  try {
+    writeFileSync(stagedPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    linkSync(stagedPath, finalPath);
+  } finally {
+    if (existsSync(stagedPath)) unlinkSync(stagedPath);
+  }
+  return `Override ${harness}-${role} materialized at ${finalPath} as a complete replacement (not a merge). Values apply from the next invocation; frozen workflows keep their prior snapshot.`;
+}
+
+function summarizeUnknown(value: unknown, limit = 2000): string {
+  try {
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    return text.length > limit ? `${text.slice(0, limit)}\n… (truncated)` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<void> {
+  if (!ctx.hasUI || typeof ctx.ui.editor !== "function") {
+    ctx.ui.notify("Settings editing requires interactive or RPC UI with an editor.", "error");
+    return;
+  }
+  const agentDir = getAgentDir();
+  let current: string;
+  try {
+    current = readFileSync(options.settings.path, "utf8");
+  } catch {
+    current = `${JSON.stringify(options.settings.settings, null, 2)}\n`;
+  }
+  const edited = await ctx.ui.editor("external settings", current);
+  if (edited === undefined) {
+    ctx.ui.notify("Settings edit cancelled. Nothing was saved.", "info");
+    return;
+  }
+  if (edited === current) {
+    ctx.ui.notify("Settings unchanged.", "info");
+    return;
+  }
+  let record: unknown;
+  try {
+    record = JSON.parse(edited);
+  } catch (error) {
+    ctx.ui.notify(`Settings not saved: edited text is not valid JSON (${error instanceof Error ? error.message : String(error)}).`, "error");
+    return;
+  }
+  // Explicit editor repair: a guided full replacement may overwrite a
+  // malformed or v4-invalid current file. Valid pre-v4 installations and
+  // future versions are still rejected — those go through
+  // /external settings convert, not the editor.
+  const save = options.saveSettings ?? saveExternalSettings;
+  try {
+    const path = save(agentDir, record, { repair: true });
+    ctx.ui.notify(`Settings saved to ${path}. Values apply from the next invocation; frozen workflows keep their prior snapshot. Concurrency changes wait for active/queued runs to drain.`, "info");
+  } catch (error) {
+    ctx.ui.notify(`Settings not saved: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+function formatUpgradePreview(plan: ReturnType<typeof planConfigUpgrade>): string {
+  if (plan.status !== "ready" || !plan.settings) return plan.diagnostics.join(" ");
+  const lines = [
+    "Configuration conversion preview (one-time; original files stay in place as the recovery copy):",
+    `Settings: ${plan.settingsPath}`,
+    JSON.stringify(plan.settings, null, 2),
   ];
+  const list = (title: string, items: string[]) => {
+    if (!items.length) return;
+    lines.push(`${title} (${items.length}):`);
+    const shown = items.slice(0, 20);
+    for (const item of shown) lines.push(`- ${item}`);
+    if (items.length > shown.length) lines.push(`- … and ${items.length - shown.length} more`);
+  };
+  list("Override copies", plan.overrides.map((override) => `${override.name} (${override.reason})`));
+  list("Disabled seeded identities", plan.disabledProfiles);
+  list("Unchanged defaults (no copy needed)", plan.unchangedDefaults);
+  list("Excluded native/contradictory profiles", plan.excludedProfiles);
+  list("Notes", plan.notes);
+  const preserved = Object.keys(plan.preservedFields);
+  if (preserved.length) lines.push(`Preserved unknown fields: ${preserved.join(", ")}`);
+  return lines.join("\n");
+}
+
+async function settingsConvert(ctx: ExtensionCommandContext): Promise<void> {
+  const agentDir = getAgentDir();
+  const plan = planConfigUpgrade(agentDir);
+  if (plan.status === "current") {
+    ctx.ui.notify("Configuration is already version 4. Nothing to convert.", "info");
+    return;
+  }
+  if (plan.status === "empty") {
+    ctx.ui.notify("No legacy configuration found. Nothing to convert.", "info");
+    return;
+  }
+  if (plan.status === "blocked" || !plan.settings) {
+    ctx.ui.notify(`Configuration conversion is blocked:\n${plan.diagnostics.map((item) => `- ${item}`).join("\n")}`, "error");
+    return;
+  }
+  const preview = formatUpgradePreview(plan);
+  if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") {
+    ctx.ui.notify(`${summarizeUnknown(preview, 4000)}\n\nConversion needs interactive confirmation; rerun /external settings convert with UI.`, "warning");
+    return;
+  }
+  const confirmed = await ctx.ui.confirm(
+    "Apply configuration conversion?",
+    `${summarizeUnknown(preview, 4000)}\n\nOverride copies land first; settings.json version 4 activates last. Originals stay in place.`,
+  );
+  if (!confirmed) {
+    ctx.ui.notify("Conversion cancelled. Nothing was written.", "info");
+    return;
+  }
+  const result = applyConfigUpgrade(agentDir);
+  if (result.status === "applied") {
+    ctx.ui.notify(
+      [
+        `Conversion applied: ${result.settingsPath} is now version 4.`,
+        `Overrides installed: ${result.overridesInstalled.length}`,
+        result.disabledProfiles.length ? `Disabled seeded identities: ${result.disabledProfiles.length}` : undefined,
+        "Values apply from the next invocation; frozen workflows keep their prior snapshot.",
+      ].filter((line): line is string => Boolean(line)).join("\n"),
+      "info",
+    );
+    return;
+  }
+  ctx.ui.notify(
+    `Conversion did not apply (${result.status}). Nothing was activated:\n${result.diagnostics.map((item) => `- ${item}`).join("\n")}`,
+    result.status === "blocked" ? "error" : "warning",
+  );
+}
+
+function formatPurgeCandidate(candidate: LegacyPurgeCandidate): string {
+  return `${candidate.relativePath} · ${candidate.kind}${candidate.copied ? " · copied to overrides" : " · NOT copied to overrides"}`;
+}
+
+async function purgeOldFiles(ctx: ExtensionCommandContext): Promise<void> {
+  const agentDir = getAgentDir();
+  const plan = planLegacyPurge(agentDir);
+  if (plan.status === "blocked") {
+    ctx.ui.notify(`Purge is blocked:\n${plan.diagnostics.map((item) => `- ${item}`).join("\n")}`, "warning");
+    return;
+  }
+  if (!plan.candidates.length) {
+    ctx.ui.notify("No legacy files to purge. Repeat invocation is harmless.", "info");
+    return;
+  }
+  // Nonstandard exact-only names stay out of the default inventory and are
+  // listed separately for explicit selection, never blanket deletion.
+  const inventory = plan.candidates.filter((candidate) => candidate.inventory);
+  const nonstandard = plan.candidates.filter((candidate) => !candidate.inventory);
+  const byPath = new Map(plan.candidates.map((candidate) => [candidate.path, candidate]));
+  const describe = (title: string, items: LegacyPurgeCandidate[]): string => {
+    if (!items.length) return "";
+    return `${title}:\n${items.map((candidate) => `- ${formatPurgeCandidate(candidate)}`).join("\n")}`;
+  };
+  const listing = [describe("Purge inventory", inventory), describe("Nonstandard names (select explicitly)", nonstandard)]
+    .filter(Boolean)
+    .join("\n");
+  if (!ctx.hasUI || typeof ctx.ui.select !== "function" || typeof ctx.ui.confirm !== "function") {
+    ctx.ui.notify(`${listing}\n\nPurge needs interactive selection and confirmation; rerun /external [danger]purge-old-files with UI. Nothing was deleted.`, "warning");
+    return;
+  }
+  // Explicit individual selection: nothing is preselected and there is no
+  // select-all shortcut. Toggle entries one at a time, then delete.
+  const selected = new Set<string>();
+  while (true) {
+    const toggleChoices = plan.candidates.map((candidate) =>
+      `${selected.has(candidate.path) ? "✓" : "○"} ${formatPurgeCandidate(candidate)}`);
+    const choice = await ctx.ui.select("Purge old files", [...toggleChoices, `Delete ${selected.size} selected`, "Back"]);
+    if (!choice || choice === "Back") {
+      ctx.ui.notify("Purge cancelled. Nothing was deleted.", "info");
+      return;
+    }
+    if (choice.startsWith("Delete ")) {
+      break;
+    }
+    const index = toggleChoices.indexOf(choice);
+    const candidate = index === -1 ? undefined : plan.candidates[index];
+    if (!candidate) continue;
+    if (selected.has(candidate.path)) selected.delete(candidate.path);
+    else selected.add(candidate.path);
+  }
+  if (!selected.size) {
+    ctx.ui.notify("No files selected. Nothing was deleted.", "info");
+    return;
+  }
+  const selection = [...selected].map((path) => ({ path, fingerprint: byPath.get(path)!.fingerprint }));
+  const confirmed = await ctx.ui.confirm(
+    `Delete ${selection.length} obsolete file(s)?`,
+    `${selection.map((item) => `- ${byPath.get(item.path)!.relativePath}`).join("\n")}\n\nFiles changed since preview are skipped, never forced. Repeat invocation is harmless.`,
+  );
+  if (!confirmed) {
+    ctx.ui.notify("Purge cancelled. Nothing was deleted.", "info");
+    return;
+  }
+  const result = purgeLegacyFiles(agentDir, selection);
+  const lines = [
+    `Deleted: ${result.deleted.length}`,
+    ...result.deleted.map((path) => `- ${path}`),
+    ...result.skipped.map((item) => `Skipped ${item.path} (${item.reason})`),
+    ...result.failed.map((item) => `Failed ${item.path}: ${item.reason}`),
+    ...result.diagnostics.map((item) => `- ${item}`),
+  ];
+  ctx.ui.notify(lines.join("\n"), result.failed.length || result.status === "blocked" ? "warning" : "info");
+}
+
+async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<string> {
+  const catalog = loadCatalogSnapshot(getAgentDir(), options);
+  const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
+  const profiles = catalog.profiles;
+  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi");
+  const settingsErrors = catalog.blocked
+    ? [...options.settings.diagnostics, ...catalog.diagnostics]
+    : [...options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting")), ...catalog.diagnostics];
   const lines = [
     settingsErrors.length
-      ? `✗ Settings: ${settingsErrors.join(" ")}`
+      ? `${catalog.blocked ? "✗" : "✗"} Settings/catalog: ${settingsErrors.join(" ")}`
       : options.settings.diagnostics.length
         ? `⚠ Settings: ${options.settings.diagnostics.join(" ")}`
-        : "✓ Settings: valid",
-    profiles.size ? `✓ Profiles: ${profiles.size} external` : "✗ Profiles: none configured",
-    capabilitySetIssues.length
-      ? `✗ Capability sets: ${capabilitySetIssues.join("; ")}`
-      : capabilitySets.sets.size
-        ? `✓ Capability sets: ${capabilitySets.sets.size} configured`
-        : "Capability sets: none configured",
-    ...(capabilitySets.diagnostics.length ? [`⚠ Capability sets: ${capabilitySets.diagnostics.join(" ")}`] : []),
+        : "✓ Settings/catalog: valid",
+    profiles.size ? `✓ Roles: ${profiles.size} execution identities` : "✗ Roles: none configured",
   ];
   for (const backend of backends) {
     const result = await pi.exec(backend, ["--version"], { timeout: 10_000 });
@@ -170,25 +557,12 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
       lines.push(`✗ ${name}: model "${config.model}" not found in the registry`);
       continue;
     }
+    const preset = config.preset ?? "minimal";
     lines.push(ctx.modelRegistry.hasConfiguredAuth(model)
-      ? `✓ ${name}: ${config.model} (auth configured)`
-      : `⚠ ${name}: ${config.model} (no credentials configured)`);
+      ? `✓ ${name}: ${config.model} · ${preset} (auth configured)`
+      : `⚠ ${name}: ${config.model} · ${preset} (no credentials configured)`);
   }
   return lines.join("\n");
-}
-
-function profilesText(): string {
-  const { harnesses: harnessConfigs } = loadHarnessConfigs(getAgentDir());
-  const allProfiles = getSubagentProfiles(getAgentDir());
-  const profiles = mergeSynthesizedPiProfiles(
-    filterExternalAgentProfiles(allProfiles, new Set(harnessConfigs.keys())),
-    harnessConfigs,
-    extractSharedPiRoleProfiles(allProfiles).templates,
-  );
-  if (!profiles.size) return "No external profiles. Run /external profile create.";
-  return [...profiles.values()].map((profile) =>
-    `${profile.name}: ${profile.harness ?? profile.backend} · ${profile.model ?? "default model"} · ${profile.thinking ?? "inherited thinking"}`,
-  ).join("\n");
 }
 
 async function runsText(pi: ExtensionAPI): Promise<string> {
@@ -361,7 +735,7 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
 
 export function registerExternalCommand(pi: ExtensionAPI, options: ExternalCommandOptions): void {
   pi.registerCommand("external", {
-    description: "Inspect and configure external Claude, Codex, and Agy harnesses",
+    description: "Inspect and configure external Claude, Codex, Agy, Grok, and Muse harnesses",
     getArgumentCompletions: (prefix) => {
       const normalized = prefix.trim().toLowerCase();
       const matches = COMMANDS.filter((command) => command.value.startsWith(normalized));
@@ -370,17 +744,34 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
       if (!action) {
-        const profiles = filterExternalAgentProfiles(getSubagentProfiles(getAgentDir()), new Set(loadHarnessConfigs(getAgentDir()).harnesses.keys()));
-        ctx.ui.notify(`${profiles.size} external profile(s) · ${workflows(ctx).length} saved workflow(s)\n${settingsText(options, ctx)}`, "info");
+        ctx.ui.notify(overviewText(options, ctx), "info");
       } else if (action === "doctor") {
         ctx.ui.notify(await doctorText(pi, options, ctx), "info");
       } else if (action === "settings") {
-        const warnings = options.settings.diagnostics.length || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).diagnostics.length;
+        const catalog = loadCatalogSnapshot(getAgentDir(), options);
+        const warnings = options.settings.diagnostics.length || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).diagnostics.length || catalog.diagnostics.length || catalog.blocked;
         ctx.ui.notify(settingsText(options, ctx), warnings ? "warning" : "info");
-      } else if (action === "profiles") {
-        ctx.ui.notify(profilesText(), "info");
-      } else if (action === "profile create") {
-        await options.startProfileInterview(ctx);
+      } else if (action === "settings edit") {
+        await settingsEdit(options, ctx);
+      } else if (action === "settings convert") {
+        await settingsConvert(ctx);
+      } else if (action === "harnesses") {
+        ctx.ui.notify(harnessesText(options), "info");
+      } else if (action === "harness create") {
+        await options.startHarnessInterview(ctx);
+      } else if (action === "roles") {
+        ctx.ui.notify(rolesText(options), "info");
+      } else if (action === "role create") {
+        await options.startRoleInterview(ctx);
+      } else if (action === "role inspect" || action.startsWith("role inspect ")) {
+        const rest = args.trim().slice("role inspect".length).trim().split(/\s+/).filter(Boolean);
+        ctx.ui.notify(roleInspectText(options, ctx, rest[0] ?? "", rest[1]), "info");
+      } else if (action === "role override" || action.startsWith("role override ")) {
+        const rest = args.trim().slice("role override".length).trim().split(/\s+/).filter(Boolean);
+        const message = roleOverride(options, rest[0] ?? "", rest[1]);
+        ctx.ui.notify(message, message.startsWith("Override ") && message.includes("materialized") ? "info" : "warning");
+      } else if (action === "[danger]purge-old-files") {
+        await purgeOldFiles(ctx);
       } else if (action === "workflows") {
         const saved = workflows(ctx);
         ctx.ui.notify(saved.length ? saved.map((workflow) => `${workflow.name}: ${workflow.description}`).join("\n") : "No saved workflows.", "info");
@@ -400,7 +791,7 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "help") {
         ctx.ui.notify(helpText(), "info");
       } else {
-        ctx.ui.notify("Usage: /external [doctor|settings|profiles|profile create|workflows|runs|runs summary|runs --prune|help]", "warning");
+        ctx.ui.notify(usageText(), "warning");
       }
     },
   });

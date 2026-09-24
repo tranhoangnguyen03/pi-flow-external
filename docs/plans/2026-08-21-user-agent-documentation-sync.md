@@ -1,5 +1,7 @@
 # User and Agent Documentation Sync Implementation Plan
 
+> **Superseded for configuration:** the profile-command documentation this plan synced is replaced by settings v4, built-in roles, and `/external settings convert`. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Align every active user-facing and agent-facing guide with the field-tested external-agent contract, then release the documentation and prompt guidance as `1.0.10-external.5`.

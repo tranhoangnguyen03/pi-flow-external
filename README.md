@@ -1,13 +1,15 @@
 # pi-flow external
 
-External agent delegation for [pi](https://github.com/earendil-works/pi) through:
+External agent delegation for [pi](https://github.com/earendil-works/pi). A **role** is the work. A **harness** is where and how that role executes. The harnesses are:
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) profiles with `backend: claude`
-- [Codex CLI](https://github.com/openai/codex) profiles with `backend: codex`
-- Antigravity profiles with `backend: agy`
-- [Grok Build CLI](https://github.com/xai-org/grok-build) profiles with `backend: grok`
-- Muse Code profiles with `backend: muse`
-- Named Pi harness configurations (`pi-<label>`) — in-process, per-model configs you register yourself, not a spawned CLI
+- Antigravity (`agy`)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
+- [Codex CLI](https://github.com/openai/codex) (`codex`)
+- [Grok Build CLI](https://github.com/xai-org/grok-build) (`grok`)
+- Muse Code (`muse`)
+- Named Pi harnesses (`pi-<label>`) — in-process, per-model configs you register yourself, not a spawned CLI
+
+Six built-in roles are available in memory on every one of those harnesses. A fresh installation writes no profile files.
 
 The ordinary driver has four tools (`workflow` can be disabled):
 
@@ -16,7 +18,7 @@ The ordinary driver has four tools (`workflow` can be disabled):
 - `external_help` returns role details, permission behavior, or workflow guidance on demand.
 - `external_runs` lists, inspects, waits for, and cancels session-owned runs.
 
-`Agent` and `workflow` accept external roles with an optional harness override — one of the five CLIs, or a registered named Pi harness. Use pi's native subagent system for Pi-backed agents. The `pi_flow_profile_create` and `pi_flow_harness_create` finalizers are active only during `/external profile create`.
+`Agent` and `workflow` accept a role with an optional harness — `agy`, `claude`, `codex`, `grok`, `muse`, or a registered `pi-*` name. Legacy exact `subagent_type` remains available and cannot be combined with `role` or `harness`. Use pi's native subagent system for Pi-backed agents. `pi_flow_role_create` is active only during `/external role create`. `pi_flow_harness_create` is active only during `/external harness create`.
 
 ## Install
 
@@ -60,37 +62,108 @@ External agents use the effective permission tier and each harness's native mech
 
 - Claude: `--permission-mode plan`, `--permission-mode acceptEdits`, or `--dangerously-skip-permissions`
 - Codex: `--sandbox read-only`, `workspace-write`, or `danger-full-access`
-- Antigravity: always `--dangerously-skip-permissions`
+- Antigravity: only `--dangerously-skip-permissions`. `readonly` and `edit` are rejected.
 - Grok: `--sandbox read-only`, `workspace`, or `off`, always alongside `--permission-mode bypassPermissions` — bypass only skips the interactive approval prompt; the kernel sandbox remains the enforced boundary. `readonly`'s network-blocking guarantee is Linux-only (a no-op on macOS), and sandbox startup can fail closed on some macOS hosts (for example when `/var/run/docker.sock` resolves to a symlink) rather than silently running unsandboxed.
 - Muse: every tier passes `--disable-approval` (approval and Muse's own sandbox are ON by default, and headless runs must not hang on an interactive prompt); `readonly` additionally passes `--disable-write --disable-shell`; `edit` leaves the sandbox enabled with only approval bypassed; `danger` uses `--yolo`, which disables approval and the sandbox and additionally trusts the workspace for this run (loads its skills/rules) — a broader grant than an unsandboxed run alone.
-- Named Pi harnesses: a curated `tools:` allow-list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`
+- Named Pi harnesses: a curated tool list (`read`/`grep`/`find`/`ls` at `readonly`; those plus `edit`/`write` at `edit`), or the SDK's own default active tools (`read`/`bash`/`edit`/`write`) at `danger`. That list is not an OS sandbox. The registration preset is `minimal` (skills stay unloaded; the default when the field is absent) or `skills` (installed skills load; project skills load only when the project is trusted). Extensions, prompt templates, and themes stay unloaded.
 
-Claude refuses bypass mode when its effective UID is `0`; in that case the extension uses `--permission-mode auto`. External execution lanes (like `implementer`, `qa`, and `worker`) require shell execution to inspect repositories, run tests, and verify code. On Claude Code and named Pi harnesses, headless/`edit`-tier access excludes shell entirely; therefore, execution lanes maintain a `danger` floor so the model is not artificially handcuffed by permission blocks. Grok and Muse need no such floor: Grok's `edit` tier (`--sandbox workspace`) and Muse's `edit` tier (sandbox left enabled, only approval bypassed) already permit shell execution, sandboxed to the workspace. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
+The effective tier is the call's `permission`, or settings `defaultPermission` when the call omits it. The default is `danger`. A role does not change the tier. Claude refuses bypass mode when its effective UID is `0`; danger then uses `--permission-mode auto`. Claude `edit` denies Bash headlessly. Pass `danger` on the call when the task needs a shell. Run external agents only in repositories you trust and state whether each task is read-only or may edit files.
 
-The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger and all Agy runs, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and shows `external host access` while workflow work is active. These labels disclose actual execution authority; they do not turn a read-only prompt into an enforced permission boundary.
+The TUI labels a direct run with its effective access, including `unsandboxed external CLI` for danger, `Pi SDK child · host access · curated tools` for a danger-tier named Pi harness, and `external host access` while workflow work is active. These labels disclose actual execution authority. A read-only instruction in a role is intent, not that authority.
+
+## Breaking upgrade
+
+Settings are version 4. This v2 minor release includes breaking configuration and command changes; the product owner chose `2.6.0-external.0` (`release:minor`) rather than a v3 bump. The changelog and GitHub release notes carry this notice. Earlier notes under `docs/plans/` stay historical; this section is the current contract.
+
+`/external profiles`, `/external profile create`, and `/pi-flow-profile create` are removed. They are not aliases, redirects, or hidden handlers. An unknown `/external` command lists the commands below. `Agent` and `workflow` still accept exact `subagent_type`. That API is unchanged.
+
+| Removed command | Replacement |
+|---|---|
+| `/external profiles` | `/external roles` |
+| `/external profile create` | `/external role create` for a shared role; `/external harness create` for a named Pi harness; `/external role override <role> <harness>` for one exact execution file |
+| `/pi-flow-profile create` | The same three commands. This spelling is removed. |
+
+### One-time conversion
+
+`/external settings` shows the effective values and, when a pre-v4 installation is present, points at `/external settings convert`. That command previews the conversion and applies it after confirmation. There is no `/external migrate` command. A pre-v4 installation — settings older than version 4, a `pi-flow-external/harnesses.json` file, or a historical seed marker — gets an actionable setup error on delegation until conversion finishes. `/external settings` stays available while delegation is blocked.
+
+Conversion runs once:
+
+1. Combine valid runtime settings and named Pi harness registrations into `settings.json` version 4.
+2. Copy customized external profiles into `pi-flow-external/overrides/` as exact overrides, dropping obsolete `permission` and `capabilitySet` fields. A legacy `subagents/pi-<role>.md` template with `harness: "pi-*"` becomes `roles/<role>.md` for every harness. `piCapabilitySets` is not copied. Unchanged generated content is recognized conservatively. Uncertain valid external content is kept as an override.
+3. Record seeded identities you deleted in `disabledProfiles`, using the historical seed cohorts. Those identities stay disabled.
+4. Leave every original file in place as the recovery copy.
+5. Validate before activation. Conflicting destinations or malformed inputs stop with a concrete diagnostic. Copied overrides are installed before version 4 is activated. Until that activation, staged copies are not live catalog inputs. Retrying an interrupted conversion accepts identical copies and rejects a destination whose contents differ.
+
+Once version 4 is active, delegation reads only `settings.json`, `roles/`, and `overrides/`. Old `subagents/` profiles, seed markers, and `harnesses.json` are ignored. This release does not write both layouts, and it does not keep the old layout as a fallback resolver.
+
+A shared role is one file for every harness. `roles/reviewer.md` replaces the built-in reviewer on `agy`, `claude`, `codex`, `grok`, `muse`, and every named Pi harness:
+
+```md
+---
+description: Review security-sensitive changes and report actionable findings.
+---
+
+Review the supplied changes without editing files. Prioritize exploitable
+issues, cite locations, and distinguish verified findings from speculation.
+```
+
+An exact override replaces one harness binding completely. `overrides/claude-reviewer.md` keeps the existing profile frontmatter and is the whole definition for that identity, not a field merge:
+
+```md
+---
+description: Claude-specific review instructions.
+backend: claude
+model: claude-sonnet-5
+thinking: high
+---
+
+Review the supplied changes without editing files. Apply the Claude-only notes in this body.
+```
+
+`tools` in an override is enforced only on a named Pi harness. A CLI harness keeps its own tools. A Pi override's `model` and `thinking` must match the named harness entry; omit them to inherit that entry.
+
+### Optional purge
+
+Delegation after conversion does not require deleting anything. `/external [danger]purge-old-files` is a separate destructive maintenance command. The brackets and the word `danger` are part of the spelling.
+
+It lists the exact candidate paths and whether customized content was copied. Nothing is preselected. You toggle each path, then confirm deletion of that selection. It requires a completed version 4 conversion, so it cannot erase the only harness registry or deletion markers before they are recorded. Customized copies inside the inventory can be deleted too.
+
+| Candidate | Scope |
+|---|---|
+| Legacy seeded profiles | The exact 30 `<agy\|claude\|codex\|grok\|muse>-<explorer\|planner\|implementer\|reviewer\|qa\|worker>.md` names under the old `subagents/` directory |
+| Legacy custom CLI profiles | Harness-prefixed Markdown files declaring the matching external backend |
+| Legacy named Pi profiles | `pi-<label>-<role>.md` declaring `backend: pi` and the matching harness, identified from the file |
+| Legacy shared Pi templates | `subagents/pi-<role>.md` declaring `harness: "pi-*"`. Conversion already copied these into `roles/<role>.md` |
+| Seed markers | `.pi-flow-defaults-seeded-v1`, `.pi-flow-defaults-seeded-v2`, and `.pi-flow-defaults-seeded-v3` |
+| Old harness registry | The exact `pi-flow-external/harnesses.json` path |
+
+Nonstandard exact-only legacy names are listed separately for an explicit choice. Symlinks and other non-regular entries are skipped. The command does not recurse. It does not remove the `subagents/` directory, native or unrelated profiles, current settings, roles, overrides, project configuration, or run evidence. It reports deleted, skipped, and failed paths. Running it again is harmless. A file that changes after the preview is skipped and reported.
+
+Downgrade after a purge needs your own backup of the deleted files. Originals remain available only until you purge them.
 
 ## Quick start
 
-Create a profile from Pi:
+The six built-in roles — explorer, planner, implementer, reviewer, qa, and worker — are already available on `agy`, `claude`, `codex`, `grok`, `muse`, and any named Pi harness you register. Nothing has to be authored first.
+
+Check the setup:
 
 ```text
-/external profile create
-```
-
-The guided flow selects a backend, creates a backend-qualified profile, smoke-tests the real CLI, and installs the profile only after a successful test.
-
-Check the resulting setup:
-
-```text
+/external
 /external doctor
-/external profiles
+/external roles
+/external harnesses
 ```
 
-Then delegate by role (the global default harness is initially `agy`):
+Then delegate by role. The built-in default harness is `agy`:
 
 ```text
 Use the Agent tool with role "explorer" and harness "claude" to map this repository read-only.
 ```
+
+`/external doctor` checks the catalog separately from CLI readiness. A configured harness can still be uninstalled or unauthenticated.
+
+Author one additional role for every harness with `/external role create`. That interview only validates and writes the role. Register a named Pi harness with `/external harness create`. The interview asks for a resource preset, `minimal` or `skills`, then smoke-tests the Pi runtime with that preset before saving. A harness smoke test does not judge role quality.
 
 ## Commands
 
@@ -98,30 +171,83 @@ All user commands use the `/external` namespace:
 
 | Command | Purpose |
 |---|---|
-| `/external` | Show profile, workflow, and runtime-setting status |
-| `/external doctor` | Check settings, profiles, and configured CLI versions |
-| `/external settings` | Show the default harness and effective runtime settings |
-| `/external profiles` | List configured external profiles |
-| `/external profile create` | Create and smoke-test a profile |
+| `/external` | Overview: default harness and its source, roles, harnesses, settings path, and actionable problems |
+| `/external doctor` | Validate the catalog, then report CLI and named-Pi readiness separately |
+| `/external settings` | Effective values, harness source, and the canonical JSON path. Points at conversion when a pre-v4 installation is present |
+| `/external settings edit` | Edit and validate canonical settings in the standard editor |
+| `/external settings convert` | Preview and apply the one-time version 4 conversion |
+| `/external harnesses` | List the five CLI harnesses and named Pi harnesses. Readiness is separate from registration |
+| `/external harness create` | Register one named Pi harness. No role interview |
+| `/external roles` | Six built-ins plus user roles, with restrictions and overrides. The list is not the role × harness product |
+| `/external role create` | Author one reusable role |
+| `/external role inspect <role> [harness]` | Effective instructions, source, model, and the backend's real authority for the default permission |
+| `/external role override <role> <harness>` | Materialize one intentional full override |
+| `/external [danger]purge-old-files` | List and delete obsolete extension files. Secondary maintenance; the brackets are literal |
 | `/external workflows` | List saved workflows |
 | `/external runs` | Interactively browse current-session runs, every workflow child, paged output/diagnostics, and cancellation |
 | `/external runs summary` | Summarize durable run records |
 | `/external runs --prune` | Prune eligible completed run records |
 | `/external help` | Show the command reference |
 
-`/external doctor` verifies CLI availability, not provider authentication.
+`/external doctor` reports CLI availability separately from provider authentication, and separately from whether the catalog itself is valid.
 
-## Profiles
-
-Profiles live in:
+A typical overview:
 
 ```text
-~/.pi/agent/subagents/<name>.md
+External agents
+Default: pi-deepseek (global)
+Roles: 6 built-in · 1 custom · 1 harness override
+Harnesses: 5 CLI · 1 named Pi
+Settings: ~/.pi/agent/pi-flow-external/settings.json
 ```
 
-Names may contain lowercase letters, numbers, and hyphens. A profile must declare `backend: claude`, `backend: codex`, `backend: agy`, `backend: grok`, `backend: muse`, or (alongside `harness: <a registered pi-* name>`) `backend: pi`, and its name should start with the matching harness name.
+The built-in default harness on a fresh installation is `agy`. The overview above is a directory that has already registered `pi-deepseek` and authored one extra role plus one override.
 
-Example Claude profile, `~/.pi/agent/subagents/claude-explorer.md`:
+## Configuration
+
+One extension-owned home. Reads do not create directories or write defaults. The extension does not write Pi's root settings or Pi's native `subagents/` directory.
+
+```text
+$PI_CODING_AGENT_DIR/pi-flow-external/
+  settings.json             # only execution-configuration file; optional
+  roles/                    # user-authored shared roles; created when you save one
+    security-reviewer.md
+  overrides/                # exact execution files; created only when you save one
+    claude-reviewer.md
+  runs/                     # operational evidence
+```
+
+Normally `$PI_CODING_AGENT_DIR` is `~/.pi/agent`. Markdown holds authored instructions. JSON holds scalar execution settings. Project-local roles are not supported; the global catalog is used for both global and project-only package installations. A trusted project may still override `defaultHarness` only, described under Settings.
+
+At each direct call the extension loads one catalog snapshot. A workflow freezes that same snapshot for the whole run. Resolution order:
+
+1. Harness: explicit call, then the trusted project default, then the global default, then the built-in default (`agy`).
+2. Unknown harnesses and identities listed in `disabledProfiles` are rejected. The call does not switch to another harness.
+3. Role definition: exact override, then a shared role, then the built-in role.
+4. That definition is bound to the chosen harness and executed through the existing runners.
+
+An invalid higher-priority override blocks that selection. An unrelated invalid file is reported and does not take a different role offline. Invalid settings JSON, or a settings version this release does not support, blocks delegation. `/external settings`, `/external settings convert`, and `/external role inspect` remain available. The next invocation reads settings, roles, and overrides from disk. A workflow that has already started keeps the snapshot it froze at start. A change to `maxConcurrentSubagents` waits until no subagent is active and none are queued.
+
+Stable identities stay `<harness>-<role>`. Receipts and workflow descriptors use that identity, or the exact legacy `subagent_type` name when that was the selector. Permission is the call, or `defaultPermission`. It is not a role field.
+
+Names may contain lowercase letters, numbers, and hyphens. A role `description` is the user-visible reason for selection, so keep it concise. Instructions become the external agent's system instructions. Shared role files accept `description` only. `permission`, `capabilitySet`, `backend`, `model`, and `thinking` on a shared role are rejected with a diagnostic.
+
+`roles/security-reviewer.md` works with any harness, with no backend prefix:
+
+```md
+---
+description: Review security-sensitive changes and report actionable findings.
+---
+
+Review the supplied changes without editing files. Prioritize exploitable
+issues, cite locations, and distinguish verified findings from speculation.
+```
+
+Role instructions do not erase harness differences. Antigravity accepts only autonomous danger. A CLI harness does not gain a named Pi harness's curated tool list. That list is not an OS sandbox.
+
+### Exact overrides
+
+`overrides/claude-reviewer.md` is a complete replacement for that one identity. Backend-specific model, thinking, tools, budget, and instruction customizations belong here. New guided overrides use `<harness>-<role>` names. Older nonstandard names remain selectable only through `subagent_type`.
 
 ```md
 ---
@@ -134,7 +260,7 @@ thinking: high
 Explore the repository read-only. Identify architecture, entry points, tests, configuration, risks, and recommended first-read files.
 ```
 
-Codex and Antigravity use the same format:
+The same frontmatter shape accepts the other CLI backends:
 
 ```yaml
 backend: codex
@@ -156,32 +282,38 @@ backend: muse
 model: muse-spark-1.3-contributor
 ```
 
-Profile instructions become the external agent's system instructions. A profile's `description` is also shown as the user-visible reason for its selection, so keep it concise and concrete. External CLIs use their own tools, so a profile's `tools:` field does not control them; a pi profile's `tools:` field does apply, intersected with its permission tier's curated tool table. A `backend: pi` profile is directly selectable by this extension only when it also declares `harness: <name>` for a name registered in `harnesses.json` (see below), or is materialized from a shared role template declaring the literal `harness: "pi-*"` marker (see [Shared custom Pi roles](#shared-custom-pi-roles)); a bare `backend: pi` profile with no `harness`, an unregistered one, or no backend at all belongs to Pi's native subagent system and is never modified by this extension.
+A named Pi override adds `backend: pi` and `harness: <registered pi-* name>`. CLI harnesses use their own tools, so `tools` does not control them. On a named Pi harness, `tools` is intersected with the permission tier's curated tool table.
 
-### Default profiles
+### Built-in roles
 
-On first session start the extension seeds a default roster — five code-oriented roles (explorer, planner, implementer, reviewer, qa) plus the generalist worker — as one storage profile per backend across five backends (30 files). The compact agent catalog advertises each role once rather than presenting 30 choices. Seeding happens once: it never overwrites existing files, and profiles you delete or customize afterwards stay that way. Default profiles leave `model` and `thinking` unpinned so they track the CLI's own model and the current Pi thinking level. Roles not in the default roster can be added with `/external profile create`. An installation seeded before Grok support existed gains only the six new `grok-*` profiles the next time it seeds; one seeded before Muse support existed gains only the six new `muse-*` profiles; neither migration resurrects a profile from an earlier backend that you previously deleted or customized.
+explorer, planner, implementer, reviewer, qa, and worker ship in memory for `agy`, `claude`, `codex`, `grok`, and `muse`, and for every registered named Pi harness. Session start writes no default files and no seed markers. Built-in CLI roles leave `model` and `thinking` unpinned, so they track that CLI's own model and the current Pi thinking level. A named Pi harness's six built-ins use that harness's registered model and thinking. Adding a harness writes no role files. Seven authored roles are seven files under `roles/`, whatever the harness count is.
 
-Project-local profiles are not supported; global profiles are used for both global and project-only package installations.
+Disable an execution identity by listing its exact name in `disabledProfiles`, for example `codex-explorer`. That blocks both `role` selection and exact `subagent_type` selection. Deletions captured during conversion are stored the same way. The extension does not recreate a disabled identity.
 
-## Named Pi harness configurations
+### Named Pi harness configurations
 
-A named Pi harness runs in-process through Pi's own SDK rather than as a spawned CLI, letting you delegate to any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider) without an external CLI. Register one via `/external profile create` (choose the "declare a new named Pi harness" branch): give it a `pi-<label>` name, a `provider/model` id, and an optional thinking level. Registration is smoke-tested against the real pi runtime before it is saved, exactly like a CLI profile, into:
-
-```text
-~/.pi/agent/pi-flow-external/harnesses.json
-```
+A named Pi harness runs in-process through Pi's own SDK, for any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Register it with `/external harness create`: a `pi-<label>` name, a `provider/model` id, a thinking level (`off`, `minimal`, `low`, `medium`, `high`, or `xhigh`, always stored explicitly), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. The smoke test uses the selected preset. Registration is then saved into the `harnesses` object of `settings.json`. A legacy entry that omits `preset` is `minimal`. The five CLI harnesses are built in and do not need entries there.
 
 ```json
 {
-  "version": 1,
+  "version": 4,
+  "defaultHarness": "pi-deepseek",
+  "maxConcurrentSubagents": 12,
+  "subagentTimeoutMs": 7200000,
+  "defaultPermission": "danger",
+  "defaultMaxBudgetUsd": null,
+  "maxRunRecords": 200,
   "harnesses": {
-    "pi-deepseek": { "model": "deepseek/deepseek-chat", "thinking": "high" }
+    "pi-deepseek": {
+      "model": "deepseek/deepseek-chat",
+      "thinking": "high",
+      "preset": "minimal"
+    }
   }
 }
 ```
 
-The moment a harness is registered, all six default roles (explorer, planner, implementer, reviewer, qa, worker) become available on it automatically — no per-role file to write. Delegate to it exactly like any other harness:
+The six built-in roles are available on that harness immediately. Delegate the same way as a CLI harness:
 
 ```ts
 Agent({
@@ -192,63 +324,11 @@ Agent({
 });
 ```
 
-A custom (non-canonical) role can be given its own profile file per harness, the same as for the five CLI backends: `~/.pi/agent/subagents/pi-deepseek-security-reviewer.md` with `backend: pi` and `harness: pi-deepseek`. That file's body/permission/tools may be customized; its `model`/`thinking` are not — they always come from the harness's registered config, and a file that tries to override them to a different value is rejected rather than silently honored.
+A custom role is the one shared file from `/external role create`. Use `/external role override reviewer pi-deepseek` when only that harness needs a different body, permission, tools, or budget. The override's `model` and `thinking` come from the harness entry. A different pin is rejected.
 
-### Shared custom Pi roles
+Settings writes use a private staged file and a same-directory replacement, and they preserve unrelated fields. The extension refuses to overwrite a malformed or newer-version file. Replacement avoids a torn write. Concurrent sessions can still overwrite each other's update: there is no inter-process lock. A harness smoke test finishes before that short commit. The writer then rereads and checks for a duplicate or a conflict.
 
-Instead of duplicating a custom role's file per harness, author it once as a **shared role template**: `~/.pi/agent/subagents/pi-security-audit.md` with `backend: pi` and the literal marker `harness: "pi-*"` (not one specific harness name):
-
-```md
----
-description: Shared security audit role.
-backend: pi
-harness: "pi-*"
----
-
-Audit for security defects. Do not modify files.
-```
-
-This template is applied to every currently-registered `pi-*` harness that doesn't already have its own `<harness>-security-audit.md` override — `pi-deepseek-security-audit`, `pi-astra-security-audit`, and so on, each pinned to that harness's own registered model/thinking. Precedence: a harness-specific on-disk file wins for that harness, then the shared template, then (for the six canonical role names only) the built-in synthesized body. A shared template must not pin `model` or `thinking` itself — a harness's registry stays authoritative — and its file name must match its `pi-<role>` marker; either mistake drops the template with a diagnostic surfaced by `/external doctor` rather than silently misapplying one harness's model to the rest. `/external profile create` can author one directly (the fourth interview branch); creating one requires at least one already-registered `pi-*` harness, since its smoke test runs against one representative harness while the installed file stays harness-agnostic.
-
-**v1 scope, by design:** a pi child's entire tool surface is the SDK's own builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit` tiers) — no project/user extensions, MCP, or themes load into it. This bounds which tool *names* exist; it does not make `bash` at `danger` tier any less exposed than on an external CLI. Retry is disabled per pi child (in-memory, never touching your real Pi settings) so a transient provider error fails immediately rather than silently retrying. Pi children cannot resume a prior conversation and have no enforced budget cap. Expanding this capability set (trusted extensions/MCP, resumable sessions, real budget controls) is tracked in [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
-
-### Reusable capability sets (skills & prompt templates)
-
-A profile can opt into a named, reusable selection of exact skills and prompt templates via frontmatter:
-
-```md
----
-description: Docs writer.
-backend: pi
-harness: pi-deepseek
-capabilitySet: docs
----
-
-Write documentation.
-```
-
-The named set itself lives in settings, not the profile — define it once, reuse it from any profile or harness:
-
-```json
-{
-  "piCapabilitySets": {
-    "docs": {
-      "skills": ["technical-writer"],
-      "promptTemplates": ["release-notes"]
-    }
-  }
-}
-```
-
-`skills`/`promptTemplates` are exact resource names only — never booleans, never wildcards — so the set stays a closed, auditable list. Either array may be omitted, and an entry may be the empty object (`"empty": {}`) — that is a valid, explicit selection of nothing, distinct from not declaring `capabilitySet` at all. A trusted project's `.pi/pi-flow-external/settings.json` may define its own `piCapabilitySets`; a project entry with the same name fully replaces the global one (arrays are never merged). Absent `capabilitySet`, behavior is unchanged: nothing loads.
-
-Selected resources are discovered through Pi's own SDK — never through project/user extensions or MCP, which stay unconditionally excluded — and filtered to exactly the named skills/prompt templates; project-scope resources are only visible when the project is trusted. An unknown set name, or a selected skill/prompt template that isn't discoverable, fails before any prompt is sent, naming exactly what's missing. Selected names are shown on the intent card before launch and recorded in the run receipt. Because a skill is a lazy file read (the child reads it itself), a workflow run freezes one content hash per selection up front for its replay fingerprint and re-checks it immediately before each child spawn, rejecting a child rather than running it against drifted instructions if the selected file changed mid-run.
-
-A frontmatter `capabilitySet` that isn't a non-empty string (a boolean, a number, an empty string) does not silently drop or disable the profile. The profile stays in the roster with the malformed value recorded internally; selecting that exact profile — directly, via a canonical `<harness>-<role>` override, or via a shared `pi-*` role template materialized onto a harness — fails loudly at that point, naming what's wrong. This is deliberate: dropping the whole profile file instead would let an on-disk override or shared template silently vanish and fall back to the built-in canonical role body, hiding a real configuration mistake. Unrelated profiles and roles are never affected.
-
-A selected **prompt template** is only reachable through the child's own explicit `/template-name args` task text (the SDK's built-in `/template-name` expansion) — it is never injected into the child's system prompt. A misspelled or unselected template name is therefore not an error; it is simply never expanded and passes through as literal task text.
-
-A selected **skill**'s *autonomous* discoverability — whether its name/description is listed in the child's system prompt for the model to invoke on its own initiative — is governed entirely by that skill's own `disable-model-invocation` frontmatter flag, exactly as Pi's SDK already enforces it. `capabilitySet` filtering only narrows *which* skills are visible to the child at all; it never overrides that flag. A skill marked `disable-model-invocation: true` is still reachable via an explicit `/skill:name args` task invocation, since that lookup is by exact selected name, not by the flag.
+**v1 scope, by design:** a pi child's tools are the SDK builtins (`read`/`bash`/`edit`/`write`, plus `grep`/`find`/`ls` at `readonly`/`edit`). The registration preset selects `minimal` (skills stay unloaded) or `skills` (installed skills load; project skills require a trusted project). Extensions, prompt templates, and themes stay unloaded. The tool list is not an OS sandbox, and `bash` at `danger` is host access. Retry is disabled per pi child (in-memory, never touching your real Pi settings). Pi children cannot resume a prior conversation and have no enforced budget cap. Trusted extensions, MCP, resumable sessions, and budget controls remain [issue #43](https://github.com/tranhoangnguyen03/pi-flow-external/issues/43).
 
 ## Agent usage
 
@@ -263,11 +343,11 @@ Agent({
 });
 ```
 
-Profiles named with their matching backend prefix expose the suffix as a built-in or custom role (`claude-security-reviewer` -> `security-reviewer`). Resolution always targets the exact `<harness>-<role>` profile and never falls back to another harness. If a role is unavailable, the error lists its supported harnesses. Existing calls may instead use `subagent_type` as a legacy exact-profile escape hatch; do not combine it with `role` or `harness`. Nonstandard profile names are exact-only.
+Resolution always targets the exact `<harness>-<role>` identity and does not switch harness. If a role is unavailable, the error lists the harnesses that provide it. Existing calls may instead use `subagent_type` as an exact-identity escape hatch; do not combine it with `role` or `harness`. Nonstandard override names are exact-only.
 
-The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only profile names, and the default harness; it does not repeat profile descriptions or the workflow manual. Call `external_help` with topic `roles` for profile descriptions, `permissions` for harness caveats, or `workflow` for syntax, examples, and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. Catalog availability means a matching profile is configured, not that its CLI is installed or authenticated.
+The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only names, and the default harness. It does not repeat role descriptions or the workflow manual. Call `external_help` with topic `roles` for descriptions, `permissions` for harness caveats, or `workflow` for syntax, examples, and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. A listed role is a catalog entry. It does not mean the CLI is installed or authenticated.
 
-External agents start fresh in the requested working directory unless `resume` continues a previous child. By default, they receive only the task briefing and profile instructions. The parent can explicitly share conversation context:
+External agents start fresh in the requested working directory unless `resume` continues a previous child. By default, they receive only the task briefing and the resolved role instructions. The parent can explicitly share conversation context:
 
 ```ts
 Agent({
@@ -421,25 +501,25 @@ Every child selects from one parent snapshot and effective settings frozen at wo
 
 Every `Agent` call and workflow `agent()` child also accepts these optional run parameters (`context` is covered under agent usage above):
 
-- `permission`: `readonly` | `edit` | `danger` (default `danger`). Tiers map onto native harness mechanisms — Claude permission modes and Codex's single-axis `--sandbox`. Antigravity (`agy`) is different: its headless sandbox denies even read-only tools like `read_url_content`, and its only unsandboxed mode is `--dangerously-skip-permissions`, so **every agy run is unsandboxed** and `readonly`/`edit` on agy are advisory profile-body instructions, not a boundary. Getting out of the model's way is deliberate; every agy run discloses as `unsandboxed external CLI` rather than claiming a read-only boundary it cannot keep. Claude `readonly`/`edit` runs auto-deny shell commands headlessly; denials are surfaced in the receipt.
+- `permission`: `readonly` | `edit` | `danger`. Omit it to use settings `defaultPermission` (`danger` unless changed). A role or override `permission` field is obsolete and is rejected. Tiers map onto native harness mechanisms where the backend can enforce them. Antigravity accepts only `danger` (`--dangerously-skip-permissions`) and rejects `readonly` and `edit`. Claude `readonly`/`edit` auto-deny shell commands headlessly; denials are surfaced in the receipt. A named Pi harness restricts tool names. That is not an OS sandbox.
 - `max_budget_usd`: a spending cap. Claude Code enforces it mid-run with its native `--max-budget-usd` flag. Codex estimates cost from a price map and agy does not report cost at all; Grok reports its own native cost (`total_cost_usd`) but exposes no enforcement flag; Muse has never been observed to report cost at all. For codex, agy, grok, and muse alike, the cap is recorded and marked `budget unenforceable` instead of pretended.
 - `resume`: a prior run id. Continues the same backend conversation (Claude `--resume`, Codex `exec resume`, agy `--conversation`, Grok `--resume`, Muse `exec --session-id`) instead of starting from scratch. The prior run must use the same backend. Claude sessions persist in Claude Code's own local storage (this extension no longer passes `--no-session-persistence`) so recorded session ids stay resumable; remove old conversations from Claude Code itself if that matters to you. Muse's `--session-id` resume was verified directly: two independent `muse exec` processes sharing the same `--session-id` reported the same session, and the second recalled a fact only told to the first. `resume` cannot be combined with `context` sharing — continue an existing child, or start a new one with a snapshot.
 
-Resolution order for tiers and budgets: call > profile frontmatter (`permission:`, `max_budget_usd:`) > settings defaults.
+Resolution order for the tier is call `permission`, then settings `defaultPermission`. Budget order is call `max_budget_usd`, then an exact override's `max_budget_usd`, then the settings default. Conversion of a pre-v4 install drops `permission` and `capabilitySet` from copied overrides, turns `harness: "pi-*"` templates into ordinary roles, and does not copy `piCapabilitySets`.
 
 ## Settings and runtime limits
 
-The extension creates:
+The only execution-configuration file is:
 
 ```text
 $PI_CODING_AGENT_DIR/pi-flow-external/settings.json
 ```
 
-Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
+Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`. A missing file uses these defaults in memory and is not created by a read:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "defaultHarness": "agy",
   "maxConcurrentSubagents": 12,
   "subagentTimeoutMs": 7200000,
@@ -449,11 +529,15 @@ Normally this resolves to `~/.pi/agent/pi-flow-external/settings.json`:
 }
 ```
 
-Version 1 and 2 files migrate on read: recognized keys carry over, missing `defaultHarness` becomes `agy`, unknown keys warn, and invalid values fall back per-key. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
+Field names and units are unchanged. Add `harnesses` only for named `pi-*` registrations; the five CLI harnesses need no entries. Add `disabledProfiles` to list exact execution identities to exclude, such as `"codex-explorer"`. Empty objects and lists may be omitted. A file that also registers a harness is shown under Named Pi harness configurations. `maxRunRecords` prunes the oldest completed run records at session start and via `/external runs --prune`; records still running or interrupted are never pruned, and `0` keeps everything.
+
+`/external settings` shows the effective values, the harness source, and the canonical path. When conversion is ready, it tells you to run `/external settings convert`. `/external settings edit` opens that JSON in the standard editor and validates it before saving. The next invocation reads the saved file. A workflow already running keeps the snapshot it froze at start. A new `maxConcurrentSubagents` value waits until active and queued work has drained.
+
+Pre-v4 files are not applied as live settings. Convert them once with `/external settings convert`, as described in Breaking upgrade. After that, version 4 ignores the old files.
 
 ### Project default-harness override
 
-A trusted project can override the global `defaultHarness` without touching global settings or duplicating profiles. Create:
+A trusted project can override the global `defaultHarness` without editing the global file or copying roles. Create:
 
 ```text
 <project>/.pi/pi-flow-external/settings.json
@@ -463,9 +547,7 @@ A trusted project can override the global `defaultHarness` without touching glob
 { "defaultHarness": "claude" }
 ```
 
-The override applies only when Pi marks the project trusted, supports `defaultHarness` only, and is never created or written by the extension. Precedence: an explicit `harness` in the call wins, then the trusted project default, then the global setting. `/external settings` reports the effective harness and its source; an untrusted or invalid project file is ignored with a warning, and a role that has no profile on the effective harness fails with an actionable error instead of silently switching harnesses. Edit the file and run `/reload`.
-
-Edit the file and run `/reload`. Startup flags override extension factory options, which override this file, which overrides built-in defaults.
+The override applies only when Pi marks the project trusted, supports `defaultHarness` only, and is never created or written by the extension. The project file cannot inject roles or harness registrations. Precedence: an explicit `harness` in the call wins, then the trusted project default, then the global setting, then the built-in default. `/external settings` reports the effective harness and its source. An untrusted or invalid project file is ignored with a warning. A role that does not resolve on the effective harness fails with an actionable error and does not switch harnesses. The next invocation reads the project file. Startup flags override extension factory options, which override this file, which override built-in defaults.
 
 Equivalent startup flags:
 
@@ -503,8 +585,9 @@ A failed backend can still have complete diagnostic evidence. Treat `incompleteR
 
 ## Troubleshooting
 
-- **No external profiles:** run `/external profile create`, or verify that the profile is in `~/.pi/agent/subagents/` with a matching backend-qualified name.
-- **Role unavailable on the selected harness:** choose one of the supported harnesses listed in the error, or create the exact `<harness>-<role>` profile. The extension never substitutes another harness.
+- **Delegation says configuration must be converted:** run `/external settings` for the pointer, then `/external settings convert` to preview and apply. Delegation stays blocked until version 4 is active. Old files are kept and are not a live fallback.
+- **Role unavailable on the selected harness:** choose one of the harnesses listed in the error, author the shared role with `/external role create`, or materialize that one binding with `/external role override <role> <harness>`. The extension does not substitute another harness.
+- **Disabled identity:** remove that exact name from `disabledProfiles` in `/external settings edit` when you intend to use it again. Conversion records deleted seeded identities there on purpose.
 - **CLI available but authentication fails:** authenticate that CLI directly; Pi and every external backend keep separate credentials.
 - **Claude rejects `--dangerously-skip-permissions` under root:** reload the current extension version; root runs use Claude's `auto` permission mode.
 - **Nested agent cannot find the repository:** include the repository's absolute path and required context in the prompt.
@@ -540,7 +623,7 @@ npm run e2e -- --backend pi --harness pi-deepseek
 npm run e2e -- --backend pi --harness pi-deepseek --workflow
 ```
 
-The `pi` backend requires a harness you have already registered yourself in your real `harnesses.json` with real credentials configured; the script never registers, writes to, or pays for one on your behalf. `--interrupt` cancels a backgrounded `Agent` through `external_runs` instead of `--workflow`'s two-child check.
+The `pi` backend requires a harness you have already registered under `harnesses` in your real `settings.json`, with real credentials configured. The script never registers, writes, or pays for one on your behalf. `--interrupt` cancels a backgrounded `Agent` through `external_runs` instead of `--workflow`'s two-child check.
 
 A separate, explicit `--routing-smoke` lane spawns a real `pi` CLI process with a real root model and asks it, in plain language, to pick the right tool — useful only when role discovery, tool descriptions, or coordinator guidance changes, and never the default:
 

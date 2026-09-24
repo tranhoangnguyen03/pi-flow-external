@@ -98,8 +98,8 @@ describe("pi-subagent agent contract", () => {
   });
 
   it("settles workflow child evidence when resume validation fails", async () => {
-    mkdirSync(join(agentDir, "subagents"), { recursive: true });
-    writeFileSync(join(agentDir, "subagents", "codex-worker.md"), "---\ndescription: Codex worker.\nbackend: codex\n---\n");
+    mkdirSync(join(agentDir, "pi-flow-external", "overrides"), { recursive: true });
+    writeFileSync(join(agentDir, "pi-flow-external", "overrides", "codex-worker.md"), "---\ndescription: Codex worker.\nbackend: codex\n---\n");
     const { session, model, modelRegistry } = await createSession();
     const workflow = session.getToolDefinition("workflow") as any;
     const result = await workflow.execute(
@@ -123,7 +123,7 @@ describe("pi-subagent agent contract", () => {
   });
 
   it("launches Agent and workflow work in the background without retaining tool callbacks", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-background");
     const startedPath = join(tempDir, "background-started");
     const directRelease = join(tempDir, "release-direct");
@@ -207,7 +207,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
   });
 
   it("keeps queuedAt and executionStartedAt visible in live timing after the backend's own progress node replaces the queued one", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-live-timing");
     const startedPath = join(tempDir, "live-timing-started");
     mkdirSync(subagentsDir, { recursive: true });
@@ -257,7 +257,7 @@ setInterval(() => {}, 1000);
   });
 
   it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-cancel-reason");
     const startedPath = join(tempDir, "cancel-reason-started");
     mkdirSync(subagentsDir, { recursive: true });
@@ -363,21 +363,22 @@ setInterval(() => {}, 1000);
     await session.prompt("Just say noted.");
 
     expect(rootContext?.systemPrompt).toContain("# External delegation");
-    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex");
+    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex, grok, muse.");
     expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
     expect(getToolNames(rootContext)).toContain("external_help");
     expect(getToolNames(rootContext)).toContain("external_runs");
     expect(getToolNames(rootContext)).toContain("workflow");
-    expect(getToolNames(rootContext)).not.toContain("pi_flow_profile_create");
+    expect(getToolNames(rootContext)).not.toContain("pi_flow_role_create");
+    expect(getToolNames(rootContext)).not.toContain("pi_flow_harness_create");
 
     disposeSession(session);
   });
 
   it("resolves roles against a trusted project default-harness override", async () => {
-    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    mkdirSync(join(agentDir, "pi-flow-external", "overrides"), { recursive: true });
     writeFileSync(
-      join(agentDir, "subagents", "claude-security-reviewer.md"),
+      join(agentDir, "pi-flow-external", "overrides", "claude-security-reviewer.md"),
       "---\ndescription: Custom security review through Claude.\nbackend: claude\n---\n\nReview security read-only.\n",
     );
     mkdirSync(join(cwd, ".pi", "pi-flow-external"), { recursive: true });
@@ -395,7 +396,7 @@ setInterval(() => {}, 1000);
       },
     ]);
     await trusted.session.prompt("Just say noted.");
-    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default)");
+    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default), grok, muse.");
     const trustedAgent = trusted.session.getToolDefinition("Agent") as any;
     const trustedResult = await trustedAgent.execute(
       "project-default",
@@ -452,13 +453,13 @@ setInterval(() => {}, 1000);
   });
 
   it("returns role descriptions and exact-profile availability through help", async () => {
-    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    mkdirSync(join(agentDir, "pi-flow-external", "overrides"), { recursive: true });
     writeFileSync(
-      join(agentDir, "subagents", "claude-security-reviewer.md"),
+      join(agentDir, "pi-flow-external", "overrides", "claude-security-reviewer.md"),
       "---\ndescription: Custom security review through Claude.\nbackend: claude\n---\n\nReview security read-only.\n",
     );
     writeFileSync(
-      join(agentDir, "subagents", "specialist.md"),
+      join(agentDir, "pi-flow-external", "overrides", "specialist.md"),
       "---\ndescription: Exact-only Codex specialist.\nbackend: codex\n---\n\nSpecialist task.\n",
     );
 

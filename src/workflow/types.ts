@@ -160,7 +160,7 @@ export interface WorkflowLimits {
 /**
  * The execution-identity-relevant slice of a resolved SubagentProfile, used
  * to widen the workflow replay fingerprint beyond the profile *name* so that
- * editing a profile's model/thinking/body/tools/permission/budget (directly,
+ * editing a profile's model/thinking/preset/body/tools/budget (directly,
  * or via its named pi harness's registered config) invalidates a stale cached
  * fingerprint instead of silently matching it.
  */
@@ -169,17 +169,11 @@ export interface WorkflowSubagentDescriptor {
   harness?: string;
   model?: string;
   thinking?: string;
+  /** Named Pi registration preset. Absent on CLI descriptors. */
+  preset?: import("../types.ts").PiResourcePreset;
   systemPrompt?: string;
   tools?: string[];
-  permission?: import("../types.ts").PermissionTier;
   maxBudgetUsd?: number;
-  /**
-   * Frozen capabilitySet selection (see src/core/capabilities.ts), resolved
-   * once up front for the whole workflow run. Its contentHash widens the
-   * replay fingerprint so an edited selected SKILL.md/template invalidates a
-   * stale cached fingerprint instead of silently matching it.
-   */
-  capabilities?: import("../types.ts").ResolvedCapabilities & { contentHash: string };
 }
 
 export interface RunWorkflowOptions {

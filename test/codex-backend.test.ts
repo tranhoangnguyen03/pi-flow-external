@@ -110,7 +110,7 @@ describe("pi-subagent codex backend", () => {
   });
 
   it("runs a codex-backed subagent through the Agent tool", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
     mkdirSync(subagentsDir, { recursive: true });
@@ -172,7 +172,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
   });
 
   it("keeps one evidence id when a queued run is cancelled before spawn", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-queued");
     const spawnCountPath = join(tempDir, "spawn-count");
     const releasePath = join(tempDir, "release-first");
@@ -235,7 +235,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
   });
 
   it("does not mark a missing codex executable as process started", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const emptyBin = join(tempDir, "empty-bin");
     mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(emptyBin, { recursive: true });
@@ -428,7 +428,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
   });
 
   it("does not add unknown codex model cost to the status line", async () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-unknown-cost");
     mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });

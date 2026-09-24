@@ -1,5 +1,7 @@
 # Implementation plan: named Pi harness configurations (`pi-*`)
 
+> **Superseded for configuration:** harness storage in `harnesses.json` and the profile-create registration steps are replaced by settings v4 and `/external harness create`. This file stays historical. See `docs/plans/2026-09-23-configuration-surface-redesign.md`.
+
 Companion to `docs/plans/pi-named-configurations-design.md` (read that first — this document assumes its schemas, precedence rules, and resolved SDK facts and does not re-derive them). This plan is executable phase-by-phase in a follow-up session; **no code, test, or settings files are touched by writing this plan.**
 
 ## Decision log

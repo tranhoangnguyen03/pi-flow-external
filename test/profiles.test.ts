@@ -19,19 +19,7 @@ import {
 } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import {
-  extractSharedPiRoleProfiles,
-  externalRoleAvailability,
-  filterExternalAgentProfiles,
-  getSubagentProfiles,
-  isExternalAgentProfile,
-  isSharedPiRoleTemplate,
-  materializeSharedPiRoleProfile,
-  mergeSynthesizedPiProfiles,
-  parseSubagentProfileContent,
-  resolveExternalProfile,
-  SHARED_PI_HARNESS_MARKER,
-} from "../src/profiles.ts";
+import { externalRoleAvailability, filterExternalAgentProfiles, getSubagentProfiles, isExternalAgentProfile, loadCustomSubagentProfiles, mergeSynthesizedPiProfiles, resolveExternalProfile } from "../src/profiles.ts";
 import type { HarnessConfig } from "../src/harnesses.ts";
 import type { SubagentProfile } from "../src/types.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
@@ -63,7 +51,7 @@ describe("pi-subagent profiles", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("loads custom subagent profiles from filename-derived names", () => {
+  it("loads custom subagent profiles from filename-derived names through the legacy subagents parser", () => {
     const subagentsDir = join(agentDir, "subagents");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "code-reviewer.md"), `---
@@ -141,7 +129,7 @@ description: Valid frontmatter but empty body.
 ---
 `);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = loadCustomSubagentProfiles(agentDir);
 
     expect(profiles.get("code-reviewer")).toMatchObject({
       name: "code-reviewer",
@@ -181,7 +169,7 @@ description: Valid frontmatter but empty body.
   });
 
   it("loads codex-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-reviewer.md"), `---
 description: Reviews through Codex CLI.
@@ -222,12 +210,14 @@ Arbitrary Codex model prompt.`);
       model: "gpt 5.4",
       systemPrompt: "Arbitrary Codex model prompt.",
     });
-    expect(profiles.has("bad-backend")).toBe(false);
+    expect(profiles.get("bad-backend")?.configurationError).toMatch(/invalid/i);
+    expect(() => resolveExternalProfile(profiles, { subagentType: "bad-backend" }, "agy")).toThrow(/invalid/i);
+    expect(profiles.get("custom-codex-model")?.configurationError).toBeUndefined();
   });
 
 
   it("loads claude-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-reviewer.md"), `---
 description: Reviews through Claude Code.
@@ -267,7 +257,7 @@ Arbitrary Claude model prompt.`);
   });
 
   it("loads grok-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "grok-reviewer.md"), `---
 description: Reviews through Grok CLI.
@@ -291,7 +281,7 @@ Grok reviewer prompt.`);
   });
 
   it("loads muse-backed custom profiles with bare model names", () => {
-    const subagentsDir = join(agentDir, "subagents");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(join(subagentsDir, "muse-reviewer.md"), `---
 description: Reviews through Muse Code.
@@ -386,7 +376,7 @@ describe("pi harness legitimacy", () => {
 
 describe("named pi harness resolution", () => {
   const harnessConfigs = new Map<string, HarnessConfig>([
-    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" }],
   ]);
   const configuredHarnessNames = new Set<string>(["agy", "claude", "codex", "pi-deepseek"]);
 
@@ -400,17 +390,17 @@ describe("named pi harness resolution", () => {
     expect(profile.harness).toBe("pi-deepseek");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
-    expect(profile.permission).toBe("readonly");
+    expect(profile.preset).toBe("minimal");
+    expect(profile.systemPrompt).toContain("Do not modify files");
   });
 
-  it("prefers an on-disk override for body/permission while still inheriting model/thinking from the registry", () => {
+  it("prefers an on-disk override for the body while still inheriting model/thinking from the registry", () => {
     const onDisk: SubagentProfile = {
       name: "pi-deepseek-reviewer",
       backend: "pi",
       harness: "pi-deepseek",
       description: "Custom reviewer.",
       systemPrompt: "Custom body.",
-      permission: "danger",
     };
     const profiles = new Map([["pi-deepseek-reviewer", onDisk]]);
     const profile = resolveExternalProfile(profiles, { role: "reviewer", harness: "pi-deepseek" }, "agy", {
@@ -418,9 +408,9 @@ describe("named pi harness resolution", () => {
       harnessConfigs,
     });
     expect(profile.systemPrompt).toBe("Custom body.");
-    expect(profile.permission).toBe("danger");
     expect(profile.model).toBe("deepseek/deepseek-chat");
     expect(profile.thinking).toBe("high");
+    expect(profile.preset).toBe("minimal");
   });
 
   it("rejects an on-disk override that pins a conflicting model", () => {
@@ -436,14 +426,6 @@ describe("named pi harness resolution", () => {
       configuredHarnessNames,
       harnessConfigs,
     })).toThrow(/conflicts with "pi-deepseek"'s registered model/);
-  });
-
-  it("rejects a capabilitySet declared on a non-pi-backend profile", () => {
-    const profiles = new Map<string, SubagentProfile>([
-      ["claude-security", { name: "claude-security", backend: "claude", description: "x", capabilitySet: "sec-tools" }],
-    ]);
-    expect(() => resolveExternalProfile(profiles, { role: "security", harness: "claude" }, "agy"))
-      .toThrow(/capabilitySet only applies to backend "pi"/);
   });
 
   it("does not synthesize a non-canonical role", () => {
@@ -466,7 +448,7 @@ describe("named pi harness resolution", () => {
 
 describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", () => {
   const harnessConfigs = new Map<string, HarnessConfig>([
-    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
+    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high", preset: "skills" }],
   ]);
 
   it("inherits model/thinking for an on-disk custom-role file that declares neither (the common branch-3 case)", () => {
@@ -481,6 +463,7 @@ describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", (
     const result = merged.get("pi-deepseek-security-reviewer");
     expect(result?.model).toBe("deepseek/deepseek-chat");
     expect(result?.thinking).toBe("high");
+    expect(result?.preset).toBe("skills");
   });
 
   it("leaves a genuinely conflicting on-disk profile unreconciled rather than throwing at merge time", () => {
@@ -514,6 +497,7 @@ describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", (
       description: "Security review.",
       model: "deepseek/deepseek-chat",
       thinking: "high",
+      preset: "skills",
     };
     const merged = mergeSynthesizedPiProfiles(new Map([
       [claudeProfile.name, claudeProfile],
@@ -521,258 +505,5 @@ describe("mergeSynthesizedPiProfiles reconciles existing on-disk pi profiles", (
     ]), harnessConfigs);
     expect(merged.get("claude-reviewer")).toEqual(claudeProfile);
     expect(merged.get("pi-deepseek-security-reviewer")).toEqual(consistent);
-  });
-});
-
-describe("shared pi role templates (issue #43 first slice)", () => {
-  const harnessConfigs = new Map<string, HarnessConfig>([
-    ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
-    ["pi-astra", { model: "openai/gpt-5", thinking: "off" }],
-  ]);
-
-  const sharedAudit: SubagentProfile = {
-    name: "pi-security-audit",
-    backend: "pi",
-    harness: SHARED_PI_HARNESS_MARKER,
-    description: "Shared security audit role.",
-    systemPrompt: "Audit for security defects.",
-    permission: "readonly",
-  };
-
-  it("is never externally selectable on its own against any real registered-harness set", () => {
-    expect(isSharedPiRoleTemplate(sharedAudit)).toBe(true);
-    expect(isExternalAgentProfile(sharedAudit)).toBe(false);
-    expect(isExternalAgentProfile(sharedAudit, new Set(harnessConfigs.keys()))).toBe(false);
-    expect([...filterExternalAgentProfiles(new Map([[sharedAudit.name, sharedAudit]]), new Set(harnessConfigs.keys())).keys()]).toEqual([]);
-  });
-
-  it("extracts a valid shared template keyed by its role suffix", () => {
-    const { templates, diagnostics } = extractSharedPiRoleProfiles(new Map([[sharedAudit.name, sharedAudit]]));
-    expect(diagnostics).toEqual([]);
-    expect(templates.get("security-audit")).toEqual(sharedAudit);
-  });
-
-  it("drops a marker profile whose file name does not match pi-<role> with a diagnostic", () => {
-    const misnamed: SubagentProfile = { ...sharedAudit, name: "security-audit" };
-    const { templates, diagnostics } = extractSharedPiRoleProfiles(new Map([[misnamed.name, misnamed]]));
-    expect(templates.size).toBe(0);
-    expect(diagnostics[0]).toMatch(/must be named "pi-<role>\.md"/);
-  });
-
-  it("drops a marker profile that pins model or thinking, since the registry must stay authoritative", () => {
-    const pinnedModel: SubagentProfile = { ...sharedAudit, model: "openai/gpt-5" };
-    const pinnedThinking: SubagentProfile = { ...sharedAudit, name: "pi-other-role", thinking: "high" };
-    const { templates, diagnostics } = extractSharedPiRoleProfiles(new Map([
-      [pinnedModel.name, pinnedModel],
-      [pinnedThinking.name, pinnedThinking],
-    ]));
-    expect(templates.size).toBe(0);
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]).toMatch(/must not pin model or thinking/);
-  });
-
-  it("materializes a shared template into a concrete per-harness profile pinned to that harness's model/thinking", () => {
-    const materialized = materializeSharedPiRoleProfile("security-audit", "pi-deepseek", harnessConfigs.get("pi-deepseek")!, sharedAudit);
-    expect(materialized).toEqual({
-      name: "pi-deepseek-security-audit",
-      description: sharedAudit.description,
-      backend: "pi",
-      harness: "pi-deepseek",
-      model: "deepseek/deepseek-chat",
-      thinking: "high",
-      tools: undefined,
-      systemPrompt: sharedAudit.systemPrompt,
-      permission: "readonly",
-      maxBudgetUsd: undefined,
-      owner: undefined,
-    });
-  });
-
-  it("mergeSynthesizedPiProfiles applies precedence: harness-specific file > shared template > synthesized canonical", () => {
-    const { templates } = extractSharedPiRoleProfiles(new Map([[sharedAudit.name, sharedAudit]]));
-
-    // No on-disk override anywhere: the shared template materializes onto every registered harness.
-    const noOverride = mergeSynthesizedPiProfiles(new Map(), harnessConfigs, templates);
-    expect(noOverride.get("pi-deepseek-security-audit")?.systemPrompt).toBe("Audit for security defects.");
-    expect(noOverride.get("pi-astra-security-audit")?.systemPrompt).toBe("Audit for security defects.");
-    expect(noOverride.get("pi-astra-security-audit")?.model).toBe("openai/gpt-5");
-
-    // A per-harness on-disk file for the same role wins over the shared template for that harness only.
-    const override: SubagentProfile = {
-      name: "pi-deepseek-security-audit",
-      backend: "pi",
-      harness: "pi-deepseek",
-      description: "Harness-specific override.",
-      systemPrompt: "Custom deepseek-only body.",
-    };
-    const withOverride = mergeSynthesizedPiProfiles(new Map([[override.name, override]]), harnessConfigs, templates);
-    expect(withOverride.get("pi-deepseek-security-audit")?.systemPrompt).toBe("Custom deepseek-only body.");
-    expect(withOverride.get("pi-astra-security-audit")?.systemPrompt).toBe("Audit for security defects.");
-
-    // A shared template also overrides a canonical role name for every harness lacking its own file.
-    const sharedExplorer: SubagentProfile = { ...sharedAudit, name: "pi-explorer", systemPrompt: "Custom shared explorer." };
-    const { templates: withCanonicalOverride } = extractSharedPiRoleProfiles(new Map([[sharedExplorer.name, sharedExplorer]]));
-    const canonicalMerge = mergeSynthesizedPiProfiles(new Map(), harnessConfigs, withCanonicalOverride);
-    expect(canonicalMerge.get("pi-deepseek-explorer")?.systemPrompt).toBe("Custom shared explorer.");
-    // Other canonical roles with no shared template still synthesize from the built-in default.
-    expect(canonicalMerge.get("pi-deepseek-planner")?.systemPrompt).toContain("Create a concise implementation plan");
-  });
-
-  it("resolveExternalProfile selects a role materialized from a shared template", () => {
-    const { templates } = extractSharedPiRoleProfiles(new Map([[sharedAudit.name, sharedAudit]]));
-    const profiles = mergeSynthesizedPiProfiles(new Map(), harnessConfigs, templates);
-    const profile = resolveExternalProfile(profiles, { role: "security-audit", harness: "pi-astra" }, "agy", {
-      configuredHarnessNames: new Set(["agy", "claude", "codex", ...harnessConfigs.keys()]),
-      harnessConfigs,
-    });
-    expect(profile.name).toBe("pi-astra-security-audit");
-    expect(profile.model).toBe("openai/gpt-5");
-    expect(profile.systemPrompt).toBe("Audit for security defects.");
-  });
-});
-
-describe("capabilitySet frontmatter (issue #43 second slice)", () => {
-  it("parses an optional capabilitySet field and omits it entirely when absent", () => {
-    const withSet = parseSubagentProfileContent(
-      `---
-description: Docs writer.
-backend: claude
-capabilitySet: docs
----
-
-Write docs.`,
-      "claude-docs-writer",
-    );
-    expect(withSet?.capabilitySet).toBe("docs");
-
-    const withoutSet = parseSubagentProfileContent(
-      `---
-description: Docs writer.
-backend: claude
----
-
-Write docs.`,
-      "claude-docs-writer",
-    );
-    expect(withoutSet?.capabilitySet).toBeUndefined();
-    expect("capabilitySet" in (withoutSet ?? {})).toBe(false);
-  });
-
-  it("keeps the profile when capabilitySet is explicitly supplied but not a nonempty string, recording capabilitySetError instead of silently dropping the whole file", () => {
-    const malformed = parseSubagentProfileContent(
-      `---
-description: Docs writer.
-backend: claude
-capabilitySet: true
----
-
-Write docs.`,
-      "claude-docs-writer",
-    );
-    expect(malformed).toBeDefined();
-    expect(malformed?.capabilitySet).toBeUndefined();
-    expect(malformed?.capabilitySetError).toMatch(/non-empty string/);
-
-    const emptyString = parseSubagentProfileContent(
-      `---
-description: Docs writer.
-backend: claude
-capabilitySet: ""
----
-
-Write docs.`,
-      "claude-docs-writer",
-    );
-    expect(emptyString).toBeDefined();
-    expect(emptyString?.capabilitySet).toBeUndefined();
-    expect(emptyString?.capabilitySetError).toMatch(/non-empty string/);
-  });
-
-  it("propagates capabilitySet from a shared pi role template onto every materialized per-harness profile", () => {
-    const harnessConfigs = new Map<string, HarnessConfig>([
-      ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
-    ]);
-    const sharedDocs: SubagentProfile = {
-      name: "pi-docs-writer",
-      backend: "pi",
-      harness: SHARED_PI_HARNESS_MARKER,
-      description: "Shared docs role.",
-      systemPrompt: "Write docs.",
-      capabilitySet: "docs",
-    };
-    const materialized = materializeSharedPiRoleProfile("docs-writer", "pi-deepseek", harnessConfigs.get("pi-deepseek")!, sharedDocs);
-    expect(materialized.capabilitySet).toBe("docs");
-  });
-
-  it("a canonical on-disk override with a malformed capabilitySet blocks fallback to the built-in role at merge time, but only fails once actually selected", () => {
-    const harnessConfigs = new Map<string, HarnessConfig>([
-      ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
-    ]);
-    const broken: SubagentProfile = {
-      name: "pi-deepseek-explorer",
-      backend: "pi",
-      harness: "pi-deepseek",
-      description: "Custom explorer.",
-      systemPrompt: "Custom explorer body that must never silently vanish.",
-      capabilitySetError: 'capabilitySet must be a non-empty string naming a piCapabilitySets entry (got true).',
-    };
-
-    // Merge time: the broken file is neither dropped nor thrown on (merge runs
-    // for the whole roster on every turn/workflow), but it still occupies its
-    // key, so canonical synthesis never silently fills the role in behind it.
-    const merged = mergeSynthesizedPiProfiles(new Map([[broken.name, broken]]), harnessConfigs);
-    const result = merged.get("pi-deepseek-explorer");
-    expect(result?.systemPrompt).toBe("Custom explorer body that must never silently vanish.");
-    expect(result?.capabilitySetError).toBeDefined();
-
-    // Selection time: choosing this exact role/harness is rejected loudly.
-    expect(() => resolveExternalProfile(merged, { role: "explorer", harness: "pi-deepseek" }, "agy", {
-      configuredHarnessNames: new Set(["agy", "claude", "codex", "pi-deepseek"]),
-      harnessConfigs,
-    })).toThrow(/declares an invalid capabilitySet/);
-  });
-
-  it("a shared role template with a malformed capabilitySet survives extraction and materialization, and only the selected harness/role is rejected", () => {
-    const harnessConfigs = new Map<string, HarnessConfig>([
-      ["pi-deepseek", { model: "deepseek/deepseek-chat", thinking: "high" }],
-      ["pi-astra", { model: "openai/gpt-5", thinking: "off" }],
-    ]);
-    const brokenShared: SubagentProfile = {
-      name: "pi-docs-writer",
-      backend: "pi",
-      harness: SHARED_PI_HARNESS_MARKER,
-      description: "Shared docs role.",
-      systemPrompt: "Write docs.",
-      capabilitySetError: "capabilitySet must be a non-empty string naming a piCapabilitySets entry (got 42).",
-    };
-
-    // Extraction never drops it with a diagnostic (unlike a bad filename or a
-    // pinned model/thinking): those are structural issues extractSharedPiRoleProfiles
-    // can only detect by discarding the file, while a bad capabilitySet is
-    // deferred to selection time instead.
-    const { templates, diagnostics } = extractSharedPiRoleProfiles(new Map([[brokenShared.name, brokenShared]]));
-    expect(diagnostics).toEqual([]);
-    expect(templates.get("docs-writer")).toBe(brokenShared);
-
-    const merged = mergeSynthesizedPiProfiles(new Map(), harnessConfigs, templates);
-    expect(merged.get("pi-deepseek-docs-writer")?.capabilitySetError).toBeDefined();
-    expect(merged.get("pi-astra-docs-writer")?.capabilitySetError).toBeDefined();
-
-    // An unrelated role on the same harnesses is entirely unaffected.
-    const unrelated = resolveExternalProfile(merged, { role: "explorer", harness: "pi-astra" }, "agy", {
-      configuredHarnessNames: new Set(["agy", "claude", "codex", ...harnessConfigs.keys()]),
-      harnessConfigs,
-    });
-    expect(unrelated.name).toBe("pi-astra-explorer");
-
-    // Selecting the broken role on either harness is rejected loudly.
-    expect(() => resolveExternalProfile(merged, { role: "docs-writer", harness: "pi-deepseek" }, "agy", {
-      configuredHarnessNames: new Set(["agy", "claude", "codex", ...harnessConfigs.keys()]),
-      harnessConfigs,
-    })).toThrow(/declares an invalid capabilitySet/);
-    expect(() => resolveExternalProfile(merged, { role: "docs-writer", harness: "pi-astra" }, "agy", {
-      configuredHarnessNames: new Set(["agy", "claude", "codex", ...harnessConfigs.keys()]),
-      harnessConfigs,
-    })).toThrow(/declares an invalid capabilitySet/);
   });
 });
