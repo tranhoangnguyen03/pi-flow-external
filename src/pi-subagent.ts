@@ -57,7 +57,7 @@ const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const STATUS_KEY = "pi-flow";
 
-const agentToolParameters = Type.Object({
+export const agentToolParameters = Type.Object({
   context: Type.Optional(parentContextSchema),
   description: Type.String({
     description: "A short 3-5 word description of the task, used for UI display and routing context.",

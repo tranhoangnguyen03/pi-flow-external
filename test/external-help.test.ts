@@ -1,9 +1,27 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { createExternalHelpTool } from "../src/external-help.ts";
+import { createExternalRunsTool } from "../src/external-runs.ts";
+import { RunRegistry } from "../src/core/run-registry.ts";
+import { agentToolParameters } from "../src/pi-subagent.ts";
+import { loadExternalCatalog, resolveExternalProfile } from "../src/profiles.ts";
+import {
+  USAGE_BACKGROUND_AGENT,
+  USAGE_INDEPENDENT_REVIEW,
+  USAGE_ONE_AGENT,
+  USAGE_RESUME_AGENT,
+  USAGE_RUNS_FINAL,
+  USAGE_WORKFLOW_CALLS,
+  usageWorkflowScript,
+} from "../src/prompts.ts";
 import type { ExternalHarness } from "../src/types.ts";
+import { normalizeAgentOptions } from "../src/workflow/runtime-values.ts";
+import { workflowToolParameters } from "../src/workflow/source.ts";
+import { ChildRunError, parseWorkflowScript, runWorkflow } from "../src/workflow/runtime.ts";
 
 const tempDirs: string[] = [];
 
@@ -128,6 +146,98 @@ describe("external_help unknown harness filter", () => {
       expect(text).toContain("blocking by default");
       expect(text).toContain("parallel([() => agent(...), ...])");
       expect(text).toContain("background: true");
+    });
+  });
+});
+
+function toolCall(name: string, args: object) {
+  return { type: "toolCall" as const, id: `call-${name}`, name, arguments: args };
+}
+
+describe("external_help usage playbook", () => {
+  const agentExamples = [USAGE_ONE_AGENT, USAGE_INDEPENDENT_REVIEW, USAGE_BACKGROUND_AGENT, USAGE_RESUME_AGENT];
+
+  it("accepts topic usage and rejects an unknown topic", () => {
+    const tool = makeTool() as any;
+    expect(validateToolArguments(tool, toolCall("external_help", { topic: "usage" }))).toEqual({ topic: "usage" });
+    expect(() => validateToolArguments(tool, toolCall("external_help", { topic: "not_a_topic" }))).toThrow(/Validation failed for tool "external_help"/);
+  });
+
+  it("serves the canonical examples and ignores a harness selector", async () => {
+    const agentDir = tempAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const tool = makeTool();
+      const result = await tool.execute("call-usage", { topic: "usage", harness: "not-a-real-harness" }, undefined, undefined, fakeCtx(agentDir));
+      const text = (result.content[0] as { text: string }).text;
+      expect(result.details).toEqual({ topic: "usage", harness: "not-a-real-harness" });
+      expect(text).toContain(usageWorkflowScript());
+      expect(text).toContain(JSON.stringify(USAGE_ONE_AGENT, null, 2));
+      expect(text).toContain(JSON.stringify(USAGE_RUNS_FINAL, null, 2));
+
+      const blank = await tool.execute("call-usage-blank", { topic: "usage", harness: "  " }, undefined, undefined, fakeCtx(agentDir));
+      expect(blank.details).toEqual({ topic: "usage" });
+    });
+  });
+
+  it("validates playbook selectors against the Agent, external_runs, and workflow schemas", () => {
+    const agentTool = { name: "Agent", parameters: agentToolParameters } as any;
+    for (const example of agentExamples) {
+      expect(validateToolArguments(agentTool, toolCall("Agent", example))).toMatchObject({
+        role: example.role,
+        harness: example.harness,
+        permission: example.permission,
+      });
+    }
+    expect(() => validateToolArguments(agentTool, toolCall("Agent", {
+      ...USAGE_ONE_AGENT,
+      subagent_type: "claude-explorer",
+    }))).toThrow(/Validation failed for tool "Agent"/);
+
+    const runsTool = createExternalRunsTool({ registry: new RunRegistry(1), runsDirectory: () => "/tmp" }) as any;
+    expect(validateToolArguments(runsTool, toolCall("external_runs", USAGE_RUNS_FINAL))).toEqual(USAGE_RUNS_FINAL);
+
+    const script = usageWorkflowScript();
+    const workflowTool = { name: "workflow", parameters: workflowToolParameters } as any;
+    expect(validateToolArguments(workflowTool, toolCall("workflow", { script })).script).toBe(script);
+    expect(parseWorkflowScript(script).meta).toMatchObject({ apiVersion: 1, name: "parallel-review" });
+    for (const call of USAGE_WORKFLOW_CALLS) {
+      expect(normalizeAgentOptions(call.options)).toMatchObject({
+        label: call.options.description,
+        role: call.options.role,
+        harness: call.options.harness,
+        permission: call.options.permission,
+      });
+    }
+  });
+
+  it("resolves playbook roles on the live catalog and keeps a caught sibling failure", async () => {
+    const agentDir = tempAgentDir();
+    await withAgentDir(agentDir, async () => {
+      const catalog = loadExternalCatalog(agentDir);
+      for (const example of [...agentExamples, ...USAGE_WORKFLOW_CALLS.map((call) => call.options)]) {
+        const profile = resolveExternalProfile(catalog.profiles, { role: example.role, harness: example.harness }, "agy");
+        expect(profile.name).toBe(`${example.harness}-${example.role}`);
+        expect(profile.configurationError).toBeUndefined();
+      }
+
+      const result = await runWorkflow(usageWorkflowScript(), {
+        cwd: agentDir,
+        limiter: new ConcurrencyLimiter(4),
+        resolveSubagentType: (selection) => resolveExternalProfile(catalog.profiles, selection, "agy").name,
+        runAgent: async (call) => {
+          if (call.label === "review") {
+            throw new ChildRunError({ runId: "run_review", outcome: "failed", message: "review failed" });
+          }
+          return "mapped";
+        },
+      });
+      expect(result.agentCount).toBe(2);
+      expect(result.result).toEqual({
+        settled: [
+          { ok: true, value: "mapped" },
+          { ok: false, runId: "run_review", outcome: "failed", message: "review failed" },
+        ],
+      });
     });
   });
 });

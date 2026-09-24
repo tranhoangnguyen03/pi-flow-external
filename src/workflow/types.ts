@@ -80,7 +80,7 @@ export interface WorkflowAgentCall {
   subagentType: string;
   /** JSON Schema for structured output from the child subagent. */
   schema?: unknown;
-  /** Permission tier for this child (call > profile > settings default). */
+  /** Permission tier for this child: the call's permission, otherwise settings defaultPermission. A role does not set this. */
   permission?: import("../types.ts").PermissionTier;
   /** USD budget cap for this child, when any. */
   maxBudgetUsd?: number;

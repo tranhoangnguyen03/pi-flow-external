@@ -4,6 +4,15 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+### Added
+
+- `external_help` topic `usage`: a worked delegation playbook for one `Agent` call, an independent review, background supervision through `external_runs`, a parallel workflow that catches a child error, and `resume` where the harness stored a session. The always-on coordinator prompt stays a short operating guide and points there.
+
+### Changed
+
+- Active guidance selects a registered `pi-*` harness through `Agent` or `workflow`, the same way as the CLI harnesses. It no longer tells the parent to route Pi-backed work to Pi's native subagent tool.
+- Coordinator guidance states that Antigravity rejects `readonly` and `edit`. Release notes record the product owner's choice to ship the settings v4 break as `2.6.0-external.0` with `release:minor`, with the breaking-upgrade notice still required.
+
 ### Fixed
 
 - Antigravity's unsupported-tier error tells the caller to pass `permission: "danger"` or change `defaultPermission`. Omitting the call tier keeps the global default.

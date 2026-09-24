@@ -13,16 +13,17 @@ import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
   formatExternalRoleHelp,
   formatSavedWorkflows,
+  formatUsagePlaybook,
 } from "./prompts.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
 import { EXTERNAL_HARNESSES, type ExternalHarness } from "./types.ts";
 
 const externalHelpParameters = Type.Object({
-  topic: StringEnum(["roles", "permissions", "workflow"] as const, {
-    description: "Help topic: role descriptions/configured profile availability, harness permissions, or workflow syntax and saved workflows.",
+  topic: StringEnum(["usage", "roles", "permissions", "workflow"] as const, {
+    description: "Help topic: usage playbook, role descriptions/configured profile availability, harness permissions, or workflow syntax and saved workflows.",
   }),
   harness: Type.Optional(Type.String({
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. Workflows orchestrate across harnesses.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. usage and workflow describe every harness.",
   })),
 });
 
@@ -126,25 +127,27 @@ export function createExternalHelpTool(
   return defineTool({
     name: "external_help",
     label: "External Help",
-    description: "Read-only help on demand for external roles, permission behavior, and workflow usage (including background runs, external_runs supervision syntax, and replay) or saved-workflow discovery.",
+    description: "Read-only help on demand: usage playbook, role details, permission behavior, and workflow usage (including background runs, external_runs supervision syntax, and replay) or saved-workflow discovery.",
     promptSnippet: EXTERNAL_HELP_PROMPT_SNIPPET,
     parameters: externalHelpParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // A schema-conversion layer downstream of this tool's declaration may
       // present `harness` as required (#62); treat a blank/whitespace
-      // placeholder as omitted. Furthermore, do not reject an explicit
-      // harness on topic "workflow": workflows orchestrate across all
-      // harnesses, so passing a harness filter gracefully returns workflow
-      // guidance without error.
+      // placeholder as omitted. usage and workflow describe every harness, so
+      // an explicit harness is not a filter and does not error.
       const harness = params.harness?.trim() ? params.harness.trim() : undefined;
       let text: string;
       const catalog = loadExternalCatalog(getAgentDir());
       const harnessConfigs = catalog.harnessConfigs;
       const configuredPiHarnesses = new Set(harnessConfigs.keys());
-      if (params.topic !== "workflow") {
+      // usage and workflow describe every harness. A supplied harness is not a
+      // filter, including a blank placeholder forced by a downstream schema.
+      if (params.topic === "roles" || params.topic === "permissions") {
         validateHarnessFilter(harness, configuredPiHarnesses);
       }
-      if (params.topic === "roles") {
+      if (params.topic === "usage") {
+        text = formatUsagePlaybook();
+      } else if (params.topic === "roles") {
         text = catalog.blocked ? catalog.diagnostics.join(" ") : formatExternalRoleHelp(catalog.profiles, options.getDefaultHarness(ctx), harness);
       } else if (params.topic === "permissions") {
         text = permissionHelp(harness, configuredPiHarnesses);

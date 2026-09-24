@@ -20,7 +20,7 @@ import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
-import { loadExternalCatalog, resolveExternalProfile, selectorHarness } from "../profiles.ts";
+import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownExternalProfileMessage } from "../profiles.ts";
 import { effectivePiResourcePreset, loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
@@ -200,9 +200,7 @@ export function createWorkflowTool(
         const profile = profiles.get(call.subagentType);
         if (profile?.configurationError) throw new Error(profile.configurationError);
         if (!profile) {
-          throw new Error(
-            `Unknown external subagent_type "${call.subagentType}". Available external agents: ${[...profiles.keys()].join(", ")}. Use the native subagent system for Pi-backed agents.`,
-          );
+          throw new Error(unknownExternalProfileMessage(call.subagentType, profiles.keys()));
         }
         const model = models.get(call.subagentType);
         if (usesPiBackend(profile) && !model) {
