@@ -189,7 +189,9 @@ All user commands use the `/external` namespace:
 | `/external runs --prune` | Prune eligible completed run records |
 | `/external help` | Show the command reference |
 
-`/external doctor` reports CLI availability separately from provider authentication, and separately from whether the catalog itself is valid.
+`/external doctor` reports CLI availability separately from provider authentication and catalog validity. Claude and Codex use their non-interactive login-status commands; other CLIs report login as unverified. Credential presence does not prove a request will succeed. Known inherited authentication/routing environment variables are listed by name only, never value. Native status commands may access credential storage or perform network activity; no model prompts or quota requests are sent, and no credentials are changed.
+
+Doctor also reads retained run summaries for this project and shows the latest recorded usage-limit observation per harness, its source run, any reset time, and whether a later run succeeded. These are historical observations, not current account status. New failed Claude runs can preserve structured rate-limit rejections; Antigravity runs can preserve terminal individual-quota errors. Other backends and older records may have no evidence. Missing, malformed, or oversized summaries are skipped and counted; backend event logs and model answers are never searched. Remaining allowance stays unavailable.
 
 A typical overview:
 

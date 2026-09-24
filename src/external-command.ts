@@ -24,6 +24,7 @@ import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
 import { formatDurationMs, formatRunRow } from "./core/run-render.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
+import { diagnoseCli, usageLimitHistory } from "./doctor.ts";
 
 const COMMANDS = [
   { value: "doctor", description: "Validate config/catalog and report runtime readiness" },
@@ -542,11 +543,7 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
     profiles.size ? `✓ Roles: ${profiles.size} execution identities` : "✗ Roles: none configured",
   ];
   for (const backend of backends) {
-    const result = await pi.exec(backend, ["--version"], { timeout: 10_000 });
-    const version = (result.stdout || result.stderr).trim().split(/\r?\n/, 1)[0];
-    lines.push(result.code === 0 && !result.killed
-      ? `✓ ${backend}: ${version || "available"} (authentication unverified)`
-      : `✗ ${backend}: unavailable`);
+    lines.push(await diagnoseCli(pi.exec.bind(pi), backend));
   }
   // Pi harnesses run in-process, not as a CLI: there is no subprocess to exec.
   // Confirm the registered model resolves and report configured auth instead.
@@ -561,7 +558,9 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
     lines.push(ctx.modelRegistry.hasConfiguredAuth(model)
       ? `✓ ${name}: ${config.model} · ${preset} (auth configured)`
       : `⚠ ${name}: ${config.model} · ${preset} (no credentials configured)`);
+    lines.push("  Requests not tested; provider authentication/routing follows Pi configuration.", "  Remaining allowance: unavailable (no quota request made)");
   }
+  lines.push(await usageLimitHistory(runRecordsDirectory(), ctx.cwd));
   return lines.join("\n");
 }
 
