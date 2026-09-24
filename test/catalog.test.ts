@@ -8,7 +8,7 @@ import { EXTERNAL_HARNESSES } from '../src/types.ts';
 it('composes file-free defaults, shared roles and exact overrides without fallback past invalid or disabled entries', () => {
   const root = mkdtempSync(join(tmpdir(), 'external-catalog-'));
   try {
-    expect(loadExternalCatalog(root).profiles.size).toBe(30);
+    expect(loadExternalCatalog(root).profiles.size).toBe(36);
     expect(readdirSync(root)).toEqual([]);
     const dir = join(root, 'pi-flow-external');
     mkdirSync(join(dir, 'roles'), { recursive: true });

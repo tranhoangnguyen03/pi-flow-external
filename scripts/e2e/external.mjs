@@ -13,6 +13,9 @@ const defaults = {
   agy: { model: "gemini-3.7-flash-high", thinking: "high" },
   grok: { model: "grok-4.6", thinking: "high" },
   muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
+  // OpenCode needs no pinned model (its own configured default applies; pass
+  // --model provider/model to pin one) and refuses a thinking pin.
+  opencode: {},
   // No fixed model/thinking default: a named pi harness pins its own model and
   // thinking in the caller's real settings.json (version 4) harnesses map;
   // --harness names which one.
@@ -65,9 +68,10 @@ function parseArgs(argv) {
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
-  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, or pi");
+  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
   if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 4");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
+  if (options.backend === "opencode" && options.thinking !== undefined) throw new Error("--thinking does not apply to --backend opencode, which refuses a thinking pin");
   if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
     throw new Error("--permission must be readonly, edit, or danger");
   }
@@ -84,7 +88,7 @@ function parseArgs(argv) {
   if (!options.routingSmoke && (rootModelProvided || rootThinkingProvided)) {
     throw new Error("--root-model and --root-thinking only apply to --routing-smoke");
   }
-  // Only claude/codex/agy/grok/muse get an isolated, disposable agent dir by
+  // Only claude/codex/agy/grok/muse/opencode get an isolated, disposable agent dir by
   // default: this script writes their temporary profile file into it itself,
   // so isolation is safe and desirable. This default is unconditional — an
   // inherited PI_CODING_AGENT_DIR from the caller's shell is deliberately
@@ -109,7 +113,7 @@ function parseArgs(argv) {
 function help() {
   console.log(`Usage: npm run e2e -- [options]
 
-  --backend <claude|codex|agy|grok|muse|pi>  external backend (default: codex)
+  --backend <claude|codex|agy|grok|muse|opencode|pi>  external backend (default: codex)
   --harness <name>              required with --backend pi: a pi-* harness already registered in your own real settings.json version 4
   --model <id>                  child model (backend default when omitted; ignored for pi, which pins its own)
   --thinking <level>            child thinking (default: high; ignored for pi, which pins its own)
@@ -289,7 +293,7 @@ function installCliFixture(agentDir, backend, role, model, thinking) {
   const profilePath = path.join(overridesDir, `${backend}-${role}.md`);
   writeFileSync(
     profilePath,
-    `---\ndescription: Temporary ${backend} E2E profile.\nbackend: ${backend}\nmodel: ${model}\nthinking: ${thinking}\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
+    `---\ndescription: Temporary ${backend} E2E profile.\nbackend: ${backend}\n${model ? `model: ${model}\n` : ""}${thinking ? `thinking: ${thinking}\n` : ""}---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
     { flag: "wx", mode: 0o600 },
   );
   return profilePath;
@@ -680,6 +684,12 @@ function assertReceiptSemantics(options, summary) {
     assert(usage?.costKnown === true, `Grok receipt usage.costKnown was not true: ${JSON.stringify(usage)}`);
     assert(usage?.costEstimated === false, `Grok receipt usage.costEstimated was not false: ${JSON.stringify(usage)}`);
     assert(typeof usage?.cost === "number" && usage.cost > 0, `Grok receipt usage.cost was not a positive number: ${JSON.stringify(usage)}`);
+    return;
+  }
+  if (options.backend === "opencode") {
+    // Tokens and cost come from OpenCode's own step_finish parts, not a local estimate.
+    assert(typeof summary?.sessionId === "string" && summary.sessionId.startsWith("ses_"), `OpenCode receipt missing a ses_ sessionId: ${JSON.stringify(summary)}`);
+    assert(summary?.usage?.costEstimated === false, `OpenCode receipt usage.costEstimated was not false: ${JSON.stringify(summary?.usage)}`);
     return;
   }
   if (options.backend === "muse") {

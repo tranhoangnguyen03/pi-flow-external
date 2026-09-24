@@ -19,5 +19,8 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
   if (backend === "muse") {
     return "Muse Code";
   }
+  if (backend === "opencode") {
+    return "OpenCode";
+  }
   return "Agent";
 }

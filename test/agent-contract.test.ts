@@ -363,7 +363,7 @@ setInterval(() => {}, 1000);
     await session.prompt("Just say noted.");
 
     expect(rootContext?.systemPrompt).toContain("# External delegation");
-    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex, grok, muse.");
+    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
     expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
     expect(getToolNames(rootContext)).toContain("external_help");
@@ -396,7 +396,7 @@ setInterval(() => {}, 1000);
       },
     ]);
     await trusted.session.prompt("Just say noted.");
-    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default), grok, muse.");
+    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default), grok, muse, opencode.");
     const trustedAgent = trusted.session.getToolDefinition("Agent") as any;
     const trustedResult = await trustedAgent.execute(
       "project-default",

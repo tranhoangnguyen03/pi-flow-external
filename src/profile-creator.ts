@@ -134,7 +134,7 @@ export function compileProfile(profile: SubagentProfile): string {
   const isExternalCli = (EXTERNAL_HARNESSES as readonly string[]).includes(profile.backend);
   const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined;
   if (!isExternalCli && !isPiHarnessProfile) {
-    throw new Error("Profile backend must be claude, codex, agy, grok, muse, or a registered pi-* harness name.");
+    throw new Error("Profile backend must be claude, codex, agy, grok, muse, opencode, or a registered pi-* harness name.");
   }
   if (isPiHarnessProfile && !isValidHarnessName(profile.harness!)) {
     throw new Error(`Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(profile.harness)}).`);

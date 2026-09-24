@@ -261,7 +261,7 @@ describe("delegation roster lane disclosure", () => {
       }],
     ]);
     const roster = buildCoordinatorPrompt(profiles, "agy");
-    expect(roster).toContain("Harnesses: agy (default), claude, codex, grok, muse.");
+    expect(roster).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
     expect(roster).toContain("Roles: implementer (claude only), reviewer (agy, claude only).");
     expect(roster).toContain("Exact-only profiles: specialist (codex).");
     expect(roster).toContain("Catalog availability reflects built-in and authored roles");
