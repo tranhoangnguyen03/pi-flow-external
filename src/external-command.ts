@@ -6,9 +6,9 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { isValidSubagentName, loadExternalCatalog } from "./profiles.ts";
+import { disabledHarnessMessage, isValidSubagentName, loadExternalCatalog } from "./profiles.ts";
 import { isValidHarnessName, loadHarnessConfigs } from "./harnesses.ts";
-import { saveExternalSettings } from "./settings.ts";
+import { loadExternalSettings, saveExternalSettings, updateExternalSettings } from "./settings.ts";
 import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
 import { compileProfile } from "./profile-creator.ts";
 import {
@@ -27,11 +27,14 @@ import { listSavedWorkflows } from "./workflow/registry.ts";
 
 const COMMANDS = [
   { value: "doctor", description: "Validate config/catalog and report runtime readiness" },
-  { value: "settings", description: "Show effective extension settings" },
-  { value: "settings edit", description: "Edit and validate canonical settings with the standard editor" },
-  { value: "settings convert", description: "Preview and apply the one-time v4 configuration conversion" },
-  { value: "harnesses", description: "List CLI and named Pi harnesses" },
-  { value: "harness create", description: "Register a named Pi harness" },
+  { value: "config", description: "Show harnesses, the default harness, and execution settings" },
+  { value: "config edit", description: "Edit and validate settings, including named Pi harnesses, with the standard editor" },
+  { value: "config convert", description: "Preview and apply the one-time v4 configuration conversion" },
+  { value: "config harnesses", description: "List CLI and named Pi harnesses with enabled and default state" },
+  { value: "config harness create", description: "Register a named Pi harness" },
+  { value: "config enable", description: "Enable a harness: /external config enable <harness>" },
+  { value: "config disable", description: "Disable a harness without deleting it: /external config disable <harness>" },
+  { value: "config default", description: "Set the global default harness: /external config default <harness>" },
   { value: "roles", description: "List built-in and user roles" },
   { value: "role create", description: "Author a reusable role" },
   { value: "role inspect", description: "Show effective instructions for a role" },
@@ -135,12 +138,33 @@ function groupByRole(profiles: ReadonlyMap<string, SubagentProfile>, harnessName
   return groups;
 }
 
-function formatHarnessesLine(harnessConfigs: ReadonlyMap<string, import("./harnesses.ts").HarnessConfig>): string {
-  if (harnessConfigs.size === 0) return "Pi harnesses: none configured";
-  const entries = [...harnessConfigs]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, config]) => `${name} (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking} · ${config.preset ?? "minimal"})`);
-  return `Pi harnesses: ${entries.join(", ")}`;
+function disabledHarnessSet(catalog: ExternalCatalog): ReadonlySet<string> {
+  return catalog.disabledHarnesses ?? new Set();
+}
+
+/** One row per known harness plus preserved unknown disabled names. */
+function harnessStateLines(catalog: ExternalCatalog, defaultHarness: string): string[] {
+  const disabled = disabledHarnessSet(catalog);
+  const harnessConfigs = catalog.harnessConfigs ?? new Map();
+  const row = (name: string, kind: string) => `- ${name} · ${kind} · ${disabled.has(name) ? "disabled" : "enabled"}${name === defaultHarness ? " · default" : ""}`;
+  const named = [...harnessConfigs].sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, config]) => row(name, `Pi (${config.model} · ${config.thinking === "off" ? "default thinking" : config.thinking} · ${config.preset ?? "minimal"})`));
+  const known = new Set<string>([...EXTERNAL_HARNESSES_LIST, ...harnessConfigs.keys()]);
+  const unknown = [...disabled].filter((name) => !known.has(name)).sort()
+    .map((name) => `- ${name} · unknown · disabled (kept; not a known harness)`);
+  return [
+    ...(EXTERNAL_HARNESSES_LIST as readonly string[]).map((name) => row(name, "CLI")),
+    ...(named.length ? named : ["- no named Pi harnesses (/external config harness create)"]),
+    ...unknown,
+  ];
+}
+
+function defaultHarnessProblems(catalog: ExternalCatalog, harness: string): string[] {
+  const harnessConfigs = catalog.harnessConfigs ?? new Map();
+  if (!(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness) && !harnessConfigs.has(harness)) {
+    return [`Configured default harness "${harness}" is not currently registered.`];
+  }
+  return disabledHarnessSet(catalog).has(harness) ? [disabledHarnessMessage(harness, true)] : [];
 }
 
 function catalogProblems(catalog: ExternalCatalog): string[] {
@@ -149,7 +173,7 @@ function catalogProblems(catalog: ExternalCatalog): string[] {
     : [...catalog.diagnostics];
 }
 
-function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
+function configText(options: ExternalCommandOptions, ctx: CommandContextLike): { text: string; warn: boolean } {
   const effective = options.getRuntimeSettings();
   const settings = options.settings.settings;
   const harness = resolveCtxDefaultHarness(settings.defaultHarness, ctx);
@@ -157,30 +181,28 @@ function settingsText(options: ExternalCommandOptions, ctx: CommandContextLike):
     ? ` (project: ${harness.projectPath})`
     : " (global)";
   const catalog = loadCatalogSnapshot(getAgentDir(), options);
-  const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
-  const staleDefault = !(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness.harness) && ![...catalog.profiles.values()].some((profile) => (profile.harness ?? profile.backend) === harness.harness) && !harnessConfigs.has(harness.harness)
-    ? [`Configured default harness "${harness.harness}" is not currently registered.`]
-    : [];
   const upgradePlan = planConfigUpgrade(getAgentDir());
   const upgradeHint = upgradePlan.status === "ready"
-    ? ["A one-time configuration conversion is ready: run /external settings convert to preview it."]
+    ? ["A one-time configuration conversion is ready: run /external config convert to preview it."]
     : upgradePlan.status === "blocked"
       ? ["Configuration conversion is blocked:", ...upgradePlan.diagnostics.map((item) => `- ${item}`)]
       : [];
-  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog), ...staleDefault, ...upgradeHint];
-  return [
+  const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog), ...defaultHarnessProblems(catalog, harness.harness), ...upgradeHint];
+  const text = [
+    `defaultHarness: ${harness.harness}${harnessSource}`,
+    "Harnesses:",
+    ...harnessStateLines(catalog, harness.harness),
     `maxConcurrentSubagents: ${effective.maxConcurrentSubagents}`,
     `subagentTimeoutMs: ${effective.subagentTimeoutMs}`,
-    `defaultHarness: ${harness.harness}${harnessSource}`,
     `defaultPermission: ${settings.defaultPermission}`,
     `defaultMaxBudgetUsd: ${settings.defaultMaxBudgetUsd === null ? "unlimited" : settings.defaultMaxBudgetUsd}`,
     `maxRunRecords: ${settings.maxRunRecords}${settings.maxRunRecords === 0 ? " (keep forever)" : ""}`,
-    formatHarnessesLine(harnessConfigs),
     `Settings: ${options.settings.path}`,
     `Project override: ${projectExternalSettingsPath(ctx.cwd)} (trusted projects only; defaultHarness only)`,
     ...(warnings.length ? ["Warnings:", ...warnings.map((item) => `- ${item}`)] : []),
-    "Edit via /external settings edit, then run /reload. CLI flags override file values.",
+    "Change: /external config enable|disable|default <harness> · /external config harness create · /external config edit (all settings and named Pi harnesses). Values apply from the next invocation; CLI flags override file values.",
   ].join("\n");
+  return { text, warn: warnings.length > 0 };
 }
 
 function overviewText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
@@ -190,27 +212,77 @@ function overviewText(options: ExternalCommandOptions, ctx: CommandContextLike):
   const agentDir = getAgentDir();
   const catalog = loadCatalogSnapshot(agentDir, options);
   const harnesses = catalog.harnessConfigs ?? loadHarnessConfigs(agentDir).harnesses;
+  const disabled = disabledHarnessSet(catalog);
   const groups = groupByRole(catalog.profiles, knownHarnessNames(agentDir));
-  const problems = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog)];
+  const problems = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog), ...defaultHarnessProblems(catalog, harness.harness)];
   return [
     "External agents",
     `Default: ${harness.harness} (${harnessSource})`,
     `Roles: ${groups.size} known${problems.length ? " · configuration has warnings (see /external doctor)" : ""}`,
-    `Harnesses: ${EXTERNAL_HARNESSES_LIST.length} CLI · ${harnesses.size} named Pi`,
+    `Harnesses: ${EXTERNAL_HARNESSES_LIST.length} CLI · ${harnesses.size} named Pi${disabled.size ? ` · ${disabled.size} disabled` : ""} (see /external config)`,
     `Settings: ${options.settings.path}`,
     ...(problems.length ? ["Problems:", ...problems.map((item) => `- ${item}`)] : []),
   ].join("\n");
 }
 
-function harnessesText(options: ExternalCommandOptions): string {
+function harnessesText(options: ExternalCommandOptions, ctx: CommandContextLike): string {
   const catalog = loadCatalogSnapshot(getAgentDir(), options);
-  const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
+  const harness = resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).harness;
   const lines = [
-    `CLI harnesses: ${(EXTERNAL_HARNESSES_LIST as readonly string[]).join(", ")} (readiness is separate; see /external doctor)`,
-    formatHarnessesLine(harnessConfigs),
+    "Harnesses (readiness is separate; see /external doctor):",
+    ...harnessStateLines(catalog, harness),
   ];
   if (catalog.diagnostics.length) lines.push("Warnings:", ...catalog.diagnostics.map((item) => `- ${item}`));
   return lines.join("\n");
+}
+
+type Notice = { message: string; level: "info" | "warning" | "error" };
+
+/** Guided harness toggles and default selection through the validated settings writer. */
+function configHarnessAction(options: ExternalCommandOptions, ctx: CommandContextLike, action: "enable" | "disable" | "default", nameArg: string | undefined): Notice {
+  const name = nameArg?.trim();
+  if (!name) return { message: `Usage: /external config ${action} <harness>`, level: "warning" };
+  const agentDir = getAgentDir();
+  const current = loadExternalSettings(agentDir);
+  if (current.blocked) return { message: `Settings were not changed: ${current.diagnostics.join(" ")}`, level: "error" };
+  const disabled = current.settings.disabledHarnesses ?? [];
+  const known = [...EXTERNAL_HARNESSES_LIST as readonly string[], ...Object.keys(current.settings.harnesses ?? {})];
+  const write = (mutate: (record: Record<string, unknown>) => Record<string, unknown>): Notice | undefined => {
+    try {
+      updateExternalSettings(agentDir, mutate);
+      return undefined;
+    } catch (error) {
+      return { message: `Settings were not changed: ${error instanceof Error ? error.message : String(error)}`, level: "error" };
+    }
+  };
+  const later = "Applies from the next invocation; active children and running workflows keep their snapshot.";
+  if (action === "enable") {
+    if (!disabled.includes(name)) return { message: `Harness "${name}" is already enabled.`, level: "info" };
+    const failed = write((record) => ({ ...record, disabledHarnesses: disabled.filter((item) => item !== name) }));
+    return failed ?? { message: `Harness "${name}" enabled. ${later}`, level: "info" };
+  }
+  if (!known.includes(name)) {
+    return { message: `Unknown harness "${name}". Choose one of: ${known.join(", ")}. Register a named Pi harness with /external config harness create.`, level: "warning" };
+  }
+  const effective = resolveCtxDefaultHarness(current.settings.defaultHarness, ctx);
+  if (action === "disable") {
+    if (disabled.includes(name)) return { message: `Harness "${name}" is already disabled.`, level: "info" };
+    if (name === current.settings.defaultHarness || name === effective.harness) {
+      const where = name === effective.harness && effective.source === "project" ? `the project default (${effective.projectPath})` : "the global default";
+      return { message: `Cannot disable "${name}": it is ${where}. Choose another default first${effective.source === "project" && name === effective.harness ? " in that project file" : " with /external config default <harness>"}.`, level: "warning" };
+    }
+    const failed = write((record) => ({ ...record, disabledHarnesses: [...disabled, name] }));
+    return failed ?? { message: `Harness "${name}" disabled. Its definitions and roles stay in place; Agent and workflow calls selecting it fail without fallback. ${later} Re-enable with /external config enable ${name}.`, level: "info" };
+  }
+  if (disabled.includes(name)) {
+    return { message: `Cannot make "${name}" the default: it is disabled. Enable it first with /external config enable ${name}.`, level: "warning" };
+  }
+  const failed = write((record) => ({ ...record, defaultHarness: name }));
+  if (failed) return failed;
+  const shadowed = effective.source === "project" && effective.harness !== name
+    ? ` This project still uses "${effective.harness}" from ${effective.projectPath}.`
+    : "";
+  return { message: `Global default harness set to "${name}". ${later}${shadowed}`, level: shadowed ? "warning" : "info" };
 }
 
 function rolesText(options: ExternalCommandOptions): string {
@@ -369,7 +441,7 @@ async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionComma
   // Explicit editor repair: a guided full replacement may overwrite a
   // malformed or v4-invalid current file. Valid pre-v4 installations and
   // future versions are still rejected — those go through
-  // /external settings convert, not the editor.
+  // /external config convert, not the editor.
   const save = options.saveSettings ?? saveExternalSettings;
   try {
     const path = save(agentDir, record, { repair: true });
@@ -420,7 +492,7 @@ async function settingsConvert(ctx: ExtensionCommandContext): Promise<void> {
   }
   const preview = formatUpgradePreview(plan);
   if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") {
-    ctx.ui.notify(`${summarizeUnknown(preview, 4000)}\n\nConversion needs interactive confirmation; rerun /external settings convert with UI.`, "warning");
+    ctx.ui.notify(`${summarizeUnknown(preview, 4000)}\n\nConversion needs interactive confirmation; rerun /external config convert with UI.`, "warning");
     return;
   }
   const confirmed = await ctx.ui.confirm(
@@ -529,7 +601,10 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
   const catalog = loadCatalogSnapshot(getAgentDir(), options);
   const harnessConfigs = catalog.harnessConfigs ?? loadHarnessConfigs(getAgentDir()).harnesses;
   const profiles = catalog.profiles;
-  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi");
+  const disabled = disabledHarnessSet(catalog);
+  const backends = [...new Set([...profiles.values()].map((profile) => profile.backend))].filter((backend) => backend !== "pi" && !disabled.has(backend));
+  const defaultHarness = resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).harness;
+  const defaultProblems = catalog.blocked ? [] : defaultHarnessProblems(catalog, defaultHarness);
   const settingsErrors = catalog.blocked
     ? [...options.settings.diagnostics, ...catalog.diagnostics]
     : [...options.settings.diagnostics.filter((message) => !message.startsWith("Unknown setting")), ...catalog.diagnostics];
@@ -540,6 +615,7 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
         ? `⚠ Settings: ${options.settings.diagnostics.join(" ")}`
         : "✓ Settings/catalog: valid",
     profiles.size ? `✓ Roles: ${profiles.size} execution identities` : "✗ Roles: none configured",
+    ...defaultProblems.map((problem) => `✗ Default harness: ${problem}`),
   ];
   for (const backend of backends) {
     const result = await pi.exec(backend, ["--version"], { timeout: 10_000 });
@@ -551,6 +627,7 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
   // Pi harnesses run in-process, not as a CLI: there is no subprocess to exec.
   // Confirm the registered model resolves and report configured auth instead.
   for (const [name, config] of harnessConfigs) {
+    if (disabled.has(name)) continue;
     const separator = config.model.indexOf("/");
     const model = separator === -1 ? undefined : ctx.modelRegistry.find(config.model.slice(0, separator), config.model.slice(separator + 1));
     if (!model) {
@@ -562,6 +639,7 @@ async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx
       ? `✓ ${name}: ${config.model} · ${preset} (auth configured)`
       : `⚠ ${name}: ${config.model} · ${preset} (no credentials configured)`);
   }
+  for (const name of [...disabled].sort()) lines.push(`○ ${name}: disabled (readiness not checked)`);
   return lines.join("\n");
 }
 
@@ -737,8 +815,13 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
   pi.registerCommand("external", {
     description: "Inspect and configure external Claude, Codex, Agy, Grok, and Muse harnesses",
     getArgumentCompletions: (prefix) => {
-      const normalized = prefix.trim().toLowerCase();
-      const matches = COMMANDS.filter((command) => command.value.startsWith(normalized));
+      const normalized = prefix.trimStart().toLowerCase();
+      const harnessArg = /^config (enable|disable|default) (\S*)$/.exec(normalized);
+      if (harnessArg) {
+        const names = knownHarnessNames(getAgentDir()).filter((name) => name.startsWith(harnessArg[2]!));
+        return names.length ? names.map((name) => ({ value: `config ${harnessArg[1]} ${name}`, label: name })) : null;
+      }
+      const matches = COMMANDS.filter((command) => command.value.startsWith(normalized.trim()));
       return matches.length ? matches.map((command) => ({ ...command, label: command.value })) : null;
     },
     handler: async (args, ctx) => {
@@ -747,18 +830,21 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
         ctx.ui.notify(overviewText(options, ctx), "info");
       } else if (action === "doctor") {
         ctx.ui.notify(await doctorText(pi, options, ctx), "info");
-      } else if (action === "settings") {
-        const catalog = loadCatalogSnapshot(getAgentDir(), options);
-        const warnings = options.settings.diagnostics.length || resolveCtxDefaultHarness(options.settings.settings.defaultHarness, ctx).diagnostics.length || catalog.diagnostics.length || catalog.blocked;
-        ctx.ui.notify(settingsText(options, ctx), warnings ? "warning" : "info");
-      } else if (action === "settings edit") {
+      } else if (action === "config") {
+        const config = configText(options, ctx);
+        ctx.ui.notify(config.text, config.warn ? "warning" : "info");
+      } else if (action === "config edit") {
         await settingsEdit(options, ctx);
-      } else if (action === "settings convert") {
+      } else if (action === "config convert") {
         await settingsConvert(ctx);
-      } else if (action === "harnesses") {
-        ctx.ui.notify(harnessesText(options), "info");
-      } else if (action === "harness create") {
+      } else if (action === "config harnesses") {
+        ctx.ui.notify(harnessesText(options, ctx), "info");
+      } else if (action === "config harness create") {
         await options.startHarnessInterview(ctx);
+      } else if (/^config (enable|disable|default)(\s|$)/.test(action)) {
+        const [, verb, name] = args.trim().split(/\s+/);
+        const notice = configHarnessAction(options, ctx, verb!.toLowerCase() as "enable" | "disable" | "default", name);
+        ctx.ui.notify(notice.message, notice.level);
       } else if (action === "roles") {
         ctx.ui.notify(rolesText(options), "info");
       } else if (action === "role create") {

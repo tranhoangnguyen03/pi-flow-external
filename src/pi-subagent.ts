@@ -17,6 +17,7 @@ import {
 import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
+  disabledHarnessMessage,
   filterExternalAgentProfiles,
   getSubagentProfiles,
   loadExternalCatalog,
@@ -383,7 +384,7 @@ function createAgentTool(
       const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
       const defaultHarness = requestedDefault.harness;
       if (params.role && !params.harness && !configuredHarnessNames.has(defaultHarness)) {
-        const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external harness create.`;
+        const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`;
         return textResult(error, {
           description: params.description,
           subagentType: "unknown",
@@ -397,7 +398,7 @@ function createAgentTool(
           role: params.role,
           harness: params.harness,
           subagentType: params.subagent_type,
-        }, defaultHarness, { configuredHarnessNames, harnessConfigs });
+        }, defaultHarness, { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return textResult(
@@ -611,7 +612,7 @@ function createAgentTool(
               subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
             },
             defaultHarness,
-            { configuredHarnessNames, harnessConfigs },
+            { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
           );
         } catch {
           profile = undefined;
@@ -819,8 +820,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const profiles = catalog.profiles;
       const harnessConfigs = catalog.harnessConfigs;
       const defaultHarness = resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness;
-      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()];
-      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && catalog.diagnostics.length ? `\nConfiguration diagnostics: ${catalog.diagnostics.join(" ")}` : ""}` };
+      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()].filter((name) => !catalog.disabledHarnesses.has(name));
+      const diagnostics = [...catalog.diagnostics, ...(catalog.disabledHarnesses.has(defaultHarness) ? [disabledHarnessMessage(defaultHarness, true)] : [])];
+      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && diagnostics.length ? `\nConfiguration diagnostics: ${diagnostics.join(" ")}` : ""}` };
     });
   };
 }

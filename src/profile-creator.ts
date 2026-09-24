@@ -354,7 +354,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const harnessTool = defineTool({
     name: HARNESS_TOOL_NAME,
     label: "Create named Pi harness",
-    description: "Finalize a new named Pi harness configuration during the /external harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
+    description: "Finalize a new named Pi harness configuration during the /external config harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
     parameters: harnessParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const name = params.name.trim();

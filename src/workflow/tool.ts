@@ -389,14 +389,14 @@ export function createWorkflowTool(
           resolveSubagentType: (selection) => {
             if (selection.role && !selection.harness && !configuredHarnessNames.has(defaultHarness)) {
               throw new Error(
-                `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external harness create.`,
+                `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`,
               );
             }
             return resolveExternalProfile(
               profiles,
               selection,
               defaultHarness,
-              { configuredHarnessNames, harnessConfigs },
+              { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
             ).name;
           },
           describeSubagentType: (name) => {

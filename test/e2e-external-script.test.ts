@@ -148,7 +148,7 @@ describe("e2e external script pi harness precheck", () => {
     const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("version 3");
-    expect(result.stderr).toContain("Run /external settings convert to upgrade");
+    expect(result.stderr).toContain("Run /external config convert to upgrade");
     expect(result.stderr).toContain("will not modify");
     expect(result.stderr).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
@@ -164,7 +164,7 @@ describe("e2e external script pi harness precheck", () => {
     const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("Legacy configuration found");
-    expect(result.stderr).toContain("Run /external settings convert to upgrade");
+    expect(result.stderr).toContain("Run /external config convert to upgrade");
     expect(result.stderr).toContain("will not modify");
     expect(await readFile(legacyPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["harnesses.json"]);

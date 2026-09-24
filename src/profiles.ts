@@ -190,13 +190,24 @@ export function filterExternalAgentProfiles(
   return new Map([...profiles].filter(([, profile]) => isExternalAgentProfile(profile, configuredPiHarnesses)));
 }
 
-export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig> } {
+/** Actionable rejection for a disabled harness. Selection never substitutes another harness. */
+export function disabledHarnessMessage(harness: string, isDefault = false): string {
+  return isDefault
+    ? `Default harness "${harness}" is disabled in settings.json. Pass another harness explicitly, choose a new default with /external config default <harness>, or enable it with /external config enable ${harness}.`
+    : `Harness "${harness}" is disabled in settings.json. Enable it with /external config enable ${harness}, or choose another harness.`;
+}
+
+export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig>; disabledHarnesses: Set<string> } {
   const loaded = loadExternalSettings(agentDir);
   const diagnostics = [...loaded.diagnostics];
   const profiles = new Map<string, SubagentProfile>();
   const harnesses = new Map(Object.entries(loaded.settings.harnesses ?? {}));
-  if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses };
+  const disabledHarnesses = new Set(loaded.settings.disabledHarnesses ?? []);
+  if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses, disabledHarnesses };
   const names = [...EXTERNAL_HARNESSES, ...harnesses.keys()];
+  for (const name of disabledHarnesses) {
+    if (!names.includes(name)) diagnostics.push(`disabledHarnesses entry "${name}" is not a known harness. It is kept and applies if that harness appears; remove it with /external config enable ${name}.`);
+  }
   const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code" };
   const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
     for (const harness of names) {
@@ -252,7 +263,12 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
     const profile = profiles.get(name);
     if (profile) profiles.set(name, { ...profile, configurationError: `Execution identity "${name}" is disabled in settings.json.` });
   }
-  return { profiles: mergeSynthesizedPiProfiles(profiles, harnesses), diagnostics, blocked: false, harnessConfigs: harnesses };
+  const merged = mergeSynthesizedPiProfiles(profiles, harnesses);
+  for (const [name, profile] of merged) {
+    const harness = selectorHarness(profile);
+    if (disabledHarnesses.has(harness)) merged.set(name, { ...profile, configurationError: disabledHarnessMessage(harness) });
+  }
+  return { profiles: merged, diagnostics, blocked: false, harnessConfigs: harnesses, disabledHarnesses };
 }
 
 export interface ExternalAgentSelection {
@@ -356,7 +372,7 @@ export function computeReconciledPiProfile(
   if (!harnessConfig) {
     return {
       profile,
-      conflict: `Harness "${profile.harness}" is not registered. Create it first via /external harness create.`,
+      conflict: `Harness "${profile.harness}" is not registered. Create it first via /external config harness create.`,
     };
   }
   if (profile.model !== undefined && profile.model !== harnessConfig.model) {
@@ -448,11 +464,14 @@ export interface ResolveExternalProfileOptions {
   configuredHarnessNames?: ReadonlySet<string>;
   /** Registered pi-* harness configs, used for canonical synthesis and model/thinking reconciliation. */
   harnessConfigs?: ReadonlyMap<string, HarnessConfig>;
+  /** Harnesses disabled in settings; selecting one fails without fallback. */
+  disabledHarnesses?: ReadonlySet<string>;
 }
 
 const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
   configuredHarnessNames: new Set(EXTERNAL_HARNESSES),
   harnessConfigs: NO_HARNESS_CONFIGS,
+  disabledHarnesses: NO_PI_HARNESSES,
 };
 
 /** Unknown exact identity. Directs the caller back to role plus harness, including a registered pi-* name. */
@@ -493,6 +512,9 @@ export function resolveExternalProfile(
   const selectedHarness = harness || defaultHarness;
   if (!configuredHarnessNames.has(selectedHarness)) {
     throw new Error(`Unknown external harness "${selectedHarness}". Choose one of: ${[...configuredHarnessNames].join(", ") || "none"}.`);
+  }
+  if ((options.disabledHarnesses ?? DEFAULT_RESOLVE_OPTIONS.disabledHarnesses).has(selectedHarness)) {
+    throw new Error(disabledHarnessMessage(selectedHarness, !harness));
   }
 
   const exact = profiles.get(`${selectedHarness}-${role}`);

@@ -230,7 +230,7 @@ function readSettingsFile(agentDir) {
   const legacyHarnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
   if (!existsSync(settingsPath)) {
     if (existsSync(legacyHarnessesPath)) {
-      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external settings convert to upgrade it to settings.json version 4. This script will not modify ${agentDir}.`);
+      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external config convert to upgrade it to settings.json version 4. This script will not modify ${agentDir}.`);
     }
     return { settingsPath, missing: true };
   }
@@ -244,7 +244,7 @@ function readSettingsFile(agentDir) {
     throw new Error(`${settingsPath} must be a JSON object. This script will not modify it.`);
   }
   if (parsed.version !== 4) {
-    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 4. Run /external settings convert to upgrade this installation. This script will not modify it.`);
+    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 4. Run /external config convert to upgrade this installation. This script will not modify it.`);
   }
   return { settingsPath, missing: false, parsed };
 }
