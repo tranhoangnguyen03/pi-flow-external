@@ -1,6 +1,6 @@
 # pi-flow-external — Architecture Snapshot
 
-> **Configuration contract:** 2026-09-23 settings v4, in-memory built-in roles, extension-owned shared roles and exact overrides. Source of the contract: `docs/plans/2026-09-23-configuration-surface-redesign.md`. Files under `docs/plans/` stay historical and are not rewritten; their profile-seeding and separate `harnesses.json` claims are superseded by this snapshot.
+> **Current contract:** `AGENTS.md`, `CONTEXT.md`, `README.md`, and this snapshot. `docs/plans/` are dated design records. They are not rewritten when the contract moves, and they are not a second source of runtime rules. Where a plan disagrees with the current docs — including older `release:major`, native-Pi routing, permission-floor, or separate `harnesses.json` instructions — the current docs win. The 2026-09-23 redesign plan is the historical design for settings v4.
 >
 > **Execution adapters last verified:** 2026-09-21 · HEAD `1e31939` on `feat/muse-cli` (uncommitted Muse backend changes in that worktree, fast-forwarded onto `origin/main`'s merged permission-floor + unified-run-experience work) · `npm run check` green then (tsc + 420/420 offline) · pinned SDK `@earendil-works/pi-coding-agent@0.79.4` (global CLI `0.85.1` differs, pinned is ground truth). This docs pass did not re-run that check.
 
@@ -8,7 +8,7 @@ Read `CONTEXT.md` + `AGENTS.md` first for invariants, then this file for impleme
 
 ## 1. Intent & routing
 
-Fork of pi-flow. Ordinary driver: `Agent`, optional `workflow`, read-only `external_help`, `external_runs`. `pi_flow_role_create` only inside `/external role create`. `pi_flow_harness_create` only inside `/external harness create`. `/external profiles`, `/external profile create`, and `/pi-flow-profile create` are removed, with no alias. `subagent_type` remains the exact-identity API. Native Pi work → Pi subagent tool. Everything else → this extension.
+Fork of pi-flow. Ordinary driver: `Agent`, optional `workflow`, read-only `external_help`, `external_runs`. `pi_flow_role_create` only inside `/external role create`. `pi_flow_harness_create` only inside `/external harness create`. `/external profiles`, `/external profile create`, and `/pi-flow-profile create` are removed, with no alias. `subagent_type` remains the exact-identity API. The five CLI harnesses and registered `pi-*` harnesses are selected through `Agent` or `workflow`. Native subagent files stay outside the catalog.
 
 6 harnesses: `claude` (CLI) · `codex` (CLI) · `agy` (CLI, always `--dangerously-skip-permissions`) · `grok` (CLI, official Grok Build CLI verified against `1.0.40`, native `--sandbox` axis) · `muse` (CLI, Muse Code verified against `1.3.0`, envelope JSONL protocol, approval/sandbox flags) · `pi-*` (registered in-process configs, not a CLI). `pi-*` runs via `createAgentSession` with parent's live `modelRegistry` instance.
 
@@ -48,13 +48,13 @@ Evidence: `runs/<run-id>/{events.ndjson,summary.json}` best-effort redacted, not
 
 ## 5. Coordinator guidance
 
-`src/prompts.ts:AGENT_PROMPT_SNIPPET` and `buildCoordinatorPrompt` read "Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role" — kept current as harnesses are added; `EXTERNAL_HARNESSES` (`src/types.ts`) is the one place a new CLI backend key is registered.
+`src/prompts.ts:AGENT_PROMPT_SNIPPET` and `buildCoordinatorPrompt` name Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, and registered Pi harness roles. The coordinator prompt is the short operating guide. `formatUsagePlaybook` is the `external_help` topic `usage` playbook. `EXTERNAL_HARNESSES` (`src/types.ts`) is the one place a new CLI backend key is registered.
 
 ## 6. Operational
 
 - `npm test` deterministic offline; real-provider E2E `npm run e2e -- --backend <claude|codex|agy|grok|muse>[ --workflow]` and `pi --harness pi-*` opt-in, change-triggered (`docs/field-testing.md`).
 - Release automated on version-bumped PR (`release:patch|minor|major|prerelease`, `release:none` for non-shipped), CI `release-utils.mjs` enforces `X.Y.Z-external.N`, `package-lock` sync, `CHANGELOG` section; merge tags `v*`, OIDC trusted publish to `latest`, GitHub release; watchdog `sync-check.yml`. Current drift: npm `latest 2.1.0-external.0` vs GitHub latest `v2.0.0-external.0` — re-run release workflow.
-- Open issues: #35 steering (scoped cancel now done, progress/steer/pause deferred), #39 drift, #40 partial output, #41 decision node, #43 Pi capabilities still open for trusted extensions/MCP/skills, resume, and budget caps (shared roles are this configuration contract); PR #46 `release:none` CI timeout only, green at the 2026-09-21 verification. The configuration break ships as `release:major` with the README upgrade notice in the changelog. This snapshot does not bump the package version.
+- Open issues: #35 steering (scoped cancel now done, progress/steer/pause deferred), #39 drift, #40 partial output, #41 decision node, #43 Pi capabilities still open for trusted extensions/MCP/skills, resume, and budget caps (shared roles are this configuration contract); PR #46 `release:none` CI timeout only, green at the 2026-09-21 verification. The product owner chose to ship that configuration break as `2.6.0-external.0` with `release:minor`, not `release:major`. The CHANGELOG section that becomes the GitHub release notes still carries the README upgrade notice. This snapshot does not bump the package version.
 
 ## 7. Quick map for next agent
 

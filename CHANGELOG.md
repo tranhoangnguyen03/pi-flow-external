@@ -4,14 +4,29 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.7.0-external.0] - 2026-09-24
+
+### Added
+
+- `external_help` topic `usage`: a worked delegation playbook for one `Agent` call, an independent review, background supervision through `external_runs`, a parallel workflow that catches a child error, and `resume` where the harness stored a session. Ordinary examples omit `permission` and keep no-edit intent in the prompt; one example confines a tier the harness can enforce. Prefer the configured default harness unless the user or a capability needs another. The always-on coordinator prompt stays a short operating guide and points there.
+
+### Changed
+
+- Active guidance selects a registered `pi-*` harness through `Agent` or `workflow`, the same way as the CLI harnesses. It no longer tells the parent to route Pi-backed work to Pi's native subagent tool.
+- Coordinator guidance states that Antigravity rejects `readonly` and `edit`. Release notes record the product owner's choice to ship the settings v4 break as `2.6.0-external.0` with `release:minor`, with the breaking-upgrade notice still required.
+
+### Fixed
+
+- Workflow help supervision uses `runIds` for inspect, wait, and cancel. One id reads any inspect view, including `final`; several ids batch summary only.
+
+## [2.6.0-external.0] - 2026-09-23
+
 ### Fixed
 
 - Antigravity's unsupported-tier error tells the caller to pass `permission: "danger"` or change `defaultPermission`. Omitting the call tier keeps the global default.
 - Unsupported-permission and resume failures keep resolved permission, parent context, and budget on the run receipt. The same fields are written on a launched finish.
 - Conversion reports a malformed short `pi-<role>.md` wildcard template and leaves it in place. Parsed native profiles stay excluded.
 - An unresolved delegation intent shows the tier as unresolved instead of borrowing another harness's enforcement label.
-
-## [2.6.0-external.0] - 2026-09-23
 
 ### Breaking upgrade
 

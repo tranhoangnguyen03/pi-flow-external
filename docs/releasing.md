@@ -92,19 +92,20 @@ surface check when settings, roles, upgrade, or purge changed, and the nested
 timeout scenario when nested detection or timeout behavior changed. An
 auth-blocked lane is not a pass.
 
-A release that removes `/external profiles`, `/external profile create`, and
-`/pi-flow-profile create`, or that moves execution settings to version 4, is
-breaking. Label it `release:major` (core major, `external.0`). The CHANGELOG
-section, which becomes the GitHub release notes, must include the README
-upgrade notice: the old-to-new command mapping, one-time conversion through
+Removing `/external profiles`, `/external profile create`, and
+`/pi-flow-profile create`, or moving execution settings to version 4, is a
+breaking configuration change. The product owner explicitly chose to ship
+that break as `2.6.0-external.0` with `release:minor`, staying on v2. Do not
+relabel it `release:major`. The minor label does not make the break optional
+to disclose, and it does not belong in a patch note. The CHANGELOG section,
+which becomes the GitHub release notes, must include the README upgrade
+notice: the old-to-new command mapping, one-time conversion through
 `/external settings convert` (`/external settings` points there), originals
 kept until an explicit purge, version 4 ignores old paths,
 `/external [danger]purge-old-files` deletes only the legacy paths you select
 (customized copies included), and downgrade after purge needs the user's own
-backup. Do not
-hide that break in a patch or minor note. Do not claim side-by-side old and
-new layouts. The version bump and CHANGELOG text are owned by the release PR;
-this file only states the contract.
+backup. Do not claim side-by-side old and new layouts. The version bump and
+CHANGELOG text are owned by the release PR; this file only states the contract.
 
 ## After the release
 

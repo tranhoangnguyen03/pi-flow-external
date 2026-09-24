@@ -455,6 +455,12 @@ const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
   harnessConfigs: NO_HARNESS_CONFIGS,
 };
 
+/** Unknown exact identity. Directs the caller back to role plus harness, including a registered pi-* name. */
+export function unknownExternalProfileMessage(subagentType: string, names: Iterable<string>): string {
+  const available = [...names].join(", ") || "none";
+  return `Unknown external subagent_type "${subagentType}". Available external profiles: ${available}. Select role and an optional harness (agy, claude, codex, grok, muse, or a registered pi-* name).`;
+}
+
 export function resolveExternalProfile(
   profiles: Map<string, SubagentProfile>,
   selection: ExternalAgentSelection,
@@ -473,9 +479,7 @@ export function resolveExternalProfile(
     }
     const profile = profiles.get(subagentType);
     if (!profile) {
-      throw new Error(
-        `Unknown external subagent_type "${subagentType}". Available external profiles: ${[...profiles.keys()].join(", ") || "none"}. Use the native subagent system for Pi-backed agents.`,
-      );
+      throw new Error(unknownExternalProfileMessage(subagentType, profiles.keys()));
     }
     if (profile.configurationError) throw new Error(profile.configurationError);
     return reconcilePiProfileWithHarness(profile, harnessConfigs);

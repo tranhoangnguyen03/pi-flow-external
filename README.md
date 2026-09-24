@@ -15,10 +15,10 @@ The ordinary driver has four tools (`workflow` can be disabled):
 
 - `Agent` resolves and runs one external role.
 - `workflow` orchestrates multiple external roles with trusted JavaScript.
-- `external_help` returns role details, permission behavior, or workflow guidance on demand.
+- `external_help` returns the usage playbook, role details, permission behavior, or workflow guidance on demand.
 - `external_runs` lists, inspects, waits for, and cancels session-owned runs.
 
-`Agent` and `workflow` accept a role with an optional harness — `agy`, `claude`, `codex`, `grok`, `muse`, or a registered `pi-*` name. Legacy exact `subagent_type` remains available and cannot be combined with `role` or `harness`. Use pi's native subagent system for Pi-backed agents. `pi_flow_role_create` is active only during `/external role create`. `pi_flow_harness_create` is active only during `/external harness create`.
+`Agent` and `workflow` accept a role with an optional harness — `agy`, `claude`, `codex`, `grok`, `muse`, or a registered `pi-*` name. A registered Pi harness uses that same selection. Legacy exact `subagent_type` remains available and cannot be combined with `role` or `harness`. `pi_flow_role_create` is active only during `/external role create`. `pi_flow_harness_create` is active only during `/external harness create`. Worked calls are `external_help` topic `usage`.
 
 ## Install
 
@@ -324,7 +324,7 @@ Agent({
 });
 ```
 
-A custom role is the one shared file from `/external role create`. Use `/external role override reviewer pi-deepseek` when only that harness needs a different body, permission, tools, or budget. The override's `model` and `thinking` come from the harness entry. A different pin is rejected.
+A custom role is the one shared file from `/external role create`. Use `/external role override reviewer pi-deepseek` when only that harness needs a different body, tools, or budget. Permission stays on the call or in `defaultPermission`; an override cannot set it. The override's `model` and `thinking` come from the harness entry. A different pin is rejected.
 
 Settings writes use a private staged file and a same-directory replacement, and they preserve unrelated fields. The extension refuses to overwrite a malformed or newer-version file. Replacement avoids a torn write. Concurrent sessions can still overwrite each other's update: there is no inter-process lock. A harness smoke test finishes before that short commit. The writer then rereads and checks for a duplicate or a conflict.
 
@@ -345,7 +345,7 @@ Agent({
 
 Resolution always targets the exact `<harness>-<role>` identity and does not switch harness. If a role is unavailable, the error lists the harnesses that provide it. Existing calls may instead use `subagent_type` as an exact-identity escape hatch; do not combine it with `role` or `harness`. Nonstandard override names are exact-only.
 
-The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only names, and the default harness. It does not repeat role descriptions or the workflow manual. Call `external_help` with topic `roles` for descriptions, `permissions` for harness caveats, or `workflow` for syntax, examples, and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. A listed role is a catalog entry. It does not mean the CLI is installed or authenticated.
+The parent prompt always includes one compact catalog of role names, restricted harness availability, exact-only names, the default harness, and a short operating guide. It does not repeat role descriptions, the usage playbook, or the workflow manual. Call `external_help` with topic `usage` for worked examples, `roles` for descriptions, `permissions` for harness caveats, or `workflow` for syntax and saved workflow discovery. The optional `harness` filter applies to `roles` and `permissions`. A listed role is a catalog entry. It does not mean the CLI is installed or authenticated.
 
 External agents start fresh in the requested working directory unless `resume` continues a previous child. By default, they receive only the task briefing and the resolved role instructions. The parent can explicitly share conversation context:
 

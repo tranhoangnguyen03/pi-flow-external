@@ -19,7 +19,7 @@ describe("external-only Agent policy", () => {
     expect(profiles.has("explorer")).toBe(false);
   });
 
-  it("rejects generic pi-backed profiles and points callers to native subagents", async () => {
+  it("rejects an unknown exact profile instead of sending the caller to native subagents", async () => {
     const { session, registration } = await createSession();
     let rootContinuation = "";
     registration.setResponses([
@@ -37,7 +37,7 @@ describe("external-only Agent policy", () => {
     await session.prompt("Use the old explorer profile.");
 
     expect(rootContinuation).toContain("Unknown external subagent_type");
-    expect(rootContinuation).toContain("native subagent system");
+    expect(rootContinuation).not.toContain("native subagent");
     disposeSession(session);
   });
 

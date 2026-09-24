@@ -265,7 +265,9 @@ describe("delegation roster lane disclosure", () => {
     expect(roster).toContain("Roles: implementer (claude only), reviewer (agy, claude only).");
     expect(roster).toContain("Exact-only profiles: specialist (codex).");
     expect(roster).toContain("Catalog availability reflects built-in and authored roles");
-    expect(roster).toContain("use external CLIs and registered Pi harnesses");
+    expect(roster).toContain("agy accepts only danger");
+    expect(roster).not.toContain("native Pi subagents");
+    expect(roster).not.toContain("advisory");
     expect(roster).not.toContain("Code review through Antigravity.");
   });
 });
