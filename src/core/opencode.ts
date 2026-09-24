@@ -43,14 +43,25 @@ function asFiniteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+/** Name shape of the per-run agents this adapter injects. */
+const RESTRICTED_AGENT_NAME = /^pi-flow-(readonly|edit)-[0-9a-f]+$/;
+
+/** A fresh random agent name for a restricted tier; danger uses the session's own agent. */
+export function opencodeRestrictedAgent(permission: PermissionTier): string | undefined {
+  return permission === "danger" ? undefined : `pi-flow-${permission}-${randomBytes(6).toString("hex")}`;
+}
+
 /**
- * readonly/edit run under a primary agent injected through
- * OPENCODE_CONFIG_CONTENT and selected with `default_agent`. OpenCode 2 loads
- * that source after global, project, and `.opencode/` config
- * (packages/core/src/config.ts), so its `default_agent` wins and its agent
- * rules are appended after every other document's rules
- * (core/src/config/plugin/agent.ts). The agent name is random per run, so a
- * project file cannot pre-seed later-appended rules for it.
+ * readonly/edit define a primary agent through OPENCODE_CONFIG_CONTENT, and
+ * every restricted run selects it with `--agent`, including resumes. A
+ * resumed session otherwise keeps the agent it was saved with
+ * (packages/cli/src/session-target.ts), and `default_agent` only applies to
+ * new sessions. OpenCode 2 loads that source after global, project, and
+ * `.opencode/` config (packages/core/src/config.ts), so the agent's rules are
+ * appended after every other document's rules
+ * (core/src/config/plugin/agent.ts). The name is random per run, so a project
+ * file cannot pre-seed later-appended rules for it. An agent that fails to
+ * load resolves to deny-all (core/src/permission.ts missingAgentPermissions).
  *
  * The env reaches only the private `--standalone` server this process
  * spawns. The shared background service never sees it, which is why every
@@ -62,22 +73,22 @@ function asFiniteNumber(value: unknown): number {
 export function buildOpencodeEnv(
   permission: PermissionTier,
   baseEnv: NodeJS.ProcessEnv,
-  agentSuffix: string = randomBytes(6).toString("hex"),
+  agent: string | undefined,
 ): NodeJS.ProcessEnv {
   if (permission === "danger") return baseEnv;
+  if (!agent) throw new Error(`OpenCode ${permission} needs an injected agent name`);
   if (baseEnv.OPENCODE_CONFIG_CONTENT !== undefined) {
     throw new Error(
       `OpenCode ${permission} needs OPENCODE_CONFIG_CONTENT to install its restricted agent, but that variable is already set in this environment. Unset it, or pass permission "danger".`,
     );
   }
-  const agent = `pi-flow-${permission}-${agentSuffix}`;
   const permissions = [
     { action: "*", resource: "*", effect: "deny" },
     ...OPENCODE_TIER_ALLOWED[permission].map((action) => ({ action, resource: "*", effect: "allow" })),
   ];
   return {
     ...baseEnv,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ default_agent: agent, agents: { [agent]: { mode: "primary", permissions } } }),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ agents: { [agent]: { mode: "primary", permissions } } }),
   };
 }
 
@@ -85,20 +96,172 @@ export function buildOpencodeArgs({
   profile,
   permission = "danger",
   resumeSessionId,
+  agent,
 }: {
   profile: SubagentProfile;
   permission?: PermissionTier;
   resumeSessionId?: string;
+  agent?: string;
 }): string[] {
   const problem = opencodeProfileProblem(profile);
   if (problem) throw new Error(problem);
   // The prompt goes over stdin. OpenCode 2 has no --dir; it takes the project
-  // from $PWD, then cwd, so spawn sets both (see opencodeSpawnEnv).
+  // from $PWD, then cwd, so spawn sets both.
   const args = ["run", "--standalone", "--format", "json"];
   if (resumeSessionId) args.push("--session", resumeSessionId);
+  if (agent) args.push("--agent", agent);
   if (profile.model) args.push("--model", profile.thinking ? `${profile.model}#${profile.thinking}` : profile.model);
   args.push(...buildPermissionArgs(permission, "opencode"));
   return args;
+}
+
+const MAX_EXPORT_CHARS = 16 * 1024 * 1024;
+
+function records(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) throw new Error("opencode session export has no messages list");
+  return value.map((item) => {
+    const record = asRecord(item);
+    if (!record) throw new Error("opencode session export has a malformed message");
+    return record;
+  });
+}
+
+/**
+ * Checks a session before resuming it. Returns the IDs already present, so
+ * the run's own new user turn can be told apart from earlier ones. Refuses a
+ * restricted resume of a session with its own permission rules, which
+ * OpenCode evaluates after the agent's (core/src/permission.ts `configured`).
+ * Refuses a danger resume of a session last run by an injected restricted
+ * agent: that agent no longer exists, so the session would run deny-all.
+ */
+export function checkOpencodeResumable(exported: Record<string, unknown>, sessionId: string, permission: PermissionTier): Set<string> {
+  const info = asRecord(exported.info);
+  if (info?.id !== sessionId) throw new Error(`opencode session export does not describe session ${sessionId}`);
+  if (permission !== "danger" && Array.isArray(info.permissions) && info.permissions.length > 0) {
+    throw new Error(`OpenCode session ${sessionId} carries its own permission rules, which OpenCode applies after the agent's; a ${permission} resume cannot guarantee its restriction. Start a new run instead.`);
+  }
+  if (permission === "danger" && typeof info.agent === "string" && RESTRICTED_AGENT_NAME.test(info.agent)) {
+    throw new Error(`OpenCode session ${sessionId} was last run at a restricted tier by agent ${info.agent}, which no longer exists, so a danger resume would have no tools. Resume it at readonly or edit, or start a new run.`);
+  }
+  return new Set(records(exported.messages).map((message) => String(message.id)));
+}
+
+/**
+ * The persisted session is the terminal authority. The streamed JSON is not:
+ * OpenCode 2 stops forwarding events once the session is idle, ignores
+ * execution.succeeded, and exits 0 after an interruption or a cancelled MCP
+ * form (packages/cli/src/run/noninteractive.ts). The run's own user turn is
+ * the last one. It must be new (not one of `priorIds`, or the only user turn
+ * of a new session) and carry exactly this prompt. After it, the session must
+ * end in an idle `succeeded` outcome, and the last assistant message must
+ * have completed with `stop`, no error, and nonempty text. Usage covers only
+ * this turn's assistant messages. Cost is unknown if any lacks usage or ran a
+ * `subagent`, whose child session is not included.
+ */
+export function verifyOpencodeTurn(
+  exported: Record<string, unknown>,
+  expected: { sessionId: string; prompt: string; priorIds?: Set<string>; agent?: string },
+): { text: string; usage: SubagentUsage } {
+  const info = asRecord(exported.info);
+  if (info?.id !== expected.sessionId) throw new Error(`opencode session export does not describe session ${expected.sessionId}`);
+  if (info.outcome !== "succeeded") throw new Error(`opencode session outcome is ${JSON.stringify(info.outcome ?? null)}, not "succeeded"`);
+  const messages = records(exported.messages);
+  let userIndex = messages.length - 1;
+  while (userIndex >= 0 && messages[userIndex]!.type !== "user") userIndex--;
+  const user = messages[userIndex];
+  const owned = user !== undefined && typeof user.id === "string" && (expected.priorIds
+    ? !expected.priorIds.has(user.id)
+    : messages.filter((message) => message.type === "user").length === 1);
+  if (!owned || user.text !== expected.prompt) {
+    throw new Error("opencode session export has no user turn from this invocation");
+  }
+  const turn = messages.slice(userIndex + 1);
+  const terminal = turn.at(-1);
+  if (terminal?.type !== "idle" || terminal.outcome !== "succeeded") {
+    throw new Error(`opencode turn did not end in a succeeded idle outcome (${JSON.stringify(terminal?.outcome ?? terminal?.type ?? null)})`);
+  }
+  const assistants = turn.filter((message) => message.type === "assistant");
+  const final = assistants.at(-1);
+  if (!final) throw new Error("opencode turn has no assistant message");
+  if (final.finish !== "stop" || typeof asRecord(final.time)?.completed !== "number" || final.error !== undefined) {
+    throw new Error(`opencode final assistant message did not complete cleanly (finish ${JSON.stringify(final.finish ?? null)})`);
+  }
+  if (expected.agent) {
+    const wrong = assistants.find((message) => message.agent !== expected.agent);
+    if (wrong) throw new Error(`opencode ran this turn as agent ${JSON.stringify(wrong.agent ?? null)}, not the injected ${expected.agent}`);
+  }
+  const content = Array.isArray(final.content) ? final.content.map(asRecord) : [];
+  const text = content.flatMap((item) => (item?.type === "text" && typeof item.text === "string" ? [item.text] : [])).join("").trim();
+  if (!text) throw new Error("opencode reported completion without a final result");
+
+  const usage: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: true, costEstimated: false };
+  for (const message of assistants) {
+    const tokens = asRecord(message.tokens);
+    const cache = asRecord(tokens?.cache);
+    if (!tokens || typeof message.cost !== "number") usage.costKnown = false;
+    usage.input += asFiniteNumber(tokens?.input);
+    usage.output += asFiniteNumber(tokens?.output) + asFiniteNumber(tokens?.reasoning);
+    usage.cacheRead += asFiniteNumber(cache?.read);
+    usage.cacheWrite += asFiniteNumber(cache?.write);
+    usage.cost += asFiniteNumber(message.cost);
+    const items = Array.isArray(message.content) ? message.content.map(asRecord) : [];
+    if (items.some((item) => item?.type === "tool" && item.name === "subagent")) usage.costKnown = false;
+  }
+  return { text, usage };
+}
+
+/**
+ * `opencode session export --standalone <id>` in its own process group with
+ * bounded output. It honors the run's abort signal, which also carries the
+ * run timeout.
+ */
+async function exportOpencodeSession(sessionId: string, cwd: string, signal: AbortSignal | undefined): Promise<Record<string, unknown>> {
+  if (signal?.aborted) throw new Error("Subagent aborted");
+  const proc = spawn(OPENCODE_COMMAND, ["session", "export", "--standalone", sessionId], {
+    cwd,
+    env: { ...process.env, PWD: cwd },
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
+  const stderr = createBoundedBuffer(MAX_STDERR_CHARS);
+  let stdout = "";
+  let oversize = false;
+  const abort = () => abortChildTree(proc);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    proc.stdout!.setEncoding("utf8");
+    proc.stderr!.setEncoding("utf8");
+    proc.stdout!.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > MAX_EXPORT_CHARS && !oversize) {
+        oversize = true;
+        stdout = "";
+        abortChildTree(proc);
+      }
+    });
+    proc.stderr!.on("data", (chunk: string) => stderr.append(chunk));
+    const code = await new Promise<number | null>((resolve, reject) => {
+      proc.once("error", reject);
+      proc.once("close", resolve);
+    });
+    if (signal?.aborted) throw new Error("Subagent aborted");
+    if (oversize) throw new Error(`opencode session export exceeded ${MAX_EXPORT_CHARS} chars`);
+    if (code !== 0) {
+      const detail = stderr.text().trim();
+      throw new Error(`opencode session export exited with code ${code}${detail ? `: ${detail}` : ""}`);
+    }
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      parsed = asRecord(JSON.parse(stdout));
+    } catch {
+      parsed = undefined;
+    }
+    if (!parsed) throw new Error("opencode session export was not a JSON object");
+    return parsed;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    if (proc.exitCode === null && proc.signalCode === null) abortChildTree(proc);
+  }
 }
 
 /**
@@ -209,16 +372,10 @@ export async function spawnOpencodeSubagent(params: {
   });
   const progress = emitter.progress;
 
-  // Tokens and cost come from root-session step_finish parts. OpenCode prices
-  // them from its own model catalog. Cost is unknown when the final step's
-  // step_finish never arrived (see the terminal check below) or once a
-  // `subagent` ran, because child sessions are not streamed.
-  const latestUsage: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: false, costEstimated: false };
-  let nestedSeen = false;
+  // The stream drives progress and interrupted-output previews only. Result,
+  // usage, and success come from the verified session export.
+  let latestUsage: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costKnown: false, costEstimated: false };
   let sessionId: string | undefined;
-  let sawStep = false;
-  let stepText: string[] = [];
-  let stepFinish: string | undefined;
   const allText: string[] = [];
   let permissionDenials = 0;
   let eventError: string | undefined;
@@ -248,32 +405,9 @@ export async function spawnOpencodeSubagent(params: {
     sessionId ??= event.sessionID;
     if (event.sessionID !== sessionId) return;
     const part = partOf(event);
-    if (event.type === "step_start") {
-      sawStep = true;
-      stepText = [];
-      stepFinish = undefined;
-    } else if (event.type === "text") {
-      // Text reconciled after the stream closes arrives after step_finish; it
-      // still belongs to the step that produced it.
-      const text = extractOpencodeText(event);
-      if (text) {
-        stepText.push(text);
-        allText.push(text);
-      }
-    } else if (event.type === "step_finish" && part) {
-      stepFinish = typeof part.reason === "string" ? part.reason : "unknown";
-      const tokens = asRecord(part.tokens);
-      const cache = asRecord(tokens?.cache);
-      latestUsage.input += asFiniteNumber(tokens?.input);
-      latestUsage.output += asFiniteNumber(tokens?.output) + asFiniteNumber(tokens?.reasoning);
-      latestUsage.cacheRead += asFiniteNumber(cache?.read);
-      latestUsage.cacheWrite += asFiniteNumber(cache?.write);
-      latestUsage.cost += asFiniteNumber(part.cost);
-    } else if (event.type === "tool_use" && part) {
-      if (part.tool === "subagent") nestedSeen = true;
-      if (isPermissionDenial(part)) permissionDenials++;
-    }
-    latestUsage.costKnown = stepFinish !== undefined && !nestedSeen;
+    const text = extractOpencodeText(event);
+    if (text) allText.push(text);
+    if (event.type === "tool_use" && part && isPermissionDenial(part)) permissionDenials++;
     const activity = opencodeActivityFromEvent(event);
     if (activity) {
       emitter.addActivity(activity);
@@ -287,13 +421,18 @@ export async function spawnOpencodeSubagent(params: {
       throw new Error("OpenCode run has no native output-schema option, so structured workflow output is unsupported on opencode. Drop the schema and parse the text result instead.");
     }
     const permission = params.permission ?? "danger";
+    const agent = opencodeRestrictedAgent(permission);
     const args = buildOpencodeArgs({
       profile: params.profile,
       permission,
       resumeSessionId: params.resumeSessionId,
+      agent,
     });
     // OpenCode 2 resolves the project from $PWD before cwd.
-    const env = { ...buildOpencodeEnv(permission, process.env), PWD: params.ctx.cwd };
+    const env = { ...buildOpencodeEnv(permission, process.env, agent), PWD: params.ctx.cwd };
+    const priorIds = params.resumeSessionId
+      ? checkOpencodeResumable(await exportOpencodeSession(params.resumeSessionId, params.ctx.cwd, params.signal), params.resumeSessionId, permission)
+      : undefined;
 
     const proc = spawn(OPENCODE_COMMAND, args, {
       cwd: params.ctx.cwd,
@@ -384,28 +523,20 @@ export async function spawnOpencodeSubagent(params: {
     if (AUTO_REJECT_NOTICE.test(stderrBuffer.text())) {
       throw new Error("opencode auto-rejected a permission request and interrupted the run");
     }
+    if (!sessionId) throw new Error("opencode exited without reporting a session");
     if (params.resumeSessionId && sessionId !== params.resumeSessionId) {
-      throw new Error(`opencode reported session ${sessionId ?? "(none)"}, not the resumed session ${params.resumeSessionId}`);
+      throw new Error(`opencode reported session ${sessionId}, not the resumed session ${params.resumeSessionId}`);
     }
-    // OpenCode 2 exits 0 only after session.wait reports the session idle and
-    // the run reconciles its messages. It may drop the final step_finish on
-    // that path (noninteractive.ts skips non-execution events once
-    // finalizing), so a missing final finish is accepted. A final finish that
-    // did arrive must be "stop": "tool-calls" marks an intermediate step, and
-    // length/content-filter/error/unknown are not a completed answer.
-    if (!sawStep) {
-      throw new Error("opencode exited without running a model step");
-    }
-    if (stepFinish !== undefined && stepFinish !== "stop") {
-      throw new Error(`opencode's final step ended with reason "${stepFinish}", not "stop"`);
-    }
-    const finalText = stepText.join("\n\n");
-    if (!finalText.trim()) {
-      throw new Error("opencode reported completion without a final result");
-    }
+    const verified = verifyOpencodeTurn(await exportOpencodeSession(sessionId, params.ctx.cwd, params.signal), {
+      sessionId,
+      prompt: taskPrompt,
+      priorIds,
+      agent,
+    });
+    latestUsage = verified.usage;
 
     params.onUsage(latestUsage);
-    const result = finalText.trim();
+    const result = verified.text;
     const output = assistantOutput([{ text: result }], "final", result);
     if (progress) {
       progress.status = "done";
