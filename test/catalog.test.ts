@@ -32,17 +32,17 @@ it('disables whole harnesses without deleting definitions, hiding them from disc
   try {
     const dir = join(root, 'pi-flow-external');
     mkdirSync(join(dir, 'overrides'), { recursive: true });
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 4, disabledHarnesses: ['codex', 'pi-check', 'opencode'], harnesses: { 'pi-check': { model: 'test/model', thinking: 'off' } } }));
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 4, disabledHarnesses: ['codex', 'pi-check', 'future-cli'], harnesses: { 'pi-check': { model: 'test/model', thinking: 'off' } } }));
     writeFileSync(join(dir, 'overrides', 'codex-custom.md'), '---\ndescription: Custom\nbackend: codex\n---\nExact');
     const catalog = loadExternalCatalog(root);
     const options = { configuredHarnessNames: new Set([...EXTERNAL_HARNESSES, 'pi-check']), harnessConfigs: catalog.harnessConfigs, disabledHarnesses: catalog.disabledHarnesses };
     expect(catalog.blocked).toBe(false);
     // Definitions stay; discovery hides every identity bound to a disabled harness.
     expect(catalog.profiles.has('codex-custom')).toBe(true);
-    expect(externalRoleAvailability(catalog.profiles).get('reviewer')).toEqual(['agy', 'claude', 'grok', 'muse']);
+    expect(externalRoleAvailability(catalog.profiles).get('reviewer')).toEqual(['agy', 'claude', 'grok', 'muse', 'opencode']);
     // Unknown disabled names are preserved with an actionable, non-blocking diagnostic.
-    expect(catalog.disabledHarnesses.has('opencode')).toBe(true);
-    expect(catalog.diagnostics.join(' ')).toMatch(/"opencode" is not a known harness.*kept/);
+    expect(catalog.disabledHarnesses.has('future-cli')).toBe(true);
+    expect(catalog.diagnostics.join(' ')).toMatch(/"future-cli" is not a known harness.*kept/);
     for (const selection of [{ role: 'reviewer', harness: 'codex' }, { role: 'nonexistent', harness: 'codex' }, { subagentType: 'codex-reviewer' }, { subagentType: 'codex-custom' }, { role: 'reviewer', harness: 'pi-check' }, { subagentType: 'pi-check-reviewer' }]) {
       expect(() => resolveExternalProfile(catalog.profiles, selection, 'agy', options)).toThrow(/Harness "(codex|pi-check)" is disabled.*config enable/);
     }

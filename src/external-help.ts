@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
-import { loadExternalCatalog } from "./profiles.ts";
+import { disabledHarnessMessage, loadExternalCatalog } from "./profiles.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
 import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
@@ -23,7 +23,7 @@ const externalHelpParameters = Type.Object({
     description: "Help topic: usage playbook, role descriptions/configured profile availability, harness permissions, or workflow syntax and saved workflows.",
   }),
   harness: Type.Optional(Type.String({
-    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, or a registered pi-* harness. usage and workflow describe every harness.",
+    description: "Optional harness filter for roles or permissions: agy, claude, codex, grok, muse, opencode, or a registered pi-* harness. usage and workflow describe every harness.",
   })),
 });
 
@@ -149,7 +149,9 @@ export function createExternalHelpTool(
       if (params.topic === "usage") {
         text = formatUsagePlaybook();
       } else if (params.topic === "roles") {
-        text = catalog.blocked ? catalog.diagnostics.join(" ") : formatExternalRoleHelp(catalog.profiles, options.getDefaultHarness(ctx), harness);
+        text = catalog.blocked ? catalog.diagnostics.join(" ")
+          : harness && catalog.disabledHarnesses.has(harness) ? disabledHarnessMessage(harness)
+          : formatExternalRoleHelp(catalog.profiles, options.getDefaultHarness(ctx), harness);
       } else if (params.topic === "permissions") {
         text = permissionHelp(harness, configuredPiHarnesses);
       } else {

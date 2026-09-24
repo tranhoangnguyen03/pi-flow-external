@@ -4,6 +4,16 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+### Added
+
+- OpenCode (`opencode`) as a sixth CLI backend, with JSONL progress, verified-final-step completion, session resume, native root-step usage, cancellation, and durable receipts. Targets CLI 1.18.32. Restricted tiers use native deny-by-default tool rules, not an OS sandbox. Explicit thinking pins and structured schemas are rejected; nested-task total cost is unknown and budgets are unenforceable.
+- Whole-harness toggles through `/external config enable|disable <harness>` and settings v4 `disabledHarnesses`. Disabling preserves definitions, hides executable availability, and rejects direct/exact/resumed selections and new workflow replay without fallback. Active work retains its snapshot. `/external config default <harness>` selects an enabled global default; doctor skips disabled readiness checks.
+
+### Changed — command migration
+
+- Harness-centric configuration is consolidated under `/external config`. Replace `/external settings`, `settings edit`, and `settings convert` with `/external config`, `config edit`, and `config convert`; replace `/external harnesses` and `/external harness create` with `/external config harnesses` and `/external config harness create`. Old routes are removed, not aliases. `/external role …`, runs, workflows, and optional purge remain separate.
+- Existing v4 installations need no new storage conversion. Pre-v4 conversion is still explicit, keeps originals, and is available through `/external config convert`. Documentation, command help, tool descriptions, and coordinator guidance use the new surface.
+
 ## [2.7.0-external.0] - 2026-09-24
 
 ### Added

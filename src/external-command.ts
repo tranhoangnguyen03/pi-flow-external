@@ -257,6 +257,7 @@ function configHarnessAction(options: ExternalCommandOptions, ctx: CommandContex
   };
   const later = "Applies from the next invocation; active children and running workflows keep their snapshot.";
   if (action === "enable") {
+    if (!known.includes(name) && !disabled.includes(name)) return { message: `Unknown harness "${name}". See /external config harnesses.`, level: "warning" };
     if (!disabled.includes(name)) return { message: `Harness "${name}" is already enabled.`, level: "info" };
     const failed = write((record) => ({ ...record, disabledHarnesses: disabled.filter((item) => item !== name) }));
     return failed ?? { message: `Harness "${name}" enabled. ${later}`, level: "info" };
@@ -425,7 +426,7 @@ async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionComma
   } catch {
     current = `${JSON.stringify(options.settings.settings, null, 2)}\n`;
   }
-  const edited = await ctx.ui.editor("external settings", current);
+  const edited = await ctx.ui.editor("external config", current);
   if (edited === undefined) {
     ctx.ui.notify("Settings edit cancelled. Nothing was saved.", "info");
     return;
@@ -816,7 +817,7 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
 
 export function registerExternalCommand(pi: ExtensionAPI, options: ExternalCommandOptions): void {
   pi.registerCommand("external", {
-    description: "Inspect and configure external Claude, Codex, Agy, Grok, and Muse harnesses",
+    description: "Inspect external roles and runs; configure CLI and named Pi harnesses",
     getArgumentCompletions: (prefix) => {
       const normalized = prefix.trimStart().toLowerCase();
       const harnessArg = /^config (enable|disable|default) (\S*)$/.exec(normalized);

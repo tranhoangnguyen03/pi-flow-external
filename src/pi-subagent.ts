@@ -75,7 +75,7 @@ export const agentToolParameters = Type.Object({
   })),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness override: agy, claude, codex, grok, muse, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
+    description: "Optional harness override: agy, claude, codex, grok, muse, opencode, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
   })),
   subagent_type: Type.Optional(Type.String({
     minLength: 1,
@@ -84,7 +84,7 @@ export const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier. Omit to use the global defaultPermission (danger unless changed). A role does not grant or limit this. codex and grok map it to --sandbox, claude maps it to a headless permission mode, muse maps it to approval/sandbox flags, and pi maps it to a curated tool list (not an OS sandbox). Antigravity accepts only danger; readonly and edit are rejected.",
+        "Optional permission tier. Omit to use the global defaultPermission (danger unless changed). A role does not grant or limit this. codex and grok map it to --sandbox, claude maps it to a headless permission mode, muse maps it to approval/sandbox flags, opencode uses native tool permission rules (not an OS sandbox), and pi maps it to a curated tool list (not an OS sandbox). Antigravity accepts only danger; readonly and edit are rejected.",
     }),
   ),
   max_budget_usd: Type.Optional(

@@ -159,7 +159,7 @@ describe("/external command", () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-toggle-"));
     const settingsPath = join(root, "pi-flow-external", "settings.json");
     mkdirSync(join(root, "pi-flow-external"), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["opencode"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } }));
+    writeFileSync(settingsPath, JSON.stringify({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } }));
     try {
       await withAgentDir(root, async () => {
         let command: { getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null; handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
@@ -182,12 +182,12 @@ describe("/external command", () => {
         await command?.handler("config disable pi-check", ctx);
         await command?.handler("config default codex", ctx);
         expect(notices.at(-1)).toMatch(/Cannot make "codex" the default.*config enable codex/);
-        expect(saved()).toEqual({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["opencode", "codex", "pi-check"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } });
+        expect(saved()).toEqual({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli", "codex", "pi-check"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } });
 
         await command?.handler("config harnesses", ctx);
         expect(notices.at(-1)).toContain("- codex · CLI · disabled");
         expect(notices.at(-1)).toContain("- pi-check · Pi (test/model · default thinking · minimal) · disabled");
-        expect(notices.at(-1)).toContain("- opencode · unknown · disabled");
+        expect(notices.at(-1)).toContain("- future-cli · unknown · disabled");
 
         // Doctor skips readiness probes for disabled CLI and Pi harnesses.
         await command?.handler("doctor", ctx);
@@ -200,7 +200,7 @@ describe("/external command", () => {
         writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
         await command?.handler("config disable claude", { ...ctx, isProjectTrusted: () => true });
         expect(notices.at(-1)).toMatch(/Cannot disable "claude": it is the project default/);
-        await command?.handler("config enable opencode", ctx);
+        await command?.handler("config enable future-cli", ctx);
         await command?.handler("config enable codex", ctx);
         await command?.handler("config default codex", ctx);
         expect(saved()).toMatchObject({ defaultHarness: "codex", futureField: { keep: true }, disabledHarnesses: ["pi-check"] });
