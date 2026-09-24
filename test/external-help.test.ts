@@ -13,6 +13,7 @@ import {
   USAGE_BACKGROUND_AGENT,
   USAGE_INDEPENDENT_REVIEW,
   USAGE_ONE_AGENT,
+  USAGE_RESTRICTED_AGENT,
   USAGE_RESUME_AGENT,
   USAGE_RUNS_FINAL,
   USAGE_WORKFLOW_CALLS,
@@ -155,7 +156,8 @@ function toolCall(name: string, args: object) {
 }
 
 describe("external_help usage playbook", () => {
-  const agentExamples = [USAGE_ONE_AGENT, USAGE_INDEPENDENT_REVIEW, USAGE_BACKGROUND_AGENT, USAGE_RESUME_AGENT];
+  const ordinaryAgents = [USAGE_ONE_AGENT, USAGE_INDEPENDENT_REVIEW, USAGE_BACKGROUND_AGENT, USAGE_RESUME_AGENT];
+  const agentExamples = [...ordinaryAgents, USAGE_RESTRICTED_AGENT];
 
   it("accepts topic usage and rejects an unknown topic", () => {
     const tool = makeTool() as any;
@@ -172,6 +174,7 @@ describe("external_help usage playbook", () => {
       expect(result.details).toEqual({ topic: "usage", harness: "not-a-real-harness" });
       expect(text).toContain(usageWorkflowScript());
       expect(text).toContain(JSON.stringify(USAGE_ONE_AGENT, null, 2));
+      expect(text).toContain(JSON.stringify(USAGE_RESTRICTED_AGENT, null, 2));
       expect(text).toContain(JSON.stringify(USAGE_RUNS_FINAL, null, 2));
 
       const blank = await tool.execute("call-usage-blank", { topic: "usage", harness: "  " }, undefined, undefined, fakeCtx(agentDir));
@@ -181,13 +184,16 @@ describe("external_help usage playbook", () => {
 
   it("validates playbook selectors against the Agent, external_runs, and workflow schemas", () => {
     const agentTool = { name: "Agent", parameters: agentToolParameters } as any;
-    for (const example of agentExamples) {
-      expect(validateToolArguments(agentTool, toolCall("Agent", example))).toMatchObject({
-        role: example.role,
-        harness: example.harness,
-        permission: example.permission,
-      });
+    for (const example of ordinaryAgents) {
+      const validated = validateToolArguments(agentTool, toolCall("Agent", example));
+      expect(validated).toMatchObject({ role: example.role, harness: example.harness });
+      expect(validated).not.toHaveProperty("permission");
     }
+    expect(validateToolArguments(agentTool, toolCall("Agent", USAGE_RESTRICTED_AGENT))).toMatchObject({
+      role: USAGE_RESTRICTED_AGENT.role,
+      harness: USAGE_RESTRICTED_AGENT.harness,
+      permission: "readonly",
+    });
     expect(() => validateToolArguments(agentTool, toolCall("Agent", {
       ...USAGE_ONE_AGENT,
       subagent_type: "claude-explorer",
@@ -201,12 +207,13 @@ describe("external_help usage playbook", () => {
     expect(validateToolArguments(workflowTool, toolCall("workflow", { script })).script).toBe(script);
     expect(parseWorkflowScript(script).meta).toMatchObject({ apiVersion: 1, name: "parallel-review" });
     for (const call of USAGE_WORKFLOW_CALLS) {
-      expect(normalizeAgentOptions(call.options)).toMatchObject({
+      const normalized = normalizeAgentOptions(call.options);
+      expect(normalized).toMatchObject({
         label: call.options.description,
         role: call.options.role,
         harness: call.options.harness,
-        permission: call.options.permission,
       });
+      expect(normalized.permission).toBeUndefined();
     }
   });
 

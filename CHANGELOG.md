@@ -6,7 +6,7 @@ All notable changes to pi-flow external are documented here.
 
 ### Added
 
-- `external_help` topic `usage`: a worked delegation playbook for one `Agent` call, an independent review, background supervision through `external_runs`, a parallel workflow that catches a child error, and `resume` where the harness stored a session. The always-on coordinator prompt stays a short operating guide and points there.
+- `external_help` topic `usage`: a worked delegation playbook for one `Agent` call, an independent review, background supervision through `external_runs`, a parallel workflow that catches a child error, and `resume` where the harness stored a session. Ordinary examples omit `permission` and keep no-edit intent in the prompt; one example confines a tier the harness can enforce. Prefer the configured default harness unless the user or a capability needs another. The always-on coordinator prompt stays a short operating guide and points there.
 
 ### Changed
 
@@ -15,6 +15,7 @@ All notable changes to pi-flow external are documented here.
 
 ### Fixed
 
+- Workflow help supervision uses `runIds` for inspect, wait, and cancel. One id reads any inspect view, including `final`; several ids batch summary only.
 - Antigravity's unsupported-tier error tells the caller to pass `permission: "danger"` or change `defaultPermission`. Omitting the call tier keeps the global default.
 - Unsupported-permission and resume failures keep resolved permission, parent context, and budget on the run receipt. The same fields are written on a launched finish.
 - Conversion reports a malformed short `pi-<role>.md` wildcard template and leaves it in place. Parsed native profiles stay excluded.
