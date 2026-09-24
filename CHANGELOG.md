@@ -4,6 +4,12 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.8.0-external.0] - 2026-09-24
+
+### Added
+- Expand `/external doctor` with CLI readiness, supported login-status checks, and secret-safe inherited authentication-setting warnings.
+- Report project-scoped historical usage-limit evidence from retained summaries, including reset times and later successful runs. Capture new Claude structured rejections and Antigravity terminal quota errors without live quota probes.
+
 ## [2.7.0-external.0] - 2026-09-24
 
 ### Added

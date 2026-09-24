@@ -344,10 +344,12 @@ export function createPiChildResourceLoader(options: {
     appendSystemPromptOverride: (base) => [...base, ...extra],
   });
 }
+import { usageLimitFromEvent, type UsageLimit } from "./usage-limit.ts";
 
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
   const startedAt = Date.now();
   let backendEventCount = 0;
+  let usageLimit: UsageLimit | undefined;
   let nestedActivitySeen = false;
   const effectiveTier = resolveEffectivePermissionTier(params.permission, params.profile, params.defaultPermission ?? "danger");
   const permission = resolvePermission(effectiveTier, params.profile.backend);
@@ -410,6 +412,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
   const onBackendEvent = (event: unknown) => {
     backendEventCount++;
+    usageLimit = usageLimitFromEvent(params.profile.backend, event) ?? usageLimit;
     const hadNestedActivity = nestedActivitySeen;
     try {
       nestedActivitySeen ||= hasNestedAgentActivity(event, params.profile.backend);
@@ -490,6 +493,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         firstActivityAt: details.progress?.firstActivityAt,
         lastActivityAt: details.progress?.lastActivityAt,
         error: details.error,
+        ...(details.status === "error" && usageLimit ? { usageLimit } : {}),
         usage: details.usage,
         durationMs: Date.now() - startedAt,
         backendEventCount,
