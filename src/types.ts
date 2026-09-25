@@ -143,6 +143,8 @@ export interface WorkflowAgentSnapshot {
 }
 
 export interface WorkflowToolDetails {
+  launch?: unknown;
+  backgroundReceipt?: boolean;
   name: string;
   status: "running" | "completed" | "error" | "aborted";
   /**
@@ -243,6 +245,7 @@ export interface SubagentProgressNode {
 }
 
 export interface SubagentToolDetails {
+  backgroundReceipt?: boolean;
   context?: ParentContextReceipt;
   description: string;
   subagentType: SubagentType | "unknown";

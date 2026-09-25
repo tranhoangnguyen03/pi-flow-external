@@ -1226,6 +1226,16 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     // changing for existing readers (journal/replay/rendering).
     expect(result.details.lifecycleStatus).toBe("done");
     expect(result.details.result).toEqual({ resp: "CUSTOM_PI_WORKFLOW_OK" });
+    expect(result.details.launch).toMatchObject({ description: "runs custom profile", workspace: cwd, mode: "foreground" });
+    const { inspectRun } = await import("../src/core/run-inspection.ts");
+    const childLaunch = await inspectRun({ runsDirectory: join(agentDir, "pi-flow-external", "runs"), runId: result.details.agents[0]!.externalRunId!, view: "launch" });
+    const childEvidence = JSON.parse(childLaunch.items.map(item => item.text).join(""));
+    expect(childEvidence.intent.authoredPrompt).toBe("test task");
+    expect(childEvidence.execution.configuration.harness).toBe("pi-deepseek");
+    expect(childEvidence.execution.roleInstructions).toContain("You are a custom reviewer.");
+    expect(childEvidence.applied.tools).toContain("read");
+    expect(childEvidence.applied.thinkingApplied).toBeDefined();
+    expect(childEvidence.applied.systemPrompt).toContain("You are a custom reviewer.");
   });
 
   it("keeps a workflow child's queued state and queuedAt visible in the registry before its concurrency slot is granted", async () => {
@@ -1293,6 +1303,13 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     // visibly queued.
     expect(queuedEntry?.observation).toMatchObject({ status: "queued", queuedAt: expect.any(Number) });
 
+    const queuedRun = registry.list(sessionId, project).find(entry => entry.kind === "agent")!;
+    const { inspectRun } = await import("../src/core/run-inspection.ts");
+    const launchPage = await inspectRun({ runsDirectory: join(agentDir, "pi-flow-external", "runs"), runId: queuedRun.runId, view: "launch", live: true });
+    expect(launchPage.integrity).not.toBe("damaged");
+    expect(launchPage.nextCursor).toBeUndefined();
+    expect(launchPage.items[0]?.text).toContain("only child");
+    expect(launchPage.items[0]?.text).toContain("Pending");
     releaseExternalSlot();
     const result = await runPromise;
     expect(result.details.status).toBe("completed");

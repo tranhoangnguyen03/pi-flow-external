@@ -7,7 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderOutputText, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
@@ -24,6 +24,7 @@ import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownEx
 import { effectivePiResourcePreset, loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
+import { parseWorkflowScript } from "./script-validation.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
 import { ChildRunError, type ChildRunOutcome, type WorkflowAgentRunner, type WorkflowSubagentDescriptor } from "./types.ts";
@@ -173,6 +174,7 @@ export function createWorkflowTool(
       } = prepared.value;
 
       const snapshot: WorkflowToolDetails = {
+        launch: prepared.value.launch,
         name: metaName,
         status: "running",
         agentCount: 0,
@@ -428,12 +430,16 @@ export function createWorkflowTool(
                 workflowRunId: identity.runId,
                 description: event.label,
                 prompt: event.prompt,
+                authoredPrompt: event.authoredPrompt,
+                plannedConfiguration: { roleInstructions: profile?.systemPrompt, model: profile?.model, thinking: profile?.thinking ?? thinkingLevel, tools: profile?.tools, timeoutMs, permissionRequested: event.permission ?? "default", maxBudgetUsd: event.maxBudgetUsd ?? profile?.maxBudgetUsd ?? defaultMaxBudgetUsd, outputSchema: event.schema ?? null, outputInstructions: event.schema ? "Schema-constrained output; backend-specific instructions resolved at start" : WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE },
+                context: event.context ?? { mode: "none" },
                 profile: event.subagentType,
                 backend: profile?.backend,
                 harness: profile ? selectorHarness(profile) : undefined,
                 queuedAt: new Date(queuedAt).toISOString(),
               },
             });
+            await runRecord.event("intent_ready");
             event.runRecord = runRecord;
             snapshot.agents.push({
               index: event.index,
@@ -588,23 +594,41 @@ export function createWorkflowTool(
             : result.details.error ? { error: result.details.error } : {}),
         }),
       });
+      emit();
       if (!background) return await registered.result;
       return workflowResult(
         `Workflow "${metaName}" queued as ${identity.runId}. Use external_runs to inspect, wait, or cancel it.`,
-        cloneSnapshot(snapshot),
+        { ...cloneSnapshot(snapshot), backgroundReceipt: true },
       );
     },
-    renderCall(args, theme, _context) {
-      const name = typeof args.name === "string" && args.name.trim() ? ` ${theme.fg("muted", args.name.trim())}` : "";
-      return new Text(`${theme.bold("Workflow")}${name} · ${theme.fg("warning", "unsandboxed external agents")}`, 0, 0);
+    renderCall(args, theme, context) {
+      let name = args.name || (args.scriptPath ? basename(args.scriptPath) : "Preparing workflow");
+      let purpose = "";
+      const state = context.state as { script?: string; meta?: { name: string; description: string } };
+      if (typeof args.script === "string") {
+        if (state.script !== args.script) {
+          state.script = args.script;
+          state.meta = undefined;
+          try { state.meta = parseWorkflowScript(args.script).meta; } catch { /* Streamed arguments may be incomplete. */ }
+        }
+        if (state.meta) { name = state.meta.name; purpose = state.meta.description; }
+      }
+      return new Text([
+        `${theme.bold("Workflow")} ${name}`,
+        purpose ? `${theme.fg("muted", "Purpose")} ${purpose}` : "",
+        `${theme.fg("muted", "Source")} ${args.scriptPath ? (context.expanded ? args.scriptPath : basename(args.scriptPath)) : args.name ?? "Ad-hoc workflow"}`,
+        `${theme.fg("muted", "Workspace")} ${context.cwd}`,
+        `${theme.fg("muted", "Mode")} ${args.background ? "Background" : "Foreground"}`,
+        theme.fg("warning", "Host access · children may execute unsandboxed; inspect effective permissions"),
+      ].filter(Boolean).join("\n"), 0, 0);
     },
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded }, theme, context) {
       // Pure function of the snapshot: the spinner frame is carried on the
       // snapshot itself and advanced by the runtime heartbeat in execute(), so
       // there is no UI-side timer to leak when a row is torn down or rendered in
       // a non-live context (e.g. HTML export).
       const details = result.details as WorkflowToolDetails;
-      return renderWorkflowSnapshot(details, theme, details.frame ?? 0, expanded);
+      return renderWorkflowSnapshot(details, theme, details.frame ?? 0, expanded, Boolean((context.state as { meta?: unknown } | undefined)?.meta));
     },
   });
 }
@@ -733,14 +757,23 @@ function renderFlatAgents(container: Container, details: WorkflowToolDetails, th
   }
 }
 
-function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, frame: number, expanded: boolean): Container {
+function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, frame: number, expanded: boolean, purposeShown = false): Container {
   const container = new Container();
+  const launch = details.launch as { description?: string } | undefined;
+  if (!purposeShown && launch?.description) container.addChild(new Text(`${theme.fg("muted", "Purpose")} ${launch.description}`, 0, 0));
+  const inspect = `${theme.fg("muted", "Run")} ${expanded ? details.runId : details.runId?.slice(-8)} · ${theme.fg("accent", "/external runs")} ${theme.fg("muted", "to inspect or follow")}`;
+  if (details.backgroundReceipt) {
+    container.addChild(new Text(`${theme.bold("Started in background")}\n${theme.fg("muted", "Launch receipt — not a live monitor")}\n${inspect}`, 0, 0));
+    return container;
+  }
+  if (details.runId) container.addChild(new Text(inspect, 0, 0));
+  if (!details.agents.length && details.status === "running") container.addChild(new Text("Preparing workflow · No assignments launched yet", 0, 0));
   const done = details.agents.filter((agent) => isCompletedSubagentStatus(agent.status)).length;
   const active = workflowRunningCount(details);
   const queued = details.agents.filter((agent) => agent.status === "queued").length;
   const failed = details.agents.filter(isFailedWorkflowAgent).length;
   const counts = formatAgentCounts(done, active, queued, failed, details.agents.length);
-  const access = details.status === "running" ? "external host access · " : "";
+  const access = "";
   container.addChild(
     new Text(
       `${theme.bold(`Workflow(${details.name})`)} ${theme.fg("dim", `${normalizeRunStatus(details.status)} · ${access}${counts}`)}`,

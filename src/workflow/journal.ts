@@ -27,6 +27,7 @@ export interface WorkflowRunIdentity {
 }
 
 export interface LoadedWorkflowJournal {
+  launch?: unknown;
   runId: string;
   path: string;
   agentResults: WorkflowCachedAgentResult[];
@@ -106,6 +107,7 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
 
   const agentResults: WorkflowCachedAgentResult[] = [];
   const children: LoadedWorkflowJournal["children"] = [];
+  let launch: unknown;
   let seenRunStart = false;
   let name: string | undefined;
   let source: string | undefined;
@@ -131,6 +133,7 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
         );
       }
       seenRunStart = entry.runId === runId;
+      launch = entry.launch;
       name = typeof entry.name === "string" ? entry.name : undefined;
       source = typeof entry.source === "string" ? entry.source : undefined;
       project = typeof entry.project === "string" ? entry.project : undefined;
@@ -189,7 +192,7 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   if (!seenRunStart) {
     throw new Error(`Workflow journal ${path} does not match run id ${runId}`);
   }
-  return { runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children: children.filter(Boolean) };
+  return { launch, runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children: children.filter(Boolean) };
 }
 
 export interface WorkflowJournalPage {
@@ -243,6 +246,7 @@ export async function listWorkflowJournals(dir: string, project: string, limit =
 }
 
 export async function createWorkflowJournalWriter(params: {
+  launch?: unknown;
   dir: string;
   identity: WorkflowRunIdentity;
   name: string;
@@ -251,12 +255,13 @@ export async function createWorkflowJournalWriter(params: {
   scriptPath?: string;
   resumeFromRunId?: string;
 }): Promise<WorkflowJournalWriter> {
-  await mkdir(params.dir, { recursive: true });
+  await mkdir(params.dir, { recursive: true, mode: 0o700 });
   const path = workflowJournalPath(params.dir, params.identity.runId);
   await writeFile(
     path,
     `${JSON.stringify({
       type: "run_start",
+      launch: params.launch,
       version: JOURNAL_VERSION,
       apiVersion: params.identity.apiVersion,
       runId: params.identity.runId,
@@ -268,7 +273,7 @@ export async function createWorkflowJournalWriter(params: {
       scriptHash: params.identity.scriptHash,
       argsHash: params.identity.argsHash,
     })}\n`,
-    "utf8",
+    { encoding: "utf8", mode: 0o600 },
   );
 
   let appendQueue = Promise.resolve();

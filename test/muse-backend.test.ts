@@ -869,6 +869,11 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'm
       sessionId: "muse-agent-tool-session",
     });
     expect(summary.summary.usage).toMatchObject({ costKnown: false, costEstimated: false });
+    const launch = await inspectRun({ runsDirectory: recordsRoot, runId: runDirectories[0]!, view: "launch" });
+    const evidence = JSON.parse(launch.items.map(item => item.text).join(""));
+    expect(evidence.intent.authoredPrompt).toBe("Do the task.");
+    expect(evidence.execution.roleInstructions).toBe("Muse worker prompt.");
+    expect(evidence.execution.configuration).toMatchObject({ harness: "muse", thinkingRequested: "high", thinkingApplied: "high", model: "muse-spark-1.3-contributor", budgetEnforced: false });
 
     let output = "";
     let cursor: string | undefined;

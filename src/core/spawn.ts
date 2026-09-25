@@ -22,9 +22,9 @@ import {
 } from "./progress.ts";
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
-import { spawnAgySubagent, isTransientAgyFailure } from "./agy.ts";
-import { spawnGrokSubagent } from "./grok.ts";
-import { museHasNestedAgentActivity, spawnMuseSubagent } from "./muse.ts";
+import { spawnAgySubagent, isTransientAgyFailure, normalizeAgyEffort } from "./agy.ts";
+import { spawnGrokSubagent, normalizeGrokReasoningEffort } from "./grok.ts";
+import { museHasNestedAgentActivity, spawnMuseSubagent, normalizeMuseReasoningEffort } from "./muse.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -387,6 +387,34 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
     }
     return result;
   }
+  await record?.event("launch_resolved", {
+    roleInstructions: params.profile.systemPrompt,
+    appendedInstructions: params.appendInstructions ?? null,
+    outputSchema: params.outputSchema ?? params.customTools?.find(tool => tool.name === "structured_output")?.parameters ?? null,
+    context: params.context ?? { mode: "none" },
+    configuration: {
+      harness: selectorHarness(params.profile),
+      backend: params.profile.backend,
+      model: params.model ? `${params.model.provider}/${params.model.id}` : params.profile.model ?? "Backend default (not resolved by extension)",
+      thinkingRequested: params.thinkingLevel,
+      thinkingApplied: params.profile.backend === "pi" ? "Pending SDK initialization" :
+        params.profile.backend === "agy" ? normalizeAgyEffort(params.thinkingLevel) ?? "Backend default" :
+        params.profile.backend === "grok" ? normalizeGrokReasoningEffort(params.thinkingLevel) ?? "Backend default" :
+        params.profile.backend === "muse" ? normalizeMuseReasoningEffort(params.thinkingLevel) ?? "Backend default" : params.thinkingLevel ?? "Backend default",
+      thinkingApplication: "CLI effort argument, or SDK setting; not a claim about provider-internal reasoning",
+      requestedTools: params.profile.tools ?? "Backend defaults",
+      resourceLoading: params.profile.backend === "pi" ? { preset: effectivePiResourcePreset(params.profile.preset), projectTrusted: params.projectTrusted === true, contextFiles: "SDK-loaded; recorded after initialization", skills: effectivePiResourcePreset(params.profile.preset) === "skills" ? "Enabled; project skills require trust" : "Disabled", extensions: false, promptTemplates: false, themes: false } : "Backend-controlled; not fully observable",
+      tools: params.profile.backend === "pi" ? "Pending SDK initialization" : "Backend-controlled; requested tools recorded separately",
+      excludedTools: params.excludeTools,
+      workspace: params.ctx.cwd,
+      permissionRequested: params.permission ?? "default",
+      permissionEffective: permission,
+      timeoutMs: params.timeoutMs,
+      maxBudgetUsd: params.maxBudgetUsd ?? null,
+      budgetEnforced: (params.maxBudgetUsd ?? 0) > 0 && params.profile.backend === "claude",
+      resumeRunId: params.resumeRunId ?? null,
+    },
+  });
   let resumeSession: Awaited<ReturnType<typeof resolveResume>>["session"];
   if (params.resumeRunId) {
     const resolved = await resolveResume(runRecordsDirectory(), params.resumeRunId, params.profile.backend);
@@ -434,6 +462,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
     let result = await spawnSubagentRuntime({
       ...params,
       permission: effectiveTier,
+      runRecord: record,
       signal: timeout.signal,
       onBackendEvent,
       onProcessStart,
@@ -879,6 +908,12 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       thinkingClamped = { requested: thinkingLevel, effective: session.thinkingLevel };
     }
 
+    await params.runRecord?.event("launch_applied", {
+      thinkingApplied: session.thinkingLevel,
+      tools: session.getActiveToolNames(),
+      contextFiles: resourceLoader.getAgentsFiles(),
+      systemPrompt: session.systemPrompt,
+    });
     if (signal) {
       abortHandler = () => {
         void session?.abort();

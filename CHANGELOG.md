@@ -4,6 +4,18 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.9.0-external.0] - 2026-09-25
+
+### Added
+- Add paged Launch inspection through `external_runs` and `/external runs` for queued, active, and historical assignments, including recorded prompts, context, and execution configuration.
+- Record requested settings and applied Pi SDK tools/thinking/context, and preserve workflow source and arguments in redacted launch evidence.
+- Document the delegation experience north star and visual guidelines.
+
+### Changed
+- Make background Agent and workflow cards explicit launch receipts, with inspection routes and clearer workflow purpose, workspace, and access disclosure.
+- Improve card legibility with consistent label/value contrast, bounded source paths and run references, and expanded-only usage accounting.
+- Add run-detail refresh and recover from stale inspection pages without closing navigation.
+
 ## [2.8.0-external.0] - 2026-09-24
 
 ### Added

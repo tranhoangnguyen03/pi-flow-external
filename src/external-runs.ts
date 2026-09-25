@@ -32,8 +32,8 @@ const externalRunsParameters = Type.Object({
     maxItems: MAX_TARGETS,
     description: "Target run IDs (run_... agent, wf_... workflow). For inspect: a single-entry list [\"run_...\"] inspects that run with any view (summary, output, diagnostics, final); multiple entries (1-20 targets) batch summary inspect. For cancel: a single-entry list [\"run_...\"]. For wait: any|all of up to 100 targets.",
   })),
-  view: Type.Optional(StringEnum(["summary", "output", "diagnostics", "final"] as const, {
-    description: "inspect view: summary (state/timing/freshness/refs, default), output (assistant text plus canonical result, partial or final), diagnostics (tool activity/errors), final (only the verified canonical terminal answer, empty until a successful terminal boundary exists). Batch inspect (runIds) only supports summary.",
+  view: Type.Optional(StringEnum(["summary", "output", "diagnostics", "final", "launch"] as const, {
+    description: "inspect view: launch (recorded prompt, context and execution configuration; sensitive, explicit inspection only), summary (state/timing/freshness/refs, default), output (assistant text plus canonical result, partial or final), diagnostics (tool activity/errors), final (only the verified canonical terminal answer, empty until a successful terminal boundary exists). Batch inspect (runIds) only supports summary.",
   })),
   mode: Type.Optional(StringEnum(["any", "all"] as const, {
     description: "wait mode: any returns on the first terminal outcome; all waits for every target. Neither cancels pending work; an unsuccessful selected workflow returns early even in all mode.",
@@ -797,7 +797,9 @@ export function createExternalRunsTool(
             const nextCursor = page.nextOffset === undefined ? undefined : encodeProjectionCursor(params.runId, view, page.nextOffset, text);
             return result(page.text, { runId: params.runId, view, text: page.text, finalAvailable: true, nextCursor });
           }
-          const source = view === "summary"
+          const source = view === "launch"
+            ? { runId: params.runId, launch: (entry?.observation as WorkflowToolDetails | undefined)?.launch ?? historical?.launch ?? "Not recorded" }
+            : view === "summary"
             ? entry ? liveSummary(entry, true) : journalSummary(historical!, true)
             : view === "output"
               // Ternary, not ??: entry and historical are mutually exclusive, but a
@@ -835,7 +837,7 @@ export function createExternalRunsTool(
             return result(portion.text, { runId: params.runId, view, text: portion.text, outputStatus: entry.state === "running" ? "preliminary" : entry.outcome?.outcome === "succeeded" ? "final" : "interrupted", nextCursor });
           }
         }
-        const page = await inspectRun({ runsDirectory, runId: params.runId, view, limitBytes: params.limitBytes, cursor: params.cursor });
+        const page = await inspectRun({ runsDirectory, runId: params.runId, view, limitBytes: params.limitBytes, cursor: params.cursor, live: entry?.state === "running" });
         const text = page.items.map((item) => item.text).join("\n");
         // view: "final" stays a clean, narration-free canonical-answer
         // surface — a bounded empty page (finalAvailable:false) when

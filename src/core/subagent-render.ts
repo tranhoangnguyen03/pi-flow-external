@@ -253,7 +253,7 @@ export function renderCompactSubagentNode(
     ? ` ${theme.fg("muted", `${status === "running" ? "--" : "->"} ${formatActivityLineForDisplay(summary)}`)}`
     : "";
   return new Text(
-    `${indent}${subagentMarker(status, theme, frame, node.timedOut)} ${theme.fg(bodyColor, compactTitle(node))}${meta ? ` ${theme.fg("dim", meta)}` : ""}${preview}`,
+    `${indent}${subagentMarker(status, theme, frame, node.timedOut)} ${status === "error" || status === "aborted" ? theme.fg(bodyColor, compactTitle(node)) : compactTitle(node)}${meta ? ` ${theme.fg("dim", meta)}` : ""}${preview}`,
     0,
     0,
   );
@@ -305,13 +305,18 @@ export function renderSubagentNode(
   expanded = false,
   showAccess = true,
 ): Text | Container {
+  const displayNode = expanded ? node : { ...node, usage: undefined };
   const rendered = shouldRenderRichSubagent(node, runningCount)
-    ? renderRichSubagentNode(node, theme, frame, indent, now, showAccess)
-    : renderCompactSubagentNode(node, theme, frame, indent, now, showAccess);
-  if (!expanded || isActiveSubagentStatus(node.status)) {
-    return rendered;
+    ? renderRichSubagentNode(displayNode, theme, frame, indent, now, showAccess)
+    : renderCompactSubagentNode(displayNode, theme, frame, indent, now, showAccess);
+  if (isActiveSubagentStatus(node.status)) {
+    const active = new Container();
+    active.addChild(rendered);
+    active.addChild(new Text(`${indent}  ${theme.fg("muted", "Inspect")} ${expanded ? node.runId ?? node.externalRunId ?? "pending" : (node.runId ?? node.externalRunId)?.slice(-8) ?? "pending"} · ${theme.fg("accent", "/external runs")}`, 0, 0));
+    return active;
   }
 
+  if (!expanded) return rendered;
   const container = new Container();
   container.addChild(rendered);
   const output = node.result ?? node.assistantOutput?.messages.map((message) => message.text).join("\n\n");

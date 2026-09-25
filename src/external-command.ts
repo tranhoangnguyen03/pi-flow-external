@@ -614,10 +614,18 @@ async function readSummary(options: ExternalCommandOptions, runId: string, ctx: 
   return object(JSON.parse(text));
 }
 
-async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics" | "final", ctx: ExtensionCommandContext): Promise<void> {
+async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics" | "final" | "launch", ctx: ExtensionCommandContext): Promise<void> {
   let cursor: string | undefined;
   do {
-    const page = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
+    let page: ExternalRunsResult;
+    try {
+      page = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
+    } catch (error) {
+      if (!cursor || !(error instanceof Error) || !error.message.includes("Run changed while paging")) throw error;
+      ctx.ui.notify("Run changed while reading. Reopening the latest snapshot from page 1.", "info");
+      cursor = undefined;
+      page = await runAction(options, { action: "inspect", runId, view }, ctx);
+    }
     // The tool's `final` projection is deliberately a clean, narration-free
     // canonical-answer surface: unavailable is a bounded EMPTY page with
     // finalAvailable:false (true for both an agent run and a workflow — see
@@ -656,15 +664,17 @@ function formatSummaryHeader(summary: JsonObject): string {
 
 async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<void> {
   const summary = await readSummary(options, runId, ctx);
+  const observedAt = new Date().toISOString();
   const children = Array.isArray(summary.children) ? summary.children.map(object).filter((child) => typeof child.runId === "string") : [];
   const state = object(summary.state);
   const childChoices = children.map((child) => `Child ${String(child.runId)}${child.label ? ` · ${String(child.label)}` : ""}`);
-  const actions = ["Summary", "Output", "Final", "Diagnostics", ...childChoices, ...(state.status === "running" || state.status === "queued" ? ["Cancel run"] : []), "Back"];
+  const actions = ["Refresh", "Launch", "Summary", "Output", "Final", "Diagnostics", ...childChoices, ...(state.status === "running" || state.status === "queued" ? ["Cancel run"] : []), "Back"];
   while (true) {
     const choice = await ctx.ui.select(`Run ${runId}`, actions);
     if (!choice || choice === "Back") return;
-    if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, `${formatSummaryHeader(summary)}\n\n${JSON.stringify(summary, null, 2)}`);
-    else if (choice === "Output" || choice === "Final" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "final" | "diagnostics", ctx);
+    if (choice === "Refresh") return navigateRun(options, runId, ctx);
+    if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, `Snapshot ${observedAt} · Refresh for current state\n${formatSummaryHeader(summary)}\n\n${JSON.stringify(summary, null, 2)}`);
+    else if (choice === "Launch" || choice === "Output" || choice === "Final" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "final" | "diagnostics" | "launch", ctx);
     else if (choice === "Cancel run") {
       if (await ctx.ui.confirm("Cancel external run?", `${runId}\n\nStopping execution does not roll back side effects.`)) {
         const result = await runAction(options, { action: "cancel", runId, reason: "cancelled from /external runs" }, ctx);

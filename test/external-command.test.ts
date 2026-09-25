@@ -626,7 +626,7 @@ describe("/external command", () => {
     }
   });
 
-  it("routes the run-detail Final choice to inspect view: final, distinct from Output/Diagnostics", async () => {
+  it("routes Final and recovers stale Launch pages without leaving run navigation", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-final-"));
     try {
       await withAgentDir(root, async () => {
@@ -636,6 +636,10 @@ describe("/external command", () => {
           execute: vi.fn(async (_id: string, params: any) => {
             if (params.action === "list") {
               return { content: [{ type: "text", text: "list" }], details: { workflows: [], runs: [{ runId: "run_1", status: "done" }] } };
+            }
+            if (params.view === "launch") {
+              if (params.cursor) throw new Error("Run changed while paging; restart inspection without a cursor");
+              return { content: [{ type: "text", text: "launch snapshot" }], details: { nextCursor: "old-page" } };
             }
             if (params.action === "inspect" && params.view === "final") {
               return { content: [{ type: "text", text: "canonical final answer" }], details: { finalAvailable: true } };
@@ -659,8 +663,9 @@ describe("/external command", () => {
               if (title === "External runs") return rootCalls++ === 0 ? choices.find((choice) => choice.startsWith("Run run_1")) : "Back";
               if (title === "Run run_1") {
                 expect(choices).toContain("Final");
-                return runDetailCalls++ === 0 ? "Final" : "Back";
+                return ["Launch", "Refresh", "Final", "Back"][runDetailCalls++];
               }
+              if (title === "launch run_1") return editor.mock.calls.filter(([title]) => title === "launch run_1").length === 1 ? "Next page" : "Back";
               if (title === "final run_1") return "Back";
               return "Back";
             }),
@@ -669,6 +674,8 @@ describe("/external command", () => {
         await command?.handler("runs", ctx as never);
         expect(externalRuns.execute).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: "inspect", runId: "run_1", view: "final" }), undefined, undefined, ctx);
         expect(editor).toHaveBeenCalledWith("final run_1", "canonical final answer");
+        expect(editor.mock.calls.filter(([title]) => title === "launch run_1")).toHaveLength(2);
+        expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Reopening"), "info");
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
