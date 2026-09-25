@@ -56,7 +56,7 @@ describe("e2e external script argument validation", () => {
   it("rejects an unknown --backend value", () => {
     const result = runScript(["--backend", "gemini"]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, or pi");
+    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
   });
 
   it("requires --harness with --backend pi", () => {
@@ -93,7 +93,7 @@ describe("e2e external script argument validation", () => {
     const result = runScript(["--backend", "gemini", "--routing-smoke", "--root-model", "x", "--root-thinking", "high"]);
     expect(result.code).not.toBe(0);
     // Still rejected for the unrelated --backend value, not for combining routing-smoke with root flags.
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, or pi");
+    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
     expect(result.stderr).not.toContain("only apply to --routing-smoke");
   });
 
@@ -148,7 +148,7 @@ describe("e2e external script pi harness precheck", () => {
     const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("version 3");
-    expect(result.stderr).toContain("Run /external settings convert to upgrade");
+    expect(result.stderr).toContain("Run /external config convert to upgrade");
     expect(result.stderr).toContain("will not modify");
     expect(result.stderr).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
@@ -164,7 +164,7 @@ describe("e2e external script pi harness precheck", () => {
     const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("Legacy configuration found");
-    expect(result.stderr).toContain("Run /external settings convert to upgrade");
+    expect(result.stderr).toContain("Run /external config convert to upgrade");
     expect(result.stderr).toContain("will not modify");
     expect(await readFile(legacyPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["harnesses.json"]);

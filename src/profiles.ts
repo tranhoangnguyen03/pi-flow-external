@@ -32,7 +32,7 @@ function parseBackend(value: unknown): SubagentBackend | "invalid" {
     return "pi";
   }
   const backend = optionalString(value);
-  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy" || backend === "grok" || backend === "muse") {
+  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy" || backend === "grok" || backend === "muse" || backend === "opencode") {
     return backend;
   }
   return "invalid";
@@ -168,6 +168,27 @@ export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, Subag
 }
 
 /**
+ * OpenCode 2 takes `--model provider/model#variant`. Variant names are
+ * model-specific, and OpenCode rejects an unknown one before the prompt runs
+ * (core/src/model-resolver.ts "Variant unavailable"). A pinned thinking level is
+ * therefore forwarded as that model's variant, which is only possible when the
+ * model itself is pinned. The inherited Pi thinking level is never forwarded.
+ */
+export function opencodeProfileProblem(profile: SubagentProfile): string | undefined {
+  if (profile.backend !== "opencode") return undefined;
+  if (profile.model !== undefined && !/^[^/\s]+\/\S+$/.test(profile.model)) {
+    return `OpenCode profile "${profile.name}" pins model "${profile.model}". Use the provider/model form, such as anthropic/claude-sonnet-4-5.`;
+  }
+  if (profile.thinking !== undefined && profile.model === undefined) {
+    return `OpenCode profile "${profile.name}" pins thinking "${profile.thinking}" without a model. OpenCode variants are model-specific; pin model provider/model too, or remove thinking.`;
+  }
+  if (profile.thinking !== undefined && profile.model?.includes("#")) {
+    return `OpenCode profile "${profile.name}" pins both a #variant in model "${profile.model}" and thinking "${profile.thinking}". Keep one.`;
+  }
+  return undefined;
+}
+
+/**
  * A `backend: "pi"` profile is external-delegation-eligible only when it also
  * declares `harness: <name>` for a name present in the live harness registry
  * (see src/harnesses.ts). This is the mechanical reason an ordinary native Pi
@@ -190,14 +211,25 @@ export function filterExternalAgentProfiles(
   return new Map([...profiles].filter(([, profile]) => isExternalAgentProfile(profile, configuredPiHarnesses)));
 }
 
-export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig> } {
+/** Actionable rejection for a disabled harness. Selection never substitutes another harness. */
+export function disabledHarnessMessage(harness: string, isDefault = false): string {
+  return isDefault
+    ? `Default harness "${harness}" is disabled in settings.json. Pass another harness explicitly, choose a new default with /external config default <harness>, or enable it with /external config enable ${harness}.`
+    : `Harness "${harness}" is disabled in settings.json. Enable it with /external config enable ${harness}, or choose another harness.`;
+}
+
+export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig>; disabledHarnesses: Set<string> } {
   const loaded = loadExternalSettings(agentDir);
   const diagnostics = [...loaded.diagnostics];
   const profiles = new Map<string, SubagentProfile>();
   const harnesses = new Map(Object.entries(loaded.settings.harnesses ?? {}));
-  if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses };
+  const disabledHarnesses = new Set(loaded.settings.disabledHarnesses ?? []);
+  if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses, disabledHarnesses };
   const names = [...EXTERNAL_HARNESSES, ...harnesses.keys()];
-  const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code" };
+  for (const name of disabledHarnesses) {
+    if (!names.includes(name)) diagnostics.push(`disabledHarnesses entry "${name}" is not a known harness. It is kept and applies if that harness appears; remove it with /external config enable ${name}.`);
+  }
+  const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code", opencode: "OpenCode" };
   const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
     for (const harness of names) {
       const config = harnesses.get(harness);
@@ -237,6 +269,8 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
             throw new Error(`obsolete metadata ${obsolete.join(", ")} is not an authority floor or a capability selection. Remove it. Pass permission on the call, or set defaultPermission. Pi skills follow the harness preset.`);
           }
           if (!isExternalAgentProfile(profile, new Set(harnesses.keys()))) throw new Error("override must declare an external backend or registered Pi harness");
+          const opencodeProblem = opencodeProfileProblem(profile);
+          if (opencodeProblem) throw new Error(opencodeProblem);
         }
       } catch (cause) { error = `Invalid ${kind === "roles" ? "role" : "override"} ${path}: ${cause instanceof Error ? cause.message : String(cause)}`; diagnostics.push(error); }
       if (kind === "roles") bind(name, { description: profile?.description ?? name, systemPrompt: profile?.systemPrompt, ...(error ? { configurationError: error } : {}) }, path);
@@ -252,7 +286,12 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
     const profile = profiles.get(name);
     if (profile) profiles.set(name, { ...profile, configurationError: `Execution identity "${name}" is disabled in settings.json.` });
   }
-  return { profiles: mergeSynthesizedPiProfiles(profiles, harnesses), diagnostics, blocked: false, harnessConfigs: harnesses };
+  const merged = mergeSynthesizedPiProfiles(profiles, harnesses);
+  for (const [name, profile] of merged) {
+    const harness = selectorHarness(profile);
+    if (disabledHarnesses.has(harness)) merged.set(name, { ...profile, configurationError: disabledHarnessMessage(harness) });
+  }
+  return { profiles: merged, diagnostics, blocked: false, harnessConfigs: harnesses, disabledHarnesses };
 }
 
 export interface ExternalAgentSelection {
@@ -356,7 +395,7 @@ export function computeReconciledPiProfile(
   if (!harnessConfig) {
     return {
       profile,
-      conflict: `Harness "${profile.harness}" is not registered. Create it first via /external harness create.`,
+      conflict: `Harness "${profile.harness}" is not registered. Create it first via /external config harness create.`,
     };
   }
   if (profile.model !== undefined && profile.model !== harnessConfig.model) {
@@ -448,17 +487,20 @@ export interface ResolveExternalProfileOptions {
   configuredHarnessNames?: ReadonlySet<string>;
   /** Registered pi-* harness configs, used for canonical synthesis and model/thinking reconciliation. */
   harnessConfigs?: ReadonlyMap<string, HarnessConfig>;
+  /** Harnesses disabled in settings; selecting one fails without fallback. */
+  disabledHarnesses?: ReadonlySet<string>;
 }
 
 const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
   configuredHarnessNames: new Set(EXTERNAL_HARNESSES),
   harnessConfigs: NO_HARNESS_CONFIGS,
+  disabledHarnesses: NO_PI_HARNESSES,
 };
 
 /** Unknown exact identity. Directs the caller back to role plus harness, including a registered pi-* name. */
 export function unknownExternalProfileMessage(subagentType: string, names: Iterable<string>): string {
   const available = [...names].join(", ") || "none";
-  return `Unknown external subagent_type "${subagentType}". Available external profiles: ${available}. Select role and an optional harness (agy, claude, codex, grok, muse, or a registered pi-* name).`;
+  return `Unknown external subagent_type "${subagentType}". Available external profiles: ${available}. Select role and an optional harness (agy, claude, codex, grok, muse, opencode, or a registered pi-* name).`;
 }
 
 export function resolveExternalProfile(
@@ -493,6 +535,9 @@ export function resolveExternalProfile(
   const selectedHarness = harness || defaultHarness;
   if (!configuredHarnessNames.has(selectedHarness)) {
     throw new Error(`Unknown external harness "${selectedHarness}". Choose one of: ${[...configuredHarnessNames].join(", ") || "none"}.`);
+  }
+  if ((options.disabledHarnesses ?? DEFAULT_RESOLVE_OPTIONS.disabledHarnesses).has(selectedHarness)) {
+    throw new Error(disabledHarnessMessage(selectedHarness, !harness));
   }
 
   const exact = profiles.get(`${selectedHarness}-${role}`);

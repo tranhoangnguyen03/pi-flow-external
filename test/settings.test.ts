@@ -114,6 +114,15 @@ describe("external settings", () => {
     expect(invalid.diagnostics.join(" ")).toMatch(/defaultHarness|Unknown setting/);
   });
 
+  it("blocks delegation on a malformed disabledHarnesses list instead of guessing", () => {
+    const root = agentDir();
+    const loaded = loadExternalSettings(root);
+    writeFileSync(loaded.path, JSON.stringify({ version: 4, disabledHarnesses: "codex" }));
+    const invalid = loadExternalSettings(root);
+    expect(invalid.blocked).toBe(true);
+    expect(invalid.diagnostics.join(" ")).toMatch(/disabledHarnesses must be an array/);
+  });
+
   it("requires explicit conversion of a v1 file without rewriting it", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
@@ -211,7 +220,7 @@ describe("external settings", () => {
       expect(configured.flags.get("max-concurrent-subagents")?.default).toBe("");
       configured.values.set("max-concurrent-subagents", "7");
       const notices: string[] = [];
-      await configured.settingsCommand?.("settings", { cwd: root, isProjectTrusted: () => false, ui: { notify: (text: string) => notices.push(text) } });
+      await configured.settingsCommand?.("config", { cwd: root, isProjectTrusted: () => false, ui: { notify: (text: string) => notices.push(text) } });
       expect(notices.at(-1)).toContain("maxConcurrentSubagents: 7");
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

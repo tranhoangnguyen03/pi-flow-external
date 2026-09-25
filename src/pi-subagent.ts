@@ -17,6 +17,7 @@ import {
 import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
+  disabledHarnessMessage,
   filterExternalAgentProfiles,
   getSubagentProfiles,
   loadExternalCatalog,
@@ -74,7 +75,7 @@ export const agentToolParameters = Type.Object({
   })),
   harness: Type.Optional(Type.String({
     minLength: 1,
-    description: "Optional harness override: agy, claude, codex, grok, muse, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
+    description: "Optional harness override: agy, claude, codex, grok, muse, opencode, or a registered named pi-* harness. Omit to use the effective default harness: a trusted project override (.pi/pi-flow-external/settings.json) when present, else the global defaultHarness setting.",
   })),
   subagent_type: Type.Optional(Type.String({
     minLength: 1,
@@ -83,7 +84,7 @@ export const agentToolParameters = Type.Object({
   permission: Type.Optional(
     Type.Union([Type.Literal("readonly"), Type.Literal("edit"), Type.Literal("danger")], {
       description:
-        "Optional permission tier. Omit to use the global defaultPermission (danger unless changed). A role does not grant or limit this. codex and grok map it to --sandbox, claude maps it to a headless permission mode, muse maps it to approval/sandbox flags, and pi maps it to a curated tool list (not an OS sandbox). Antigravity accepts only danger; readonly and edit are rejected.",
+        "Optional permission tier. Omit to use the global defaultPermission (danger unless changed). A role does not grant or limit this. codex and grok map it to --sandbox, claude maps it to a headless permission mode, muse maps it to approval/sandbox flags, opencode uses native tool permission rules (not an OS sandbox), and pi maps it to a curated tool list (not an OS sandbox). Antigravity accepts only danger; readonly and edit are rejected.",
     }),
   ),
   max_budget_usd: Type.Optional(
@@ -155,7 +156,7 @@ interface CreateAgentToolOptions {
 }
 
 const PROGRESS_STATUSES: SubagentProgressNode["status"][] = ["queued", "running", "done", "error", "aborted"];
-const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy", "grok", "muse"];
+const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy", "grok", "muse", "opencode"];
 
 function shouldEnableProgress(ctx: ExtensionContext): boolean {
   if (!ctx.hasUI) {
@@ -383,7 +384,7 @@ function createAgentTool(
       const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
       const defaultHarness = requestedDefault.harness;
       if (params.role && !params.harness && !configuredHarnessNames.has(defaultHarness)) {
-        const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external harness create.`;
+        const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`;
         return textResult(error, {
           description: params.description,
           subagentType: "unknown",
@@ -397,7 +398,7 @@ function createAgentTool(
           role: params.role,
           harness: params.harness,
           subagentType: params.subagent_type,
-        }, defaultHarness, { configuredHarnessNames, harnessConfigs });
+        }, defaultHarness, { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return textResult(
@@ -616,7 +617,7 @@ function createAgentTool(
               subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
             },
             defaultHarness,
-            { configuredHarnessNames, harnessConfigs },
+            { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
           );
         } catch {
           profile = undefined;
@@ -826,8 +827,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const profiles = catalog.profiles;
       const harnessConfigs = catalog.harnessConfigs;
       const defaultHarness = resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness;
-      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()];
-      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && catalog.diagnostics.length ? `\nConfiguration diagnostics: ${catalog.diagnostics.join(" ")}` : ""}` };
+      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()].filter((name) => !catalog.disabledHarnesses.has(name));
+      const diagnostics = [...catalog.diagnostics, ...(catalog.disabledHarnesses.has(defaultHarness) ? [disabledHarnessMessage(defaultHarness, true)] : [])];
+      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && diagnostics.length ? `\nConfiguration diagnostics: ${diagnostics.join(" ")}` : ""}` };
     });
   };
 }

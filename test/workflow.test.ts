@@ -21,7 +21,7 @@ import { createWorkflowTool, toWorkflowSubagentDescriptor } from "../src/workflo
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { prepareWorkflowToolSource } from "../src/workflow/source.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
-import { resolveExternalProfile } from "../src/profiles.ts";
+import { loadExternalCatalog, resolveExternalProfile } from "../src/profiles.ts";
 import type { SubagentProfile } from "../src/types.ts";
 
 const META = "export const meta = { apiVersion: 1, name: 'wf', description: 'a workflow' };\n";
@@ -833,6 +833,36 @@ describe("runWorkflow", () => {
     expect(livePrompts).toEqual(["second changed"]);
     expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
     expect(secondRunEvents[0].runId).toBe("run_first");
+  });
+
+  it("re-applies current harness policy on resume so a disabled harness cannot replay from cache", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-wf-disabled-"));
+    try {
+      mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+      const settingsPath = join(root, "pi-flow-external", "settings.json");
+      const script = `${META}return await agent('review', { role: 'reviewer', harness: 'claude' });`;
+      const resolveFrom = () => {
+        const catalog = loadExternalCatalog(root);
+        return (selection: Parameters<typeof resolveExternalProfile>[1]) => resolveExternalProfile(catalog.profiles, selection, "agy", { disabledHarnesses: catalog.disabledHarnesses }).name;
+      };
+      writeFileSync(settingsPath, JSON.stringify({ version: 4 }));
+      const recorded: any[] = [];
+      await runWorkflow(script, { cwd: "/tmp", limiter: new ConcurrencyLimiter(1), runAgent: async () => "live", resolveSubagentType: resolveFrom(), onAgentResult: (event) => { recorded.push(event); } });
+      expect(recorded).toHaveLength(1);
+
+      writeFileSync(settingsPath, JSON.stringify({ version: 4, disabledHarnesses: ["claude"] }));
+      const runAgent = vi.fn<WorkflowAgentRunner>();
+      await expect(runWorkflow(script, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(1),
+        runAgent,
+        resolveSubagentType: resolveFrom(),
+        resumeAgentResults: recorded.map(({ index, fingerprint, result }) => ({ index, fingerprint, result })),
+      })).rejects.toThrow(/Harness "claude" is disabled/);
+      expect(runAgent).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("does not replay cached failed agent results on resume", async () => {

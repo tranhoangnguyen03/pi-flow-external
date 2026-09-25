@@ -19,12 +19,12 @@ afterEach(() => {
 });
 
 describe("built-in profiles with zero generated files", () => {
-  it("exposes the six-role roster for all five CLIs without writing profiles or seed markers", () => {
+  it("exposes the six-role roster for all six CLIs without writing profiles or seed markers", () => {
     const agentDir = tempAgentDir();
     const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
 
-    expect(defaultProfileNames()).toHaveLength(30);
-    expect(profiles.size).toBe(30);
+    expect(defaultProfileNames()).toHaveLength(36);
+    expect(profiles.size).toBe(36);
     expect([...profiles.keys()].sort()).toEqual([...defaultProfileNames()].sort());
     for (const name of defaultProfileNames()) {
       const profile = profiles.get(name);
@@ -38,6 +38,7 @@ describe("built-in profiles with zero generated files", () => {
     expect(profiles.get("agy-worker")?.description).toContain("Antigravity");
     expect(profiles.get("grok-worker")?.description).toContain("Grok CLI");
     expect(profiles.get("muse-worker")?.description).toContain("Muse Code");
+    expect(profiles.get("opencode-worker")?.description).toContain("OpenCode");
     expect(readdirSync(agentDir)).toEqual([]);
 
     getSubagentProfiles(agentDir);

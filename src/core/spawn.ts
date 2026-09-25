@@ -25,6 +25,7 @@ import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent, isTransientAgyFailure, normalizeAgyEffort } from "./agy.ts";
 import { spawnGrokSubagent, normalizeGrokReasoningEffort } from "./grok.ts";
 import { museHasNestedAgentActivity, spawnMuseSubagent, normalizeMuseReasoningEffort } from "./muse.ts";
+import { opencodeHasNestedAgentActivity, spawnOpencodeSubagent } from "./opencode.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -152,6 +153,10 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
 
   if (backend === "muse") {
     return museHasNestedAgentActivity(event);
+  }
+
+  if (backend === "opencode") {
+    return opencodeHasNestedAgentActivity(event);
   }
 
   return false;
@@ -703,6 +708,28 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       prompt: params.prompt,
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
+      ctx: params.ctx,
+      signal: params.signal,
+      progressEnabled: params.progressEnabled,
+      onProgress: params.onProgress,
+      onUsage: params.onUsage,
+      onBackendEvent: params.onBackendEvent,
+      onProcessStart: params.onProcessStart,
+      appendInstructions: params.appendInstructions,
+      outputSchema: params.outputSchema,
+      permission: params.permission,
+      resumeSessionId: params.resumeSessionId,
+      executionStartedAt: params.executionStartedAt,
+    });
+  }
+  if (params.profile.backend === "opencode") {
+    // The inherited thinking level is not forwarded: OpenCode variants are
+    // model-specific. A profile pin becomes `#variant` (see opencodeProfileProblem).
+    return spawnOpencodeSubagent({
+      toolCallId: params.toolCallId,
+      description: params.description,
+      prompt: params.prompt,
+      profile: params.profile,
       ctx: params.ctx,
       signal: params.signal,
       progressEnabled: params.progressEnabled,

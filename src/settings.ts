@@ -19,6 +19,8 @@ export type ExternalSettings = {
   version: 4;
   harnesses?: Record<string, HarnessConfig>;
   disabledProfiles?: string[];
+  /** Harness names (CLI or `pi-*`) excluded from selection. Definitions stay in place; unknown names are preserved. */
+  disabledHarnesses?: string[];
   /** One of EXTERNAL_HARNESSES, or a `pi-*` name (shape-validated here; live registry membership is checked at delegation time, not here). */
   defaultHarness: string;
   maxConcurrentSubagents: number;
@@ -40,6 +42,7 @@ const KNOWN_SETTING_KEYS = [
   "version",
   "harnesses",
   "disabledProfiles",
+  "disabledHarnesses",
   "defaultHarness",
   "maxConcurrentSubagents",
   "subagentTimeoutMs",
@@ -87,7 +90,7 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
   const record = value as Record<string, unknown>;
   const diagnostics: string[] = [];
   if (record.version !== 4) {
-    diagnostics.push("Settings require version 4. Run /external settings convert for an older installation.");
+    diagnostics.push("Settings require version 4. Run /external config convert for an older installation.");
   }
   for (const key of Object.keys(record)) {
     if (key === "piCapabilitySets") {
@@ -148,6 +151,10 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
     if (!Array.isArray(record.disabledProfiles) || record.disabledProfiles.some(v => typeof v !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(v))) diagnostics.push("disabledProfiles must be an array of execution identity names.");
     else settings.disabledProfiles = [...new Set(record.disabledProfiles as string[])];
   }
+  if (record.disabledHarnesses !== undefined) {
+    if (!Array.isArray(record.disabledHarnesses) || record.disabledHarnesses.some(v => typeof v !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(v))) diagnostics.push("disabledHarnesses must be an array of harness names.");
+    else settings.disabledHarnesses = [...new Set(record.disabledHarnesses as string[])];
+  }
   return { settings, diagnostics };
 }
 
@@ -169,7 +176,7 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
             return EXTERNAL_HARNESSES.includes(frontmatter.backend as ExternalHarness) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && (frontmatter.harness === "pi-*" || name.startsWith(`${frontmatter.harness}-`)));
           } catch { return /^(agy|claude|codex|grok|muse)-/.test(name); }
         }));
-        return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? ["Legacy configuration found. Run /external settings convert."] : [] };
+        return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? ["Legacy configuration found. Run /external config convert."] : [] };
       } catch (probeError) {
         return { path, settings: defaults(), blocked: true, diagnostics: [`Could not inspect legacy configuration: ${String(probeError)}`] };
       }
@@ -200,6 +207,14 @@ export function saveExternalSettings(agentDir: string, record: unknown, options:
     try { unlinkSync(staged); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   return path;
+}
+
+/** Validated read-modify-write: unrelated fields are preserved; blocked, malformed, or future-version files are refused. */
+export function updateExternalSettings(agentDir: string, mutate: (record: Record<string, unknown>) => Record<string, unknown>): string {
+  const current = loadExternalSettings(agentDir);
+  if (current.blocked) throw new Error(current.diagnostics.join(" "));
+  const raw: Record<string, unknown> = existsSync(current.path) ? JSON.parse(readFileSync(current.path, "utf8")) : { ...DEFAULT_EXTERNAL_SETTINGS };
+  return saveExternalSettings(agentDir, mutate(raw));
 }
 
 export function resolveExternalSettings(

@@ -3,7 +3,7 @@ import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile } from ".
 import { externalProfileRole, externalRoleAvailability } from "./profiles.ts";
 
 export const AGENT_PROMPT_SNIPPET =
-  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role.";
+  "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, OpenCode, or registered Pi harness role.";
 
 export const WORKFLOW_PROMPT_SNIPPET =
   "Run requested multi-agent orchestration with external roles; use external_help for syntax and saved workflows.";
@@ -92,7 +92,7 @@ export function buildCoordinatorPrompt(
 
 ${formatExternalRoleCatalog(profiles, defaultHarness, configuredHarnessNames)}
 
-Own the result and verify it yourself. Do the work directly unless a separate harness, a fresh context, or a bounded parallel review earns the overhead. A role is the job. A harness (agy, claude, codex, grok, muse, or a registered pi-* name) is the environment. Prefer the configured default harness unless the user asks for another or the task needs a capability the default lacks. Select both through Agent or workflow. Follow the user's own approval policy before widening a delegation. This extension has no fixed multi-agent approval threshold.
+Own the result and verify it yourself. Do the work directly unless a separate harness, a fresh context, or a bounded parallel review earns the overhead. A role is the job. A harness (${EXTERNAL_HARNESSES.join(", ")}, or a registered pi-* name) is the environment. Prefer the configured default harness unless the user asks for another or the task needs a capability the default lacks. Select both through Agent or workflow. Follow the user's own approval policy before widening a delegation. This extension has no fixed multi-agent approval threshold.
 
 Give every child an objective, the context it needs, the changes it may make, a deliverable, and the check you will run. Use absolute paths and say whether the task is read-only or may edit. Permission is the call's tier, otherwise defaultPermission (danger unless changed). Omit it when the child should keep that default, including a reviewer that may use a shell and still must not edit. A danger tier still has to stay inside the authorization the user gave you. agy accepts only danger and rejects readonly and edit.
 
@@ -100,7 +100,7 @@ Choose a fresh child or resume on purpose. Omit context for independent work. co
 
 Calls block unless background:true. Then supervise with external_runs and judge view "final" yourself. Same-harness parallel work shares one maxConcurrentSubagents cap: parallel([() => agent(...), ...]) or separate background Agent calls in one turn. Sequential awaits stay serial. Report milestones. Retry a failed run, or switch its model or harness, only when the user authorized that step. agy alone may make one disclosed infrastructure retry. Nested agents may start in another workspace.
 
-Catalog availability reflects built-in and authored roles, not CLI installation or authentication. Role selection never falls back. external_help topic usage is the playbook; roles, permissions, and workflow are the references.`;
+Catalog availability reflects enabled harnesses and built-in/authored roles, not CLI installation or authentication. Disabled harnesses reject calls without fallback; manage them through /external config. Role authoring stays under /external role. Role selection never falls back. external_help topic usage is the playbook; roles, permissions, and workflow are the references.`;
 }
 
 export interface UsageAgentExample {
@@ -209,7 +209,7 @@ A named pi-* harness runs in-process on the SDK's built-in tools. Preset minimal
 
 Tell each child the objective, the context it needs, what it may change, the deliverable, and how you will verify it. Use absolute paths. Say read-only or edit in the prompt. Omit permission to keep defaultPermission (danger unless changed), including a reviewer that may use a shell and still must not edit. Pass permission only to confine the call below that default. A danger tier stays inside the authorization the user already gave. Antigravity accepts only danger. Topic permissions is the harness-boundary reference. Topic roles lists descriptions. Topic workflow is the syntax and saved-workflow reference.
 
-Choose fresh context or resume deliberately. Omit context, or pass {"mode":"none"}, for independent work such as a review. {"mode":"recent","turns":N} and {"mode":"full"} share parent conversation and cannot be combined with resume. resume continues one prior CLI run that recorded a session id, on the same backend: claude, codex, agy, grok, or muse. A named pi-* harness has no persisted session, so resume does not continue it. Prefer resume for the same task and a new child when you want an independent judgment.
+Choose fresh context or resume deliberately. Omit context, or pass {"mode":"none"}, for independent work such as a review. {"mode":"recent","turns":N} and {"mode":"full"} share parent conversation and cannot be combined with resume. resume continues one prior CLI run that recorded a session id, on the same backend: ${EXTERNAL_HARNESSES.join(", ")}. A named pi-* harness has no persisted session, so resume does not continue it. Prefer resume for the same task and a new child when you want an independent judgment.
 
 Calls block until the child finishes. background true returns a run id while the originating session still owns the work. Use external_runs to wait, then read view final, and judge that answer yourself. A failed or aborted run stays failed. Retry it, or switch model or harness, only when the user authorized that step. agy may make one disclosed infrastructure retry; that exception is not yours to extend.
 

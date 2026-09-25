@@ -4,7 +4,7 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
-## [2.9.0-external.0] - 2026-09-25
+## [2.10.0-external.0] - 2026-09-25
 
 ### Added
 - Add paged Launch inspection through `external_runs` and `/external runs` for queued, active, and historical assignments, including recorded prompts, context, and execution configuration.
@@ -15,6 +15,18 @@ All notable changes to pi-flow external are documented here.
 - Make background Agent and workflow cards explicit launch receipts, with inspection routes and clearer workflow purpose, workspace, and access disclosure.
 - Improve card legibility with consistent label/value contrast, bounded source paths and run references, and expanded-only usage accounting.
 - Add run-detail refresh and recover from stale inspection pages without closing navigation.
+
+## [2.9.0-external.0] - 2026-09-25
+
+### Added
+
+- OpenCode (`opencode`) as a sixth CLI backend, with JSONL progress, verified-final-step completion, session resume, native root-step usage, cancellation, and durable receipts. Targets OpenCode 2 only (verified against `@opencode/cli` 2.0.16); OpenCode 1.x is not supported. Every run uses `--standalone`, a private server the run owns, and never touches the shared background service. Success is verified from the persisted session export: a new user turn for this prompt, a `succeeded` idle outcome, and a clean final assistant message whose text is the result. It never relies on the zero exit code or streamed narration alone. Restricted tiers use native deny-by-default tool rules, not an OS sandbox, and select their agent with `--agent` on every run, including resumes. Unsafe resumes (a restricted resume of a session with its own permission rules, or a danger resume of a restricted session) are refused. A pinned thinking level is passed as the pinned model's `#variant`, which OpenCode validates. Structured schemas are rejected. Nested-subagent total cost is unknown, and budgets are unenforceable.
+- Whole-harness toggles through `/external config enable|disable <harness>` and settings v4 `disabledHarnesses`. Disabling preserves definitions, hides executable availability, and rejects direct/exact/resumed selections and new workflow replay without fallback. Active work retains its snapshot. `/external config default <harness>` selects an enabled global default; doctor skips disabled readiness checks.
+
+### Changed — command migration
+
+- Harness-centric configuration is consolidated under `/external config`. Replace `/external settings`, `settings edit`, and `settings convert` with `/external config`, `config edit`, and `config convert`; replace `/external harnesses` and `/external harness create` with `/external config harnesses` and `/external config harness create`. Old routes are removed, not aliases. `/external role …`, runs, workflows, and optional purge remain separate.
+- Existing v4 installations need no new storage conversion. Pre-v4 conversion is still explicit, keeps originals, and is available through `/external config convert`. Documentation, command help, tool descriptions, and coordinator guidance use the new surface.
 
 ## [2.8.0-external.0] - 2026-09-24
 

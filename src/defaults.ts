@@ -9,13 +9,14 @@ import type { SubagentBackend, SubagentProfile } from "./types.ts";
  * Role bodies themselves live in default-roles.ts, the one canonical source
  * also used to synthesize the same six roles for named Pi harness configs.
  */
-const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok", "muse"];
+const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok", "muse", "opencode"];
 const BACKEND_LABELS: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
   agy: "Antigravity",
   grok: "Grok CLI",
   muse: "Muse Code",
+  opencode: "OpenCode",
 };
 
 export function defaultProfileNames(): string[] {
