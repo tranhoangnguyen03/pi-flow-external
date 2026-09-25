@@ -32,7 +32,7 @@ const SMOKE_TOKEN = "PI_FLOW_PROFILE_OK";
 
 export const ROLE_INTERVIEW_PROMPT = `Help me create one reusable pi-flow external role through an AI-assisted interview.
 
-A role is shared authoring only: one markdown file under pi-flow-external/roles/ that works with any harness (agy, claude, codex, grok, muse, or a registered pi-* harness). Ask one question at a time, only when the answer is not already known. Collect enough information to write a focused role: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. Suggest a lowercase role name such as security-reviewer (no backend prefix; naming it reviewer replaces the built-in reviewer across harnesses).
+A role is shared authoring only: one markdown file under pi-flow-external/roles/ that works with any harness (agy, claude, codex, grok, muse, opencode, or a registered pi-* harness). Ask one question at a time, only when the answer is not already known. Collect enough information to write a focused role: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. Suggest a lowercase role name such as security-reviewer (no backend prefix; naming it reviewer replaces the built-in reviewer across harnesses).
 
 Describe read-only or editing intent in the instructions. Do not ask for a permission tier: a role does not grant authority. The caller passes permission, or the global defaultPermission applies. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific customizations belong in an exact override created later via /external role override. When ready, summarize once and call ${ROLE_TOOL_NAME}.
 
@@ -134,7 +134,7 @@ export function compileProfile(profile: SubagentProfile): string {
   const isExternalCli = (EXTERNAL_HARNESSES as readonly string[]).includes(profile.backend);
   const isPiHarnessProfile = profile.backend === "pi" && profile.harness !== undefined;
   if (!isExternalCli && !isPiHarnessProfile) {
-    throw new Error("Profile backend must be claude, codex, agy, grok, muse, or a registered pi-* harness name.");
+    throw new Error("Profile backend must be claude, codex, agy, grok, muse, opencode, or a registered pi-* harness name.");
   }
   if (isPiHarnessProfile && !isValidHarnessName(profile.harness!)) {
     throw new Error(`Harness name must match pi-[a-z0-9][a-z0-9-]* (got ${JSON.stringify(profile.harness)}).`);
@@ -354,7 +354,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const harnessTool = defineTool({
     name: HARNESS_TOOL_NAME,
     label: "Create named Pi harness",
-    description: "Finalize a new named Pi harness configuration during the /external harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
+    description: "Finalize a new named Pi harness configuration during the /external config harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
     parameters: harnessParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const name = params.name.trim();

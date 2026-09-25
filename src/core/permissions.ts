@@ -116,6 +116,22 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
               ? "sandbox stays enabled; only approval is bypassed"
               : undefined,
       };
+    case "opencode":
+      // readonly/edit run under an injected OpenCode 2 agent whose permission
+      // rules deny every tool but the tier's file tools (see opencode.ts).
+      // These are OpenCode's own application rules, not an OS sandbox, and
+      // project/user plugins and MCP servers still load and run their code.
+      return {
+        tier,
+        enforced: true,
+        backend,
+        caveat:
+          tier === "readonly"
+            ? "read/grep/glob tools only; OpenCode permission rules, not an OS sandbox"
+            : tier === "edit"
+              ? "file read/edit tools only, no shell; OpenCode permission rules, not an OS sandbox"
+              : undefined,
+      };
     case "pi":
       // A curated builtins-only tool surface bounds which tool *names* exist
       // (see spawn.ts's pi branch); it is a real, truthful tool-level
@@ -170,6 +186,11 @@ export function buildPermissionArgs(
       if (tier === "readonly") return ["--disable-approval", "--disable-write", "--disable-shell"];
       if (tier === "edit") return ["--disable-approval"];
       return ["--yolo"];
+    case "opencode":
+      // readonly/edit are enforced through the injected agent's rules
+      // (buildOpencodeEnv); unanswered permission asks are auto-rejected
+      // headlessly. danger auto-approves asks but keeps explicit denies.
+      return tier === "danger" ? ["--auto"] : [];
     default:
       return [];
   }

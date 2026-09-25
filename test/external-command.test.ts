@@ -67,8 +67,8 @@ describe("/external command", () => {
         registerExternalCommand(pi as never, options as never);
 
         expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-          "doctor", "settings", "settings edit", "settings convert", "harnesses", "harness create", "roles",
-          "role create", "role inspect", "role override", "[danger]purge-old-files",
+          "doctor", "config", "config edit", "config convert", "config harnesses", "config harness create",
+          "config enable", "config disable", "config default", "roles", "role create", "role inspect", "role override", "[danger]purge-old-files",
           "workflows", "runs", "runs summary", "runs --prune", "help",
         ]);
         expect(command?.getArgumentCompletions("role")?.map((item) => item.value)).toEqual([
@@ -81,16 +81,16 @@ describe("/external command", () => {
         // Overview names the default, role/harness counts, and settings path.
         await command?.handler("", ctx);
         expect(notices.at(-1)).toContain("Default: agy (global)");
-        expect(notices.at(-1)).toContain("Harnesses: 5 CLI");
+        expect(notices.at(-1)).toContain("Harnesses: 6 CLI");
         expect(notices.at(-1)).toContain(options.settings.path);
 
         // Roles groups by role instead of dumping the harness × role product.
         await command?.handler("roles", ctx);
-        expect(notices.at(-1)).toContain("reviewer: 5 harness(es)");
+        expect(notices.at(-1)).toContain("reviewer: 6 harness(es)");
         expect(notices.at(-1)).not.toContain("claude-reviewer: claude");
 
         // Harness creation routes to the harness interview, role creation to the role interview.
-        await command?.handler("harness create", ctx);
+        await command?.handler("config harness create", ctx);
         expect(options.startHarnessInterview).toHaveBeenCalledOnce();
         await command?.handler("role create", ctx);
         expect(options.startRoleInterview).toHaveBeenCalledOnce();
@@ -100,6 +100,11 @@ describe("/external command", () => {
         expect(notices.at(-1)).toContain("Usage: /external doctor");
         expect(notices.at(-1)).not.toContain("Removed:");
         await command?.handler("profile create", ctx);
+        expect(notices.at(-1)).toContain("Usage: /external doctor");
+        // Superseded settings/harness routes are not aliases either.
+        await command?.handler("settings", ctx);
+        expect(notices.at(-1)).toContain("Usage: /external doctor");
+        await command?.handler("harness create", ctx);
         expect(notices.at(-1)).toContain("Usage: /external doctor");
         expect(options.startRoleInterview).toHaveBeenCalledOnce();
         expect(options.startHarnessInterview).toHaveBeenCalledOnce();
@@ -123,16 +128,16 @@ describe("/external command", () => {
 
         const notices: string[] = [];
         const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
-        await command?.handler("settings", ctx);
+        await command?.handler("config", ctx);
         expect(notices.at(-1)).toContain("maxConcurrentSubagents: 4");
         expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
         expect(notices.at(-1)).toContain(options.settings.path);
 
         mkdirSync(join(root, ".pi", "pi-flow-external"), { recursive: true });
         writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
-        await command?.handler("settings", { ...ctx, isProjectTrusted: () => true });
+        await command?.handler("config", { ...ctx, isProjectTrusted: () => true });
         expect(notices.at(-1)).toContain("defaultHarness: claude (project: ");
-        await command?.handler("settings", ctx);
+        await command?.handler("config", ctx);
         expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
         expect(notices.at(-1)).toMatch(/not trusted/);
 
@@ -141,9 +146,64 @@ describe("/external command", () => {
         expect(notices.at(-1)).toContain("CLI: available (claude 1.2.3)");
         expect(exec).toHaveBeenCalledWith("claude", ["--version"], { timeout: 10_000 });
 
-        await command?.handler("harnesses", ctx);
-        expect(notices.at(-1)).toContain("CLI harnesses: agy, claude, codex, grok, muse");
-        expect(notices.at(-1)).toContain("Pi harnesses: none configured");
+        await command?.handler("config harnesses", ctx);
+        expect(notices.at(-1)).toContain("- codex · CLI · enabled");
+        expect(notices.at(-1)).toContain("no named Pi harnesses");
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("toggles harnesses and the default through the validated writer, guarding the effective default and skipping disabled readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-toggle-"));
+    const settingsPath = join(root, "pi-flow-external", "settings.json");
+    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } }));
+    try {
+      await withAgentDir(root, async () => {
+        let command: { getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null; handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+        const exec = vi.fn(async () => ({ code: 0, killed: false, stdout: "v1\n", stderr: "" }));
+        const pi = { exec, registerCommand: (_name: string, options: typeof command) => { command = options; } };
+        registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root) }) as never);
+        const notices: string[] = [];
+        const find = vi.fn(() => undefined);
+        const ctx = { cwd: root, isProjectTrusted: () => false, modelRegistry: { find }, ui: { notify: (message: string) => notices.push(message) } };
+        const saved = () => JSON.parse(readFileSync(settingsPath, "utf8"));
+
+        expect(command?.getArgumentCompletions("config disable pi")?.map((item) => item.value)).toEqual(["config disable pi-check"]);
+
+        // The effective default cannot be disabled, and a disabled harness cannot become the default.
+        await command?.handler("config disable agy", ctx);
+        expect(notices.at(-1)).toMatch(/Cannot disable "agy".*config default/);
+        await command?.handler("config disable nope", ctx);
+        expect(notices.at(-1)).toMatch(/Unknown harness "nope"/);
+        await command?.handler("config disable codex", ctx);
+        await command?.handler("config disable pi-check", ctx);
+        await command?.handler("config default codex", ctx);
+        expect(notices.at(-1)).toMatch(/Cannot make "codex" the default.*config enable codex/);
+        expect(saved()).toEqual({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli", "codex", "pi-check"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } });
+
+        await command?.handler("config harnesses", ctx);
+        expect(notices.at(-1)).toContain("- codex · CLI · disabled");
+        expect(notices.at(-1)).toContain("- pi-check · Pi (test/model · default thinking · minimal) · disabled");
+        expect(notices.at(-1)).toContain("- future-cli · unknown · disabled");
+
+        // Doctor skips readiness probes for disabled CLI and Pi harnesses.
+        await command?.handler("doctor", ctx);
+        expect(exec.mock.calls.map((call) => (call as unknown[])[0])).not.toContain("codex");
+        expect(find).not.toHaveBeenCalled();
+        expect(notices.at(-1)).toContain("○ codex: disabled (readiness not checked)");
+
+        // A project default is also guarded; enabling an unknown preserved name removes only that name.
+        mkdirSync(join(root, ".pi", "pi-flow-external"), { recursive: true });
+        writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
+        await command?.handler("config disable claude", { ...ctx, isProjectTrusted: () => true });
+        expect(notices.at(-1)).toMatch(/Cannot disable "claude": it is the project default/);
+        await command?.handler("config enable future-cli", ctx);
+        await command?.handler("config enable codex", ctx);
+        await command?.handler("config default codex", ctx);
+        expect(saved()).toMatchObject({ defaultHarness: "codex", futureField: { keep: true }, disabledHarnesses: ["pi-check"] });
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -256,7 +316,7 @@ describe("/external command", () => {
           hasUI: true,
           ui: { notify: (message: string) => notices.push(message), editor: vi.fn(async (_title: string, content: string) => content) },
         };
-        await command?.handler("settings edit", unchangedCtx);
+        await command?.handler("config edit", unchangedCtx);
         expect(notices.at(-1)).toContain("unchanged");
         expect(saved).toHaveLength(0);
 
@@ -266,7 +326,7 @@ describe("/external command", () => {
           hasUI: true,
           ui: { notify: (message: string) => notices.push(message), editor: vi.fn(async () => "{not json") },
         };
-        await command?.handler("settings edit", invalidCtx);
+        await command?.handler("config edit", invalidCtx);
         expect(notices.at(-1)).toContain("not valid JSON");
         expect(saved).toHaveLength(0);
 
@@ -277,7 +337,7 @@ describe("/external command", () => {
           hasUI: true,
           ui: { notify: (message: string) => notices.push(message), editor: vi.fn(async () => valid) },
         };
-        await command?.handler("settings edit", validCtx);
+        await command?.handler("config edit", validCtx);
         expect(saved).toHaveLength(1);
         expect(saved[0]).toMatchObject({ agentDir: root, options: { repair: true } });
         expect(saved[0]!.record).toEqual({ version: 4, defaultHarness: "claude" });
@@ -311,7 +371,7 @@ describe("/external command", () => {
           hasUI: true,
           ui: { notify: (message: string) => notices.push(message), editor: vi.fn(async () => valid) },
         };
-        await command?.handler("settings edit", ctx);
+        await command?.handler("config edit", ctx);
         expect(notices.at(-1)).toContain("Settings saved to");
         expect(JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8"))).toEqual({ version: 4, defaultHarness: "codex" });
       });
@@ -339,7 +399,7 @@ describe("/external command", () => {
           hasUI: true,
           ui: { notify: (message: string) => notices.push(message), editor: vi.fn(async () => valid) },
         };
-        await command?.handler("settings edit", ctx);
+        await command?.handler("config edit", ctx);
         expect(notices.at(-1)).toContain("Settings not saved:");
         expect(JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8")).version).toBe(2);
       });
@@ -367,7 +427,7 @@ describe("/external command", () => {
         const notices: string[] = [];
         const confirm = vi.fn(async () => true);
         const ctx = { cwd: root, isProjectTrusted: () => false, hasUI: true, ui: { notify: (message: string) => notices.push(message), confirm } };
-        await command?.handler("settings convert", ctx);
+        await command?.handler("config convert", ctx);
         expect(confirm).toHaveBeenCalledOnce();
         expect(notices.at(-1)).toContain("Conversion applied");
         expect(notices.at(-1)).toContain("Values apply from the next invocation; frozen workflows keep their prior snapshot");
@@ -379,7 +439,7 @@ describe("/external command", () => {
         expect(existsSync(join(root, "subagents", "claude-security-reviewer.md"))).toBe(true);
 
         // A second run reports current instead of converting again.
-        await command?.handler("settings convert", ctx);
+        await command?.handler("config convert", ctx);
         expect(notices.at(-1)).toContain("already version 4");
       });
     } finally {
@@ -405,7 +465,7 @@ describe("/external command", () => {
 
         const notices: string[] = [];
         const ctx = { cwd: root, isProjectTrusted: () => false, hasUI: true, ui: { notify: (message: string) => notices.push(message), confirm: vi.fn(async () => false) } };
-        await command?.handler("settings convert", ctx);
+        await command?.handler("config convert", ctx);
         expect(notices.at(-1)).toContain("cancelled");
         expect(JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8")).version).toBe(2);
         expect(existsSync(join(root, "pi-flow-external", "overrides", "claude-security-reviewer.md"))).toBe(false);

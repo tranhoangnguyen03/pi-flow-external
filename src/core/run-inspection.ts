@@ -7,6 +7,7 @@ import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
 import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
 import { museActivityFromEvent } from "./muse.ts";
+import { extractOpencodeText, opencodeActivityFromEvent } from "./opencode.ts";
 import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
@@ -471,7 +472,7 @@ function summaryProjection(runId: string, summary: SummaryState, observation: Ru
   };
 }
 
-function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok" | "muse"; id?: string; text: string }) | undefined {
+function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "agy" | "pi" | "grok" | "muse" | "opencode"; id?: string; text: string }) | undefined {
   if (event.type !== "backend_event") return undefined;
   const envelope = asRecord(event.data);
   const backendEvent = asRecord(envelope?.event);
@@ -505,6 +506,12 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     const text = typeof payload?.text === "string" ? payload.text : undefined;
     return text ? { kind: "muse", text } : undefined;
   }
+  if (envelope?.backend === "opencode") {
+    // Each text event is one complete part, so it is its own item.
+    const text = extractOpencodeText(backendEvent);
+    const id = asString(asRecord(backendEvent.part)?.id);
+    return text ? { kind: "opencode", ...(id ? { id } : {}), text } : undefined;
+  }
   if (envelope?.backend === "pi" && backendEvent.type === "message_end") {
     const message = asRecord(backendEvent.message);
     if (message?.role === "assistant") {
@@ -525,6 +532,7 @@ function activityFromEvent(event: EvidenceEvent): string | undefined {
   if (envelope?.backend === "agy") return agyActivityFromEvent(backendEvent);
   if (envelope?.backend === "grok") return grokActivityFromEvent(backendEvent);
   if (envelope?.backend === "muse") return museActivityFromEvent(backendEvent);
+  if (envelope?.backend === "opencode") return opencodeActivityFromEvent(backendEvent);
   return undefined;
 }
 

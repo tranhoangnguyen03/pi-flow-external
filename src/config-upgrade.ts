@@ -1011,7 +1011,7 @@ function version4Active(root: string): { ok: true } | { ok: false; diagnostic: s
   const path = settingsPath(root);
   const read = readRegular(path);
   if (read.kind !== "file") {
-    return { ok: false, diagnostic: `Purge requires settings version 4 at ${path}. Run /external settings convert to upgrade this installation.` };
+    return { ok: false, diagnostic: `Purge requires settings version 4 at ${path}. Run /external config convert to upgrade this installation.` };
   }
   try {
     const parsed = JSON.parse(read.bytes.toString("utf8"));
@@ -1019,7 +1019,7 @@ function version4Active(root: string): { ok: true } | { ok: false; diagnostic: s
   } catch {
     // The version is unreadable, so the conversion is not active.
   }
-  return { ok: false, diagnostic: `Purge requires settings version 4 at ${path}. Run /external settings convert to upgrade this installation.` };
+  return { ok: false, diagnostic: `Purge requires settings version 4 at ${path}. Run /external config convert to upgrade this installation.` };
 }
 
 function purgeCandidates(root: string): { diagnostics: string[]; candidates: LegacyPurgeCandidate[] } {

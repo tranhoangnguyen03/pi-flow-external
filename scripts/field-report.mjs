@@ -57,7 +57,7 @@ async function loadRecord(baseDirectory, runId) {
     const eventCount = finite(document.eventCount);
     const attemptedEventCount = finite(document.attemptedEventCount);
     const backendEventCount = events.filter((event) => event.type === "backend_event").length;
-    if (!["claude", "codex", "agy", "grok", "muse"].includes(summary.backend)) problems.push("missing or unknown backend");
+    if (!["claude", "codex", "agy", "grok", "muse", "opencode"].includes(summary.backend)) problems.push("missing or unknown backend");
     if (typeof summary.profile !== "string" || !summary.profile) problems.push("missing profile");
     if (!["done", "error", "aborted"].includes(summary.status)) problems.push("missing or unknown status");
     if (writeErrorCount === undefined) problems.push("missing write error count");

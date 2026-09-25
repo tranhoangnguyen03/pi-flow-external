@@ -260,6 +260,15 @@ describe("tier enforcement resolution", () => {
     expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
   });
 
+  it("discloses opencode restricted tiers as application rules, not an OS sandbox", () => {
+    for (const tier of ["readonly", "edit"] as const) {
+      const resolution = resolvePermission(tier, "opencode");
+      expect(resolution.enforced).toBe(true);
+      expect(permissionLabel(resolution)).toContain("not an OS sandbox");
+    }
+    expect(permissionLabel(resolvePermission("danger", "opencode"))).toBe("unsandboxed external CLI");
+  });
+
   it("drops non-finite budgets instead of emitting them as CLI flags", () => {
     const args = buildClaudeArgs({
       profile: profile("claude"),
