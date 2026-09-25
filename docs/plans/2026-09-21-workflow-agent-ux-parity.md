@@ -72,7 +72,7 @@ On `background===true`, snapshot should be `status:"running"` is wrong — set `
 
 #### 6) `src/external-runs.ts` — Minimal `renderResult` (no JSON wall)
 Add `renderResult` that checks `details.outcomes`:
-* Each outcome → `renderSubagentNode`-like line via shared helper `formatOutcomeLine(outcome)` (reuse `formatDuration`/`formatTokens` from `subagent-render`): `✓/✗ run_<8> kind status duration -> preview(120ch)`. 
+* Each outcome → `renderSubagentNode`-like line via shared helper `formatOutcomeLine(outcome)` (reuse `formatDuration`/`formatTokens` from `subagent-render`): `✓/✗ run_<8> kind status duration -> preview(120ch)`.
 * Keep raw JSON only as fallback when `view !== "wait"`. This makes `wait` look like a collapsed Agent list without changing the wire `content`.
 
 #### 7) `src/external-runs.ts` — Live wait heartbeat (optional, low cost)
