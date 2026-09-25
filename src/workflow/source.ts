@@ -12,6 +12,7 @@ import {
   type WorkflowRunIdentity,
 } from "./journal.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
+import { redactSecrets } from "../core/run-record.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedAgentResult, WorkflowMetaPhase } from "./types.ts";
 
@@ -56,6 +57,7 @@ export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 
 export type PreparedWorkflowToolSource = {
   script: string;
+  launch: unknown;
   metaName: string;
   plannedPhases?: WorkflowMetaPhase[];
   source: "inline" | "saved" | "path";
@@ -309,10 +311,17 @@ export async function prepareWorkflowToolSource(
     resumeAgentResults = journal.agentResults;
   }
 
+  const launch = redactSecrets({
+    name: metaName, description: parseWorkflowScript(script).meta.description,
+    source: source.source, sourcePath: source.sourcePath, script, args: params.args,
+    workspace: project, mode: params.background ? "background" : "foreground",
+    plannedPhases, resumeFromRunId,
+  });
   let journalWriter: WorkflowJournalWriter | undefined;
   if (sessionWorkflowDir) {
     try {
       journalWriter = await createWorkflowJournalWriter({
+        launch,
         dir: sessionWorkflowDir,
         identity,
         name: metaName,
@@ -339,6 +348,7 @@ export async function prepareWorkflowToolSource(
   return {
     ok: true,
     value: {
+      launch,
       script,
       metaName,
       plannedPhases,

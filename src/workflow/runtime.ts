@@ -235,7 +235,7 @@ export async function runWorkflow<T = unknown>(
     state.resumePrefixActive = false;
 
     // Queue on the shared global cap. May reject if aborted while waiting.
-    const queuedEvent: WorkflowAgentQueuedEvent = { index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context };
+    const queuedEvent: WorkflowAgentQueuedEvent = { permission: call.permission, maxBudgetUsd: call.maxBudgetUsd, schema: call.schema, authoredPrompt: originalPrompt, index, label, phase: assignedPhase, subagentType, prompt: taskPrompt, context: briefing.context };
     await options.onAgentQueued?.(queuedEvent);
     const runRecord = queuedEvent.runRecord;
     if (runRecord) call.runRecord = runRecord;

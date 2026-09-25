@@ -1,7 +1,7 @@
 import type { ParentContextMessages, ParentContextReceipt } from "../core/parent-context.ts";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import type { RunRecord } from "../core/run-record.ts";
-import type { SubagentAssistantOutput } from "../types.ts";
+import type { PermissionTier, SubagentAssistantOutput } from "../types.ts";
 
 export type ChildRunOutcome = "failed" | "cancelled" | "timed_out";
 
@@ -112,6 +112,10 @@ export interface WorkflowAgentResultEvent extends WorkflowCachedAgentResult {
 }
 
 export interface WorkflowAgentQueuedEvent {
+  permission?: PermissionTier;
+  maxBudgetUsd?: number;
+  schema?: unknown;
+  authoredPrompt?: string;
   index: number;
   label: string;
   phase?: string;

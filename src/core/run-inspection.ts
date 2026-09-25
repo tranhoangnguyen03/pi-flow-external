@@ -17,7 +17,7 @@ const MAX_CURSOR_CHARS = 4096;
 const MAX_LIST_SCAN = 200;
 const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{1,128}$/;
 
-export type RunInspectionView = "output" | "diagnostics" | "summary" | "final";
+export type RunInspectionView = "output" | "diagnostics" | "summary" | "final" | "launch";
 export type RunRecordIntegrity = "complete" | "incomplete" | "damaged";
 export type RunOutputStatus = "preliminary" | "final" | "interrupted";
 
@@ -98,6 +98,8 @@ interface EvidenceEvent { runId?: string; sequence?: number; timestamp?: string;
 interface CompleteLine { start: number; end: number; text: string }
 interface ScanResult { missing: boolean; stopped: boolean; truncatedTail: boolean; malformed: boolean; endPosition: number }
 interface RunObservation {
+  launch?: Record<string, unknown>;
+  applied?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   queuedAt?: string;
   executionStartedAt?: string;
@@ -115,10 +117,12 @@ export async function inspectRun({
   view,
   limitBytes = DEFAULT_PAGE_BYTES,
   cursor,
+  live = false,
 }: {
   runsDirectory: string;
   runId: string;
   view: RunInspectionView;
+  live?: boolean;
   limitBytes?: number;
   cursor?: string;
 }): Promise<RunInspectionPage> {
@@ -136,10 +140,16 @@ export async function inspectRun({
   const terminalStatus = asString(terminal?.status);
   const finalAvailable = isFinalAvailable(terminal);
 
-  if (view === "summary") {
+  if (view === "summary" || view === "launch") {
     if (decoded?.kind === "inspect" && decoded.source !== "summary") throw new Error("Cursor source does not match summary view");
     const observation = await readObservation(eventsPath, runId);
-    const text = JSON.stringify(summaryProjection(runId, summary, observation));
+    const text = JSON.stringify(view === "launch" ? {
+      runId,
+      intent: asRecord(summary.document?.metadata) ?? observation.metadata ?? "Evidence pending or unavailable",
+      execution: observation.launch ?? (terminal?.backendStarted === false ? "Never started" : summary.document ? "Not recorded" : live ? "Pending — execution settings not recorded yet" : "Interrupted or uncertain — launch settings unavailable"),
+      applied: observation.applied ?? "Not recorded; see execution for CLI settings",
+      backendInternalContext: "Not observable by this extension",
+    } : summaryProjection(runId, summary, observation), null, view === "launch" ? 2 : undefined);
     const revision = contentRevision(text);
     if (decoded?.kind === "inspect" && decoded.revision !== revision) throw staleCursorError();
     const offset = decoded?.kind === "inspect" ? decoded.textOffset : 0;
@@ -402,6 +412,10 @@ async function readObservation(eventsPath: string, runId: string): Promise<RunOb
     if (event.type === "run_started") {
       observation.metadata = asRecord(event.data);
       observation.queuedAt = asString(observation.metadata?.queuedAt) ?? event.timestamp;
+    } else if (event.type === "launch_resolved") {
+      observation.launch ??= asRecord(event.data);
+    } else if (event.type === "launch_applied") {
+      observation.applied ??= asRecord(event.data);
     } else if (event.type === "execution_started") {
       observation.executionStartedAt ??= event.timestamp;
     } else if (event.type === "process_started") {
@@ -839,7 +853,7 @@ function hasKeys(value: Record<string, unknown>, keys: string[]): boolean {
 }
 
 function isView(value: unknown): value is RunInspectionView {
-  return value === "output" || value === "diagnostics" || value === "summary" || value === "final";
+  return value === "output" || value === "diagnostics" || value === "summary" || value === "final" || value === "launch";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

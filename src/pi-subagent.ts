@@ -448,12 +448,16 @@ function createAgentTool(
           project,
           description: params.description,
           prompt: briefing.prompt,
+          authoredPrompt: params.prompt,
+          plannedConfiguration: { roleInstructions: profile.systemPrompt, model: profile.model, thinking: thinkingLevel, tools: profile.tools, permissionRequested: params.permission ?? "default", timeoutMs, maxBudgetUsd },
+          context: briefing.context ?? { mode: "none" },
           profile: profile.name,
           backend: profile.backend,
           harness: selectorHarness(profile),
           queuedAt: new Date(queuedAt).toISOString(),
         },
       });
+      await runRecord.event("intent_ready");
       const progress = createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend, selectorHarness(profile));
       progress.context = briefing.context;
       progress.queuedAt = queuedAt;
@@ -589,6 +593,7 @@ function createAgentTool(
           runId: runRecord.runId,
           recordPath: runRecord.directory,
           progress,
+          backgroundReceipt: true,
         },
       );
     },
@@ -639,14 +644,16 @@ function createAgentTool(
       const lines = [
         `${theme.bold("Delegating")} ${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", `→ ${subagentType}`)} · ${theme.fg("warning", tierLabel)}`,
         description ? `${theme.fg("muted", "Task")} ${description}` : "",
-        profile?.description ? `${theme.fg("muted", "Why")} ${profile.description}` : "",
+        profile?.description ? `${theme.fg("muted", "Role")} ${profile.description}` : "",
         formatSharedContext(args.context) ? `${theme.fg("muted", "Context")} ${formatSharedContext(args.context)}` : "",
         context.cwd ? `${theme.fg("muted", "Workspace")} ${context.cwd}` : "",
+        `${theme.fg("muted", "Mode")} ${args.background ? "Background" : "Foreground"}`,
       ].filter(Boolean);
       return new Text(lines.join("\n"), 0, 0);
     },
     renderResult(result, { expanded }, theme) {
       const details = result.details as SubagentToolDetails;
+      if (details.backgroundReceipt) return new Text(`${theme.bold("Started in background")}\n${theme.fg("muted", "Launch receipt — not a live monitor")}\n${theme.fg("muted", "Run")} ${expanded ? details.runId : details.runId?.slice(-8)} · ${theme.fg("accent", "/external runs")} ${theme.fg("muted", "to inspect or follow")}`, 0, 0);
       return renderSubagentNode(
         details.progress ?? details,
         theme,

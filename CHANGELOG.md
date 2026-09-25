@@ -4,7 +4,20 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+## [2.10.0-external.0] - 2026-09-25
+
+### Added
+- Add paged Launch inspection through `external_runs` and `/external runs` for queued, active, and historical assignments, including recorded prompts, context, and execution configuration.
+- Record requested settings and applied Pi SDK tools/thinking/context, and preserve workflow source and arguments in redacted launch evidence.
+- Document the delegation experience north star and visual guidelines.
+
+### Changed
+- Make background Agent and workflow cards explicit launch receipts, with inspection routes and clearer workflow purpose, workspace, and access disclosure.
+- Improve card legibility with consistent label/value contrast, bounded source paths and run references, and expanded-only usage accounting.
+- Add run-detail refresh and recover from stale inspection pages without closing navigation.
+
 ## [2.9.0-external.0] - 2026-09-25
+
 ### Added
 
 - OpenCode (`opencode`) as a sixth CLI backend, with JSONL progress, verified-final-step completion, session resume, native root-step usage, cancellation, and durable receipts. Targets OpenCode 2 only (verified against `@opencode/cli` 2.0.16); OpenCode 1.x is not supported. Every run uses `--standalone`, a private server the run owns, and never touches the shared background service. Success is verified from the persisted session export: a new user turn for this prompt, a `succeeded` idle outcome, and a clean final assistant message whose text is the result. It never relies on the zero exit code or streamed narration alone. Restricted tiers use native deny-by-default tool rules, not an OS sandbox, and select their agent with `--agent` on every run, including resumes. Unsafe resumes (a restricted resume of a session with its own permission rules, or a danger resume of a restricted session) are refused. A pinned thinking level is passed as the pinned model's `#variant`, which OpenCode validates. Structured schemas are rejected. Nested-subagent total cost is unknown, and budgets are unenforceable.

@@ -34,6 +34,38 @@ afterEach(async () => {
 });
 
 describe("run evidence inspection", () => {
+  it("pages launch evidence while active without mixing backend events or rereading configuration", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root, metadata: { prompt: "Inspect the repository", profile: "reviewer" } });
+    const config = { model: "original-model", apiKey: "private-value" };
+    await record.event("launch_resolved", config);
+    config.model = "changed-model";
+    await record.event("backend_event", { text: "not launch data" });
+    let cursor: string | undefined;
+    let text = "";
+    let pages = 0;
+    do {
+      const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "launch", limitBytes: 40, cursor });
+      text += page.items.map(item => item.text).join("");
+      cursor = page.nextCursor;
+      expect(++pages).toBeLessThan(100);
+    } while (cursor);
+    expect(text).toContain("Inspect the repository");
+    expect(text).toContain("original-model");
+    expect(text).not.toMatch(/changed-model|private-value|not launch data/);
+    expect(text).toContain("[REDACTED]");
+    const old = createRunRecord({ directory: root, metadata: { prompt: "Historical task" } });
+    await old.finish({ status: "done", result: "done" });
+    const legacy = await inspectRun({ runsDirectory: root, runId: old.runId, view: "launch" });
+    expect(legacy.items[0]?.text).toContain("Not recorded");
+    const waiting = createRunRecord({ directory: root, metadata: { prompt: "queued" } });
+    await waiting.event("intent_ready");
+    const inspect = (live = false) => inspectRun({ runsDirectory: root, runId: waiting.runId, view: "launch", live });
+    expect((await inspect()).items[0]?.text).toContain("Interrupted or uncertain");
+    expect((await inspect(true)).items[0]?.text).toContain("Pending");
+    await waiting.finish({ status: "aborted", backendStarted: false });
+    expect((await inspect()).items[0]?.text).toContain("Never started");
+  });
   it("reconciles streamed messages with a distinct canonical terminal answer", async () => {
     const root = await temporaryRoot();
     const record = createRunRecord({

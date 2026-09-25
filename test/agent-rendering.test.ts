@@ -66,7 +66,7 @@ describe("delegation transparency rendering", () => {
     expect(callText).toContain("Claude Code → claude-explorer");
     expect(callText).toContain("unsandboxed external CLI");
     expect(callText).toContain("Task Map repository architecture");
-    expect(callText).toContain("Why Custom cached explorer reason.");
+    expect(callText).toContain("Role Custom cached explorer reason.");
     expect(callText).toContain(`Workspace ${cwd}`);
     expect(callText).not.toContain("Context");
     const sharedCall = tool.renderCall?.({ ...callArgs, context: { mode: "recent", turns: 5 } }, theme, { ...callContext, state: {} });
@@ -74,7 +74,7 @@ describe("delegation transparency rendering", () => {
 
     unlinkSync(profilePath);
     const cachedCall = tool.renderCall?.(callArgs, theme, callContext);
-    expect(renderToText(cachedCall!)).toContain("Why Custom cached explorer reason.");
+    expect(renderToText(cachedCall!)).toContain("Role Custom cached explorer reason.");
 
     const running: SubagentToolDetails = {
       description: "Map repository architecture",
@@ -182,7 +182,11 @@ describe("delegation transparency rendering", () => {
     const theme = makeMockTheme() as never;
 
     const call = tool.renderCall?.({ name: "architecture-review" }, theme, { cwd, executionStarted: true });
-    expect(renderToText(call!)).toContain("unsandboxed external agents");
+    expect(renderToText(call!)).toContain("Mode Foreground");
+    expect(renderToText(call!)).toContain(`Workspace ${cwd}`);
+    const inline = tool.renderCall?.({ script: "export const meta = { apiVersion: 1, name: 'audit', description: 'Find cancellation races' };", background: true }, theme, { cwd, state: {} });
+    expect(renderToText(inline!)).toContain("Find cancellation races");
+    expect(renderToText(inline!)).toContain("Mode Background");
 
     const live: WorkflowToolDetails = {
       name: "architecture-review",
@@ -204,8 +208,18 @@ describe("delegation transparency rendering", () => {
       { cwd },
     );
     const liveText = renderToText(liveComponent!);
-    expect(liveText).toContain("external host access");
+    expect(renderToText(call!)).toContain("Host access");
+    expect(liveText).not.toContain("Host access");
     expect(liveText).toContain("1 done · 1 active · 1 queued · 1 failed / 4");
+    const background = tool.renderResult?.(
+      { content: [], details: { ...live, runId: "wf_background", backgroundReceipt: true, launch: { description: "Saved workflow purpose", workspace: cwd } } },
+      { expanded: false, isPartial: false }, theme, { cwd },
+    );
+    expect(renderToText(background!)).toContain("Launch receipt — not a live monitor");
+    expect(renderToText(background!)).toContain("ckground");
+    expect(renderToText(background!)).toContain("Saved workflow purpose");
+    expect(renderToText(background!)).not.toContain(cwd);
+    expect(renderToText(background!)).not.toContain("active ·");
 
     const completed: WorkflowToolDetails = {
       ...live,
