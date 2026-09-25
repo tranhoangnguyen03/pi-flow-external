@@ -143,7 +143,7 @@ describe("/external command", () => {
 
         // Doctor probes CLI backends but reports readiness separately from registration.
         await command?.handler("doctor", ctx);
-        expect(notices.at(-1)).toContain("✓ claude: claude 1.2.3");
+        expect(notices.at(-1)).toContain("CLI: available (claude 1.2.3)");
         expect(exec).toHaveBeenCalledWith("claude", ["--version"], { timeout: 10_000 });
 
         await command?.handler("config harnesses", ctx);
