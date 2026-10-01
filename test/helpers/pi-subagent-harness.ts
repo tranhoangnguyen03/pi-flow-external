@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createCodemodeExtension,
+  type ExtensionFactory,
   ModelRuntime,
   createAgentSession,
   DefaultResourceLoader,
@@ -30,6 +32,8 @@ export const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url
 export type FauxModelDef = { id: string; name: string; reasoning: boolean };
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type CreateSessionOptions = {
+  codemode?: boolean;
+  extensions?: ExtensionFactory[];
   maxConcurrentSubagents?: number;
   maxConcurrentSubagentsFlag?: string;
   subagentTimeoutMs?: number;
@@ -203,7 +207,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       cwd,
       agentDir,
       settingsManager,
-      extensionFactories: [createSubagentExtension(extensionOptions)],
+      extensionFactories: [createSubagentExtension(extensionOptions), ...(options.codemode ? [createCodemodeExtension({ mode: "on", models: false })] : []), ...(options.extensions ?? [])],
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -230,6 +234,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     });
     trackSession(session);
     await session.bindExtensions({});
+    if (options.codemode) session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]);
 
     return { session, registration, model, models, modelRegistry, modelRuntime };
   }

@@ -1,3 +1,4 @@
+import { ExpectedFlowError } from "./errors.ts";
 export type RegisteredRunKind = "agent" | "workflow";
 export type RegisteredRunState = "running" | "terminal";
 export type RegisteredRunStatus = "done" | "error" | "aborted";
@@ -82,7 +83,7 @@ export class RunRegistry {
 
   start<T>(params: StartRegisteredRun<T>): RegisteredRunHandle<T> {
     if (this.closedSessions.has(params.sessionId) || (params.sessionVersion !== undefined && params.sessionVersion !== this.sessionVersion(params.sessionId))) {
-      throw new Error(`Session ${params.sessionId} is closed; run was not started`);
+      throw new ExpectedFlowError("session_closed", `Session ${params.sessionId} is closed; run was not started`);
     }
     if (this.entries.has(params.runId)) {
       throw new Error(`Run is already registered: ${params.runId}`);

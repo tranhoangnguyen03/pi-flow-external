@@ -14,7 +14,7 @@ Six built-in roles are available in memory on every one of those harnesses. A fr
 
 The ordinary driver has four tools (`workflow` can be disabled):
 
-- `Agent` resolves and runs one external role.
+- `Agent` resolves and runs one external role. Its [versioned public receipt](docs/agent-public-contract.md) is available to native Pi codemode; scripts must check `ok`.
 - `workflow` orchestrates multiple external roles with trusted JavaScript.
 - `external_help` returns the usage playbook, role details, permission behavior, or workflow guidance on demand.
 - `external_runs` lists, inspects, waits for, and cancels session-owned runs.

@@ -1,3 +1,7 @@
+import { ExpectedFlowError } from "./core/errors.ts";
+import { agentOutputSchema, agentReceipt, type PublicError } from "./public-contract.ts";
+import { getRunRecord } from "./core/run-inspection.ts";
+import { redactSecrets } from "./core/run-record.ts";
 import {
   defineTool,
   getAgentDir,
@@ -34,7 +38,7 @@ import { captureParentContext, parentContextSchema, prepareParentContext } from 
 import { resolvePermission, permissionLabel, resolveEffectivePermissionTier } from "./core/permissions.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createProgressNode, textResult, type AgentToolResult } from "./core/progress.ts";
-import { RunRegistry } from "./core/run-registry.ts";
+import { RunRegistry, type RegisteredRunEntry } from "./core/run-registry.ts";
 import { formatUsage, renderSubagentNode } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { createWorkflowTool } from "./workflow/tool.ts";
@@ -356,19 +360,34 @@ function createAgentTool(
     description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     parameters: agentToolParameters,
+    outputSchema: agentOutputSchema,
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const resume = typeof params.resume === "string" && params.resume.trim() !== "" ? params.resume.trim() : undefined;
-      const briefing = prepareParentContext(params.prompt, params.context,
-        params.context && params.context.mode !== "none" ? captureParentContext(ctx.sessionManager) : undefined,
-        toolCallId, resume);
       const state = getState();
+      const receipt = async (result: AgentToolResult, error?: PublicError, settled?: RegisteredRunEntry) => {
+        const details = result.details as SubagentToolDetails;
+        const durable = details.runId ? await getRunRecord(runRecordsDirectory(), details.runId).catch(() => undefined) : undefined;
+        // Evidence I/O may outlast the child: observe live state only after it.
+        const entry = settled ?? (details.runId ? state.registry.get(details.runId) : undefined);
+        const structuredContent = agentReceipt({ entry, integrity: durable?.integrity, error, inspectable: !!durable || !!(entry && state.registry.get(entry.runId)) });
+        return { ...result, content: redactSecrets(result.content) as typeof result.content, structuredContent, isError: !structuredContent.ok };
+      };
+      const resume = typeof params.resume === "string" && params.resume.trim() !== "" ? params.resume.trim() : undefined;
+      let briefing: ReturnType<typeof prepareParentContext>;
+      try {
+        briefing = prepareParentContext(params.prompt, params.context,
+          params.context && params.context.mode !== "none" ? captureParentContext(ctx.sessionManager) : undefined,
+          toolCallId, resume);
+      } catch (error) {
+        if (!(error instanceof ExpectedFlowError)) throw error;
+        return receipt(textResult(error.message, { description: params.description, subagentType: "unknown", status: "error", error: error.message }), error);
+      }
       const effectiveState: DelegationState = {
         ...state,
         progressEnabled: state.progressEnabled || shouldEnableProgress(ctx),
       };
       const catalog = loadExternalCatalog(getAgentDir());
-      if (catalog.blocked) return textResult(catalog.diagnostics.join(" "), { description: params.description, subagentType: "unknown", status: "error", error: catalog.diagnostics.join(" ") });
+      if (catalog.blocked) return receipt(textResult(catalog.diagnostics.join(" "), { description: params.description, subagentType: "unknown", status: "error", error: catalog.diagnostics.join(" ") }), { code: "configuration_invalid", message: catalog.diagnostics.join(" ") });
       const allProfiles = catalog.profiles;
       const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
@@ -385,12 +404,12 @@ function createAgentTool(
       const defaultHarness = requestedDefault.harness;
       if (params.role && !params.harness && !configuredHarnessNames.has(defaultHarness)) {
         const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`;
-        return textResult(error, {
+        return receipt(textResult(error, {
           description: params.description,
           subagentType: "unknown",
           status: "error",
           error,
-        });
+        }), { code: "harness_unavailable", message: error });
       }
       let profile: SubagentProfile;
       try {
@@ -400,8 +419,9 @@ function createAgentTool(
           subagentType: params.subagent_type,
         }, defaultHarness, { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return textResult(
+        if (!(error instanceof ExpectedFlowError)) throw error;
+        const message = error.message;
+        return receipt(textResult(
           message,
           {
             description: params.description,
@@ -409,21 +429,21 @@ function createAgentTool(
             status: "error",
             error: message,
           },
-        );
+        ), { code: error.code, message });
       }
       const subagentType = profile.name;
 
       const model = resolveProfileModel(profile, ctx);
       if (usesPiBackend(profile) && !model) {
         const error = describeMissingModel(profile, ctx.modelRegistry);
-        return textResult(`Cannot launch subagent: ${error}.`, {
+        return receipt(textResult(`Cannot launch subagent: ${error}.`, {
           description: params.description,
           subagentType,
           backend: profile.backend,
           harness: selectorHarness(profile),
           status: "error",
           error,
-        });
+        }), { code: "model_unavailable", message: error });
       }
 
       const queuedAt = Date.now();
@@ -561,7 +581,9 @@ function createAgentTool(
         }
       };
 
-      const registered = state.registry.start({
+      let registered;
+      try {
+        registered = state.registry.start({
         runId: runRecord.runId,
         kind: "agent",
         sessionId,
@@ -581,8 +603,20 @@ function createAgentTool(
           };
         },
       });
-      if (!background) return await registered.result;
-      return textResult(
+      } catch (error) {
+        if (!(error instanceof ExpectedFlowError)) throw error;
+        await runRecord.finish({ status: "error", error: error.message, backendStarted: false });
+        return receipt(textResult(error.message, { description: params.description, subagentType, status: "error", error: error.message }), error);
+      }
+      if (!background) {
+        const result = await registered.result;
+        const outcome = await registered.terminal;
+        return receipt(result, undefined, {
+          runId: runRecord.runId, kind: "agent", sessionId, project, state: "terminal",
+          observation: (result.details as SubagentToolDetails).progress ?? progress, outcome,
+        });
+      }
+      return receipt(textResult(
         `Subagent "${params.description}" (${subagentType}) queued as ${runRecord.runId}. Use external_runs to inspect, wait, or cancel it.`,
         {
           description: params.description,
@@ -595,7 +629,7 @@ function createAgentTool(
           progress,
           backgroundReceipt: true,
         },
-      );
+      ));
     },
     renderCall(args, theme, context) {
       const defaultHarness = options.getDefaultHarness(context.cwd);
