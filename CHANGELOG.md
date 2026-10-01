@@ -2,7 +2,7 @@
 
 All notable changes to pi-flow external are documented here.
 
-## Unreleased
+## [3.0.0-external.0] - 2026-10-01
 
 ### Breaking: configuration v5 (issue #73)
 - Require explicit v4→v5 conversion before delegation. `/external config convert` (or **Preview format update…** on the guided recovery screen) previews changes, preserves `settings.v4.backup.json` and original files, and installs instruction copies before activation. Pre-v4 installations first convert to v4, then v5. No automatic consolidation of repeated pins or deletion of copied instructions.
