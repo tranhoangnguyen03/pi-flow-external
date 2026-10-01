@@ -41,17 +41,17 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-agent-core": "~0.99.2",
+    "@earendil-works/pi-ai": "~0.99.2",
+    "@earendil-works/pi-coding-agent": "~0.99.2",
+    "@earendil-works/pi-tui": "~0.99.2",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.79.4",
-    "@earendil-works/pi-ai": "0.79.4",
-    "@earendil-works/pi-coding-agent": "0.79.4",
-    "@earendil-works/pi-tui": "0.79.4",
+    "@earendil-works/pi-agent-core": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2",
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "@earendil-works/pi-tui": "0.99.2",
     "@types/node": "^24.12.4",
     "typebox": "1.1.38",
     "typescript": "^5.9.3",

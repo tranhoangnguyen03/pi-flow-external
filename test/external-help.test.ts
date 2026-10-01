@@ -151,7 +151,7 @@ describe("external_help unknown harness filter", () => {
   });
 });
 
-function toolCall(name: string, args: object) {
+function toolCall(name: string, args: import("@earendil-works/pi-ai").JsonObject) {
   return { type: "toolCall" as const, id: `call-${name}`, name, arguments: args };
 }
 
@@ -185,11 +185,11 @@ describe("external_help usage playbook", () => {
   it("validates playbook selectors against the Agent, external_runs, and workflow schemas", () => {
     const agentTool = { name: "Agent", parameters: agentToolParameters } as any;
     for (const example of ordinaryAgents) {
-      const validated = validateToolArguments(agentTool, toolCall("Agent", example));
+      const validated = validateToolArguments(agentTool, toolCall("Agent", { ...example }));
       expect(validated).toMatchObject({ role: example.role, harness: example.harness });
       expect(validated).not.toHaveProperty("permission");
     }
-    expect(validateToolArguments(agentTool, toolCall("Agent", USAGE_RESTRICTED_AGENT))).toMatchObject({
+    expect(validateToolArguments(agentTool, toolCall("Agent", { ...USAGE_RESTRICTED_AGENT }))).toMatchObject({
       role: USAGE_RESTRICTED_AGENT.role,
       harness: USAGE_RESTRICTED_AGENT.harness,
       permission: "readonly",

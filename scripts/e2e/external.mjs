@@ -459,7 +459,7 @@ async function runRoutingSmoke(options) {
 // ---------------------------------------------------------------------------
 
 function makeMockTheme(Theme) {
-  const theme = new Theme({}, {}, "truecolor");
+  const theme = Object.create(Theme.prototype);
   theme.fg = (_color, text) => text;
   theme.bold = (text) => text;
   return theme;
@@ -468,7 +468,7 @@ function makeMockTheme(Theme) {
 async function buildDeterministicSession({ agentDir, cwd, sessionDir, subagentTimeoutMs }) {
   const { createSubagentExtension } = await import("../../src/pi-subagent.ts");
   const {
-    AuthStorage,
+    ModelRuntime,
     createAgentSession,
     DefaultResourceLoader,
     ModelRegistry,
@@ -476,23 +476,22 @@ async function buildDeterministicSession({ agentDir, cwd, sessionDir, subagentTi
     SettingsManager,
     Theme,
   } = await import("@earendil-works/pi-coding-agent");
-  const { registerFauxProvider } = await import(
-    "../../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js"
-  );
+  const { fauxProvider } = await import("@earendil-works/pi-ai");
 
   // The root model is a placeholder: this script never calls session.prompt(),
   // so it is never streamed or resolved through the model registry. It exists
   // only because createAgentSession() and the tool ExtensionContext require a
   // concrete Model object.
-  const registration = registerFauxProvider({ models: [{ id: "faux-e2e-root", name: "Faux E2E Root", reasoning: false }] });
+  const registration = fauxProvider({ models: [{ id: "faux-e2e-root", name: "Faux E2E Root", reasoning: false }] });
   const rootModel = registration.getModel("faux-e2e-root");
 
   // setRuntimeApiKey is an in-memory-only override (never persisted to
   // auth.json), so this is safe even when agentDir is the caller's real,
   // read-only Pi agent directory (the --backend pi case).
-  const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
-  authStorage.setRuntimeApiKey(rootModel.provider, "faux-e2e-key");
-  const modelRegistry = ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
+  const modelRuntime = await ModelRuntime.create({ authPath: path.join(agentDir, "auth.json"), modelsPath: path.join(agentDir, "models.json") });
+  modelRuntime.registerNativeProvider(registration.provider);
+  await modelRuntime.setRuntimeApiKey(rootModel.provider, "faux-e2e-key");
+  const modelRegistry = new ModelRegistry(modelRuntime);
   const settingsManager = SettingsManager.inMemory({});
   const sessionManager = SessionManager.inMemory(cwd);
   const resourceLoader = new DefaultResourceLoader({
@@ -511,8 +510,7 @@ async function buildDeterministicSession({ agentDir, cwd, sessionDir, subagentTi
   const { session } = await createAgentSession({
     cwd,
     agentDir,
-    authStorage,
-    modelRegistry,
+    modelRuntime,
     model: rootModel,
     thinkingLevel: "high",
     settingsManager,
@@ -545,7 +543,7 @@ async function buildDeterministicSession({ agentDir, cwd, sessionDir, subagentTi
     runsTool: session.getToolDefinition("external_runs"),
     dispose: () => {
       session.dispose();
-      registration.unregister();
+      modelRuntime.unregisterProvider(registration.provider.id);
     },
   };
 }

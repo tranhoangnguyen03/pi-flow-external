@@ -15,7 +15,7 @@ import { Theme } from "@earendil-works/pi-coding-agent";
 import type { SubagentProfile } from "../src/types.ts";
 
 function fakeTheme() {
-  const theme = new Theme({} as never, {} as never, "truecolor");
+  const theme = Object.create(Theme.prototype) as Theme;
   (theme as unknown as { fg: (color: string, text: string) => string }).fg = (_color, text) => text;
   (theme as unknown as { bold: (text: string) => string }).bold = (text) => text;
   return theme;

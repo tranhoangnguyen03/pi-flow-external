@@ -1,8 +1,9 @@
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AgentSession,
-  AuthStorage,
+  ModelRuntime,
   DefaultResourceLoader,
   ModelRegistry,
   SettingsManager,
@@ -68,10 +69,11 @@ describe("pi runtime preflight", () => {
     }
     const unauthedModelsPath = join(agentDir, "models-no-auth.json");
     writeFileSync(unauthedModelsPath, JSON.stringify(rawConfig, null, 2));
-    const unauthenticatedRegistry = ModelRegistry.create(
-      AuthStorage.create(join(agentDir, "auth-empty.json")),
-      unauthedModelsPath,
-    );
+    const unauthenticatedRegistry = new ModelRegistry(await ModelRuntime.create({
+      authPath: join(agentDir, "auth-empty.json"),
+      modelsPath: unauthedModelsPath,
+      refreshOnCreate: false,
+    }));
     const result = await spawnSubagent(baseParams({
       model,
       ctx: { cwd: "/tmp", modelRegistry: unauthenticatedRegistry } as ExtensionContext,
@@ -82,11 +84,11 @@ describe("pi runtime preflight", () => {
     expect(details.error).not.toContain("No model is selected");
   });
 
-  it("rejects a thinking value outside the six-literal set before any session work", async () => {
+  it.each(["med", "max"])("rejects unsupported thinking level %s before any session work", async (thinkingLevel) => {
     const { model, modelRegistry } = await createSession();
     const result = await spawnSubagent(baseParams({
       model,
-      thinkingLevel: "med",
+      thinkingLevel,
       ctx: { cwd: "/tmp", modelRegistry } as ExtensionContext,
     }));
     const details = result.details as SubagentToolDetails;
@@ -102,6 +104,36 @@ describe("pi runtime completion contract", () => {
   const { createSession, disposeSession } = setupPiSubagentTestHarness((state) => {
     agentDir = state.agentDir;
     cwd = state.cwd;
+  });
+
+  it.each(["native", "config"])("inherits a parent-only %s provider and runtime credential without persisting them", async (kind) => {
+    const { model, modelRegistry, modelRuntime, registration } = await createSession();
+    writeFileSync(join(agentDir, "models.json"), "{}");
+    if (kind === "config") {
+      modelRuntime.unregisterProvider(model.provider);
+      modelRuntime.registerProvider(model.provider, {
+        api: model.api, models: [model], streamSimple: registration.provider.streamSimple,
+      });
+    }
+    let calls = 0;
+    registration.setResponses([(_context, options) => {
+      calls++;
+      // Native faux is keyless; config providers resolve the runtime override.
+      if (kind === "config") expect(options?.apiKey).toBe("test-api-key");
+      return fauxAssistantMessage("Inherited provider.");
+    }]);
+    const result = await spawnSubagent(baseParams({ model, ctx: { cwd, modelRegistry } as ExtensionContext }));
+    expect((result.details as SubagentToolDetails).status, JSON.stringify(result)).toBe("done");
+    expect(calls).toBe(1);
+    expect(readFileSync(join(agentDir, "models.json"), "utf8")).toBe("{}");
+  });
+
+  it("rejects virtual models instead of losing their parent-only registration", async () => {
+    const { model, modelRegistry } = await createSession();
+    const result = await spawnSubagent(baseParams({
+      model: { ...model, api: "pi-virtual" }, ctx: { cwd, modelRegistry } as ExtensionContext,
+    }));
+    expect((result.details as SubagentToolDetails).error).toContain("require a physical model");
   });
 
   it("reports an empty final assistant turn as an error, not a hollow success", async () => {
@@ -405,7 +437,7 @@ describe("pi runtime curated tool tiers", () => {
   });
 
   function getToolNames(context: Context | undefined): string[] {
-    return [...new Set((context?.tools ?? [])
+    return [...new Set((getCurrentTools(context?.messages ?? []))
       .map((tool: { name?: string } | undefined) => tool?.name)
       .filter((name): name is string => typeof name === "string"))].sort();
   }
@@ -531,7 +563,7 @@ describe("pi child extension isolation (design §6 safety-critical claim)", () =
       ctx: { cwd, modelRegistry } as ExtensionContext,
       profile: { name: "pi-test-worker", description: "x", backend: "pi", harness: "pi-test" },
     }));
-    const names = (childContext?.tools ?? []).map((tool: { name?: string } | undefined) => tool?.name);
+    const names = (getCurrentTools(childContext?.messages ?? [])).map((tool: { name?: string } | undefined) => tool?.name);
     expect(names).not.toContain("leak_check_tool");
   });
 });
@@ -644,8 +676,8 @@ describe("pi child resource preset", () => {
       projectTrusted: true,
     }));
     expect((result.details as SubagentToolDetails).status).toBe("done");
-    expect(captured?.systemPrompt ?? "").not.toContain("Audit skill.");
-    expect(captured?.systemPrompt ?? "").not.toContain("Local audit skill.");
+    expect(getCurrentSystemPrompt(captured?.messages ?? [])).not.toContain("Audit skill.");
+    expect(getCurrentSystemPrompt(captured?.messages ?? [])).not.toContain("Local audit skill.");
   });
 
   it("skills preset loads installed skills, skips prompt templates, and loads a project skill only when trusted", async () => {
@@ -672,9 +704,9 @@ describe("pi child resource preset", () => {
       projectTrusted: false,
     }));
     expect((hiddenResult.details as SubagentToolDetails).status).toBe("done");
-    expect(hidden?.systemPrompt ?? "").toContain("Audit skill.");
-    expect(hidden?.systemPrompt ?? "").not.toContain("AUDIT_NONCE_91");
-    expect(hidden?.systemPrompt ?? "").not.toContain("Local audit skill.");
+    expect(getCurrentSystemPrompt(hidden?.messages ?? [])).toContain("Audit skill.");
+    expect(getCurrentSystemPrompt(hidden?.messages ?? [])).not.toContain("AUDIT_NONCE_91");
+    expect(getCurrentSystemPrompt(hidden?.messages ?? [])).not.toContain("Local audit skill.");
     expect(lastUserText(hidden!)).toBe("/greet World");
 
     const trusted = await createSession();
@@ -689,7 +721,7 @@ describe("pi child resource preset", () => {
       profile: skillsProfile,
       projectTrusted: true,
     }));
-    expect(shown?.systemPrompt ?? "").toContain("Local audit skill.");
+    expect(getCurrentSystemPrompt(shown?.messages ?? [])).toContain("Local audit skill.");
   });
 });
 

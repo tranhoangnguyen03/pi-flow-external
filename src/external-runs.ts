@@ -1,5 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionContext, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { createHash } from "node:crypto";
@@ -655,16 +655,25 @@ function normalizeInspectSelectors(params: ExternalRunsParams): ExternalRunsPara
   return { ...params, runId, runIds };
 }
 
+// Commands and tools share this executor; it needs no tool-only host capabilities.
+type ExternalRunsTool = Omit<ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails>, "execute"> & {
+  execute: (
+    toolCallId: string, params: ExternalRunsParams, signal: AbortSignal | undefined,
+    onUpdate: Parameters<ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails>["execute"]>[3],
+    ctx: ExtensionContext,
+  ) => ReturnType<ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails>["execute"]>;
+};
+
 export function createExternalRunsTool(
   options: CreateExternalRunsToolOptions,
-): ToolDefinition<typeof externalRunsParameters, ExternalRunsDetails> {
-  return defineTool({
+): ExternalRunsTool {
+  return {
     name: "external_runs",
     label: "External Runs",
     description: "List, inspect (single or batched summaries), wait for, or cancel session-owned external runs.",
     promptSnippet: EXTERNAL_RUNS_PROMPT_SNIPPET,
     parameters: externalRunsParameters,
-    async execute(_toolCallId, params: ExternalRunsParams, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params: ExternalRunsParams, signal, onUpdate, ctx: ExtensionContext) {
       if (params.action === "inspect") {
         params = normalizeInspectSelectors(params);
         if (params.runId === undefined && params.runIds !== undefined && params.runIds.length === 1 && params.view !== undefined && params.view !== "summary") {
@@ -981,5 +990,5 @@ export function createExternalRunsTool(
     renderResult(toolResult, { expanded }, theme) {
       return renderExternalRunsResult(toolResult, theme, expanded);
     },
-  });
+  };
 }

@@ -23,6 +23,8 @@ The ordinary driver has four tools (`workflow` can be disabled):
 
 ## Install
 
+Host baseline: **Pi 0.99.2**, with Pi peers restricted to `~0.99.2` (0.99.x patches from 0.99.2). The offline suite is pinned to exactly 0.99.2; older hosts and later minor versions are not claimed as supported.
+
 Global installation:
 
 ```bash
@@ -318,7 +320,7 @@ Disable an execution identity by listing its exact name in `disabledProfiles`, f
 
 ### Named Pi harness configurations
 
-A named Pi harness runs in-process through Pi's own SDK, for any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Register it with `/external config harness create`: a `pi-<label>` name, a `provider/model` id, a thinking level (`off`, `minimal`, `low`, `medium`, `high`, or `xhigh`, always stored explicitly), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. The smoke test uses the selected preset. Registration is then saved into the `harnesses` object of `settings.json`. A legacy entry that omits `preset` is `minimal`. The six CLI harnesses are built in and do not need entries there.
+A named Pi harness runs in-process through Pi's own SDK, for physical models Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Children reconstruct their model runtime from the same agent directory and inherit the parent's in-memory provider registrations and selected provider's runtime API key; stored credentials/OAuth use the same auth file. Virtual model registrations are not exposed by the SDK registry and are rejected rather than silently replaced. Flow retains its six thinking levels; the SDK's `max` is not accepted in Flow harness settings. Register it with `/external config harness create`: a `pi-<label>` name, a `provider/model` id, a thinking level (`off`, `minimal`, `low`, `medium`, `high`, or `xhigh`, always stored explicitly), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. The smoke test uses the selected preset. Registration is then saved into the `harnesses` object of `settings.json`. A legacy entry that omits `preset` is `minimal`. The six CLI harnesses are built in and do not need entries there.
 
 ```json
 {

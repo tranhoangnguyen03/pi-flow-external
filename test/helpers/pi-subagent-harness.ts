@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AuthStorage,
+  ModelRuntime,
   createAgentSession,
   DefaultResourceLoader,
   ModelRegistry,
@@ -14,11 +14,14 @@ import {
 import {
   fauxAssistantMessage,
   fauxToolCall,
-  registerFauxProvider,
+  getCurrentTools,
+  fauxProvider,
+  type FauxProviderHandle,
+  type JsonObject,
   type Context,
   type Model,
   type SimpleStreamOptions,
-} from "../../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+} from "@earendil-works/pi-ai";
 import { afterEach, beforeEach } from "vitest";
 import { createSubagentExtension } from "../../src/pi-subagent.ts";
 
@@ -168,19 +171,25 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       projectTrusted = false,
       piHarnesses,
     } = options;
-    const registration = registerFauxProvider({ models: modelDefs });
+    const faux = fauxProvider({ models: modelDefs });
+    const registration = { ...faux, unregister: () => modelRuntime.unregisterProvider(faux.provider.id) };
     registrations.push(registration);
 
     const models = modelDefs.map((def) => registration.getModel(def.id) as Model<string>);
     const model = defaultModelId ? (registration.getModel(defaultModelId) as Model<string>) : models[0];
 
-    const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-    authStorage.setRuntimeApiKey(model.provider, "test-api-key");
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key");
     writeModelsJson(models);
     if (piHarnesses) {
       writeHarnessSettings(piHarnesses, models);
     }
-    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+    const modelRegistry = new ModelRegistry(modelRuntime);
     const settingsManager = SettingsManager.inMemory({});
     if (projectTrusted) {
       settingsManager.setProjectTrusted(true);
@@ -212,8 +221,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const { session } = await createAgentSession({
       cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       thinkingLevel,
       settingsManager,
@@ -223,15 +231,15 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     trackSession(session);
     await session.bindExtensions({});
 
-    return { session, registration, model, models, modelRegistry };
+    return { session, registration, model, models, modelRegistry, modelRuntime };
   }
 
   // Drive a single root delegation and capture the child session's context,
   // stream options, model, and the root's post-delegation continuation context.
   async function delegateOnce(
     session: { prompt: (input: string) => Promise<unknown> },
-    registration: ReturnType<typeof registerFauxProvider>,
-    toolArgs: Record<string, unknown>,
+    registration: FauxProviderHandle,
+    toolArgs: JsonObject,
     opts: { childReply?: string; rootReply?: string; userPrompt?: string } = {},
   ) {
     const { childReply = "child done", rootReply = "reported", userPrompt = "Please delegate." } = opts;
@@ -259,7 +267,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
   }
 
   function makeMockTheme() {
-    const theme = new Theme({} as never, {} as never, "truecolor");
+    const theme = Object.create(Theme.prototype) as Theme;
     (theme as unknown as { fg: (color: string, text: string) => string }).fg = (_color, text) => text;
     (theme as unknown as { bold: (text: string) => string }).bold = (text) => text;
     return theme;
@@ -331,7 +339,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
   }
 
   function getToolNames(context: Context | undefined): string[] {
-    return [...new Set((context?.tools ?? [])
+    return [...new Set(getCurrentTools(context?.messages ?? [])
       .map((tool: { name?: string } | undefined) => tool?.name)
       .filter((name): name is string => typeof name === "string"))].sort();
   }
