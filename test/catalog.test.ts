@@ -18,7 +18,7 @@ it('composes file-free defaults, shared roles and exact overrides without fallba
     writeFileSync(join(dir, 'overrides', 'grok-audit.md'), '---\ndescription: Grok audit\nbackend: grok\n---\nExact audit');
     writeFileSync(join(dir, 'overrides', 'claude-audit.md'), 'broken');
     writeFileSync(join(dir, 'overrides', 'pi-check-reviewer.md'), '---\ndescription: Wrong backend\nbackend: codex\n---\nWrong');
-    const catalog = loadExternalCatalog(root);
+    const catalog = loadExternalCatalog(root, { legacyInspection: true });
     expect(() => resolveExternalProfile(catalog.profiles, { role: 'reviewer', harness: 'pi-check' }, 'agy', { configuredHarnessNames: new Set(['pi-check']), harnessConfigs: catalog.harnessConfigs })).toThrow(/does not match/);
     expect(catalog.profiles.get('grok-audit')?.systemPrompt).toBe('Exact audit');
     expect(catalog.profiles.get('muse-audit')?.systemPrompt).toBe('Shared audit');
@@ -34,7 +34,7 @@ it('disables whole harnesses without deleting definitions, hiding them from disc
     mkdirSync(join(dir, 'overrides'), { recursive: true });
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 4, disabledHarnesses: ['codex', 'pi-check', 'future-cli'], harnesses: { 'pi-check': { model: 'test/model', thinking: 'off' } } }));
     writeFileSync(join(dir, 'overrides', 'codex-custom.md'), '---\ndescription: Custom\nbackend: codex\n---\nExact');
-    const catalog = loadExternalCatalog(root);
+    const catalog = loadExternalCatalog(root, { legacyInspection: true });
     const options = { configuredHarnessNames: new Set([...EXTERNAL_HARNESSES, 'pi-check']), harnessConfigs: catalog.harnessConfigs, disabledHarnesses: catalog.disabledHarnesses };
     expect(catalog.blocked).toBe(false);
     // Definitions stay; discovery hides every identity bound to a disabled harness.
@@ -44,10 +44,10 @@ it('disables whole harnesses without deleting definitions, hiding them from disc
     expect(catalog.disabledHarnesses.has('future-cli')).toBe(true);
     expect(catalog.diagnostics.join(' ')).toMatch(/"future-cli" is not a known harness.*kept/);
     for (const selection of [{ role: 'reviewer', harness: 'codex' }, { role: 'nonexistent', harness: 'codex' }, { subagentType: 'codex-reviewer' }, { subagentType: 'codex-custom' }, { role: 'reviewer', harness: 'pi-check' }, { subagentType: 'pi-check-reviewer' }]) {
-      expect(() => resolveExternalProfile(catalog.profiles, selection, 'agy', options)).toThrow(/Harness "(codex|pi-check)" is disabled.*config enable/);
+      expect(() => resolveExternalProfile(catalog.profiles, selection, 'agy', options)).toThrow(/Harness "(codex|pi-check)" is disabled.*config harness enable/);
     }
     // A disabled default fails actionably instead of substituting another harness.
-    expect(() => resolveExternalProfile(catalog.profiles, { role: 'reviewer' }, 'codex', options)).toThrow(/Default harness "codex" is disabled.*config default/);
+    expect(() => resolveExternalProfile(catalog.profiles, { role: 'reviewer' }, 'codex', options)).toThrow(/Default harness "codex" is disabled.*config harness default/);
     expect(resolveExternalProfile(catalog.profiles, { role: 'reviewer', harness: 'claude' }, 'codex', options).name).toBe('claude-reviewer');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

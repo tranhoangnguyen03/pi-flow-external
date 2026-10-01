@@ -1,5 +1,7 @@
 # Tool-schema compatibility investigation (#62)
 
+> Investigation record, not the current configuration/runtime guide. The sections below preserve the observed client boundary and subsequent mitigations. They do not establish that the affected downstream router is fixed. For current tool usage, see [README.md](../README.md).
+
 ## Reproduction and scope
 
 In the reported `9-router/gpt-6-astra` session, the model-facing tool declarations

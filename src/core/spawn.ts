@@ -375,7 +375,23 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
           ...(params.resumeRunId ? { resumeRequested: params.resumeRunId } : {}),
         },
       });
-  const unsupported = unsupportedPermissionReason(effectiveTier, params.profile.backend);
+  let unsupported = unsupportedPermissionReason(effectiveTier, params.profile.backend);
+  let thinkingApplied: string | undefined;
+  if (!unsupported) {
+    try {
+      if (params.profile.configVersion === 5 && params.thinkingLevel !== undefined) {
+        const supported = params.profile.backend === 'claude' ? ['low','medium','high','xhigh','max'] : params.profile.backend === 'codex' ? ['minimal','low','medium','high','xhigh'] : undefined;
+        if (supported && !supported.includes(params.thinkingLevel)) throw new Error(`Unsupported ${params.profile.backend} reasoning effort ${params.thinkingLevel}; choose ${supported.join(', ')} or native.`);
+      }
+      thinkingApplied = params.profile.backend === "opencode" ? params.profile.thinking ?? "Backend default" :
+        params.profile.backend === "pi" ? "Pending SDK initialization" :
+        params.profile.backend === "agy" ? normalizeAgyEffort(params.thinkingLevel) ?? "Backend default" :
+        params.profile.backend === "grok" ? normalizeGrokReasoningEffort(params.thinkingLevel) ?? "Backend default" :
+        params.profile.backend === "muse" ? normalizeMuseReasoningEffort(params.thinkingLevel) ?? "Backend default" : params.thinkingLevel ?? "Backend default";
+    } catch (error) {
+      unsupported = error instanceof Error ? error.message : String(error);
+    }
+  }
   if (unsupported) {
     const result = textResult(`Subagent "${params.description}" (${params.profile.name}) failed: ${unsupported}`, {
       description: params.description,
@@ -401,11 +417,8 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       harness: selectorHarness(params.profile),
       backend: params.profile.backend,
       model: params.model ? `${params.model.provider}/${params.model.id}` : params.profile.model ?? "Backend default (not resolved by extension)",
-      thinkingRequested: params.thinkingLevel,
-      thinkingApplied: params.profile.backend === "pi" ? "Pending SDK initialization" :
-        params.profile.backend === "agy" ? normalizeAgyEffort(params.thinkingLevel) ?? "Backend default" :
-        params.profile.backend === "grok" ? normalizeGrokReasoningEffort(params.thinkingLevel) ?? "Backend default" :
-        params.profile.backend === "muse" ? normalizeMuseReasoningEffort(params.thinkingLevel) ?? "Backend default" : params.thinkingLevel ?? "Backend default",
+      thinkingRequested: params.profile.backend === "opencode" ? params.profile.thinking : params.thinkingLevel,
+      thinkingApplied,
       thinkingApplication: "CLI effort argument, or SDK setting; not a claim about provider-internal reasoning",
       requestedTools: params.profile.tools ?? "Backend defaults",
       resourceLoading: params.profile.backend === "pi" ? { preset: effectivePiResourcePreset(params.profile.preset), projectTrusted: params.projectTrusted === true, contextFiles: "SDK-loaded; recorded after initialization", skills: effectivePiResourcePreset(params.profile.preset) === "skills" ? "Enabled; project skills require trust" : "Disabled", extensions: false, promptTemplates: false, themes: false } : "Backend-controlled; not fully observable",

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
+import { ConcurrencyLimiter } from '../src/core/concurrency.ts';
 import {
   DEFAULT_EXTERNAL_SETTINGS,
   loadExternalSettings,
@@ -104,6 +105,20 @@ describe("external settings", () => {
     expect(() => saveExternalSettings(root, { version: 4 }, { repair: true })).toThrow();
   });
 
+  it("refuses editor version changes while allowing same-version repair", () => {
+    const root = agentDir();
+    const path = join(root, 'pi-flow-external/settings.json');
+    for (const [version, next] of [[4, 5], [5, 4]]) {
+      const original = JSON.stringify({ version });writeFileSync(path, original);
+      expect(() => saveExternalSettings(root, { version: next }, { repair: true })).toThrow(/config convert|version/);
+      expect(readFileSync(path, 'utf8')).toBe(original);
+    }
+    writeFileSync(path, JSON.stringify({ version: 4, maxConcurrentSubagents: 0 }));
+    expect(() => saveExternalSettings(root, { version: 5 }, { repair: true })).toThrow(/config convert|version/);
+    saveExternalSettings(root, { version: 4 }, { repair: true });
+    expect(loadExternalSettings(root).blocked).toBe(false);
+  });
+
   it("uses safe defaults and diagnostics for invalid files", () => {
     const root = agentDir();
     const loaded = loadExternalSettings(root);
@@ -134,7 +149,7 @@ describe("external settings", () => {
 
     const migrated = loadExternalSettings(root);
     expect(migrated.settings).toEqual({
-      version: 4,
+      version: 5,
       defaultHarness: "agy",
       maxConcurrentSubagents: 7,
       subagentTimeoutMs: 600_000,
@@ -227,6 +242,34 @@ describe("external settings", () => {
       else process.env.PI_CODING_AGENT_DIR = previous;
     }
   });
+});
+
+it('cancels queued readiness on session shutdown without launching a child', async () => {
+  const root = agentDir();
+  writeFileSync(join(root, 'pi-flow-external/settings.json'), JSON.stringify({ version: 5, harnesses: { 'pi-check': { model: 'test/model', thinking: 'off' } } }));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  const events = new Map<string, Function>();
+  let command: any;
+  let queued: AbortSignal | undefined;
+  const acquire = vi.spyOn(ConcurrencyLimiter.prototype, 'acquire').mockImplementation(signal => {
+    queued = signal;
+    return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+  });
+  const notices: string[] = [];
+  try {
+    createSubagentExtension()({ registerFlag: vi.fn(), getFlag: () => '', registerTool: vi.fn(), registerCommand: (name: string, opts: any) => { if (name === 'external') command = opts.handler; }, on: (name: string, handler: Function) => events.set(name, handler), getThinkingLevel: () => 'off', getActiveTools: () => [], setActiveTools: vi.fn() } as unknown as ExtensionAPI);
+    const ctx = { cwd: root, hasUI: true, isProjectTrusted: () => false, sessionManager: { getSessionId: () => 'readiness-test' }, modelRegistry: { find: () => ({ provider: 'test', id: 'model' }), getAll: () => [], getAvailable: () => [] }, ui: { confirm: async () => true, notify: (text: string) => notices.push(text), setStatus: vi.fn() } };
+    const pending = command('config harness test pi-check', ctx);
+    await vi.waitFor(() => expect(queued).toBeDefined());
+    await events.get('session_shutdown')!({}, ctx);
+    await pending;
+    expect(queued?.aborted).toBe(true);
+    expect(notices.join(' ')).toContain('cancelled');
+  } finally {
+    acquire.mockRestore();
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });
 
 describe("obsolete capability settings", () => {

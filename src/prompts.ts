@@ -51,7 +51,7 @@ export function formatExternalRoleHelp(
   const roleLines = [...roles].flatMap(([role, harnesses]) => [
     `- ${role} (${harnesses.join(", ")})`,
     ...harnesses.map((availableHarness) => {
-      const profile = profiles.get(`${availableHarness}-${role}`);
+      const profile = profiles.get(`${availableHarness}/${role}`) ?? profiles.get(`${availableHarness}-${role}`);
       return `  - ${profile?.name}: ${profile?.description ?? role}`;
     }),
   ]);
@@ -100,7 +100,7 @@ Choose a fresh child or resume on purpose. Omit context for independent work. co
 
 Calls block unless background:true. Then supervise with external_runs and judge view "final" yourself. Same-harness parallel work shares one maxConcurrentSubagents cap: parallel([() => agent(...), ...]) or separate background Agent calls in one turn. Sequential awaits stay serial. Report milestones. Retry a failed run, or switch its model or harness, only when the user authorized that step. agy alone may make one disclosed infrastructure retry. Nested agents may start in another workspace.
 
-Catalog availability reflects enabled harnesses and built-in/authored roles, not CLI installation or authentication. Disabled harnesses reject calls without fallback; manage them through /external config. Role authoring stays under /external role. Role selection never falls back. external_help topic usage is the playbook; roles, permissions, and workflow are the references.`;
+Catalog availability reflects enabled harnesses and built-in/authored roles, not CLI installation or authentication. Disabled harnesses reject calls without fallback; manage them through /external config. Harness and role lifecycle commands live under /external config harness and /external config role. Role selection never falls back. external_help topic usage is the playbook; roles, permissions, and workflow are the references.`;
 }
 
 export interface UsageAgentExample {

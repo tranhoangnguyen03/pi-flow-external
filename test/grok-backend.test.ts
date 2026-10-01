@@ -42,7 +42,9 @@ describe("pi-subagent grok backend", () => {
     expect(normalizeGrokReasoningEffort("medium")).toBe("medium");
     expect(normalizeGrokReasoningEffort("high")).toBe("high");
     expect(normalizeGrokReasoningEffort("xhigh")).toBe("xhigh");
-    expect(normalizeGrokReasoningEffort("unsupported")).toBeUndefined();
+    for (const effort of ["unsupported", "", "native", "parent"]) {
+      expect(() => normalizeGrokReasoningEffort(effort)).toThrow(/unsupported.*effort/i);
+    }
   });
 
   it("builds exact grok argv for normal, thinking, resume, and outputSchema modes", () => {
@@ -857,7 +859,7 @@ console.log(JSON.stringify({
     const summary = JSON.parse(readFileSync(join(recordDirectory, "summary.json"), "utf8"));
     expect(summary.summary).toMatchObject({
       backend: "grok",
-      profile: "grok-worker",
+      profile: "grok/worker",
       status: "done",
       backendEventCount: 4,
       nestedActivitySeen: true,

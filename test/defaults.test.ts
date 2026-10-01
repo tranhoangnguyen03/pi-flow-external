@@ -25,9 +25,9 @@ describe("built-in profiles with zero generated files", () => {
 
     expect(defaultProfileNames()).toHaveLength(36);
     expect(profiles.size).toBe(36);
-    expect([...profiles.keys()].sort()).toEqual([...defaultProfileNames()].sort());
+    expect([...profiles.keys()].sort()).toEqual(defaultProfileNames().map(name => name.replace('-', '/')).sort());
     for (const name of defaultProfileNames()) {
-      const profile = profiles.get(name);
+      const profile = profiles.get(name.replace('-', '/'));
       const expected = buildDefaultProfile(name);
       expect(profile, name).toBeDefined();
       expect(profile?.description, name).toBe(expected?.description);
@@ -35,10 +35,10 @@ describe("built-in profiles with zero generated files", () => {
       expect(profile?.backend, name).toBe(expected?.backend);
       expect(profile?.model, name).toBeUndefined();
     }
-    expect(profiles.get("agy-worker")?.description).toContain("Antigravity");
-    expect(profiles.get("grok-worker")?.description).toContain("Grok CLI");
-    expect(profiles.get("muse-worker")?.description).toContain("Muse Code");
-    expect(profiles.get("opencode-worker")?.description).toContain("OpenCode");
+    expect(profiles.get("agy/worker")?.description).toContain("Antigravity");
+    expect(profiles.get("grok/worker")?.description).toContain("Grok CLI");
+    expect(profiles.get("muse/worker")?.description).toContain("Muse Code");
+    expect(profiles.get("opencode/worker")?.description).toContain("OpenCode");
     expect(readdirSync(agentDir)).toEqual([]);
 
     getSubagentProfiles(agentDir);
@@ -63,7 +63,7 @@ describe("built-in profiles with zero generated files", () => {
       "utf8",
     );
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
     expect(profiles.get("claude-explorer")?.systemPrompt).toBe("My custom explorer.");
     expect(profiles.get("claude-explorer")?.description).toBe("Mine.");
     expect(profiles.get("claude-worker")?.systemPrompt).not.toBe("Should not load.");
@@ -79,7 +79,7 @@ describe("built-in profiles with zero generated files", () => {
     expect(external.has("codex-worker")).toBe(true);
     expect([...external.keys()].sort()).toEqual([...defaultProfileNames()].sort());
 
-    getSubagentProfiles(agentDir);
+    getSubagentProfiles(agentDir, { legacyInspection: true });
     expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v1"))).toBe(false);
     expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v2"))).toBe(false);
     expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v3"))).toBe(false);

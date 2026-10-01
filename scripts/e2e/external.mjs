@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-transform-types
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -18,17 +18,15 @@ const defaults = {
   // needs --model too.
   opencode: {},
   // No fixed model/thinking default: a named pi harness pins its own model and
-  // thinking in the caller's real settings.json (version 4) harnesses map;
+  // thinking in the caller's real settings.json (version 5) harnesses map;
   // --harness names which one.
   pi: {},
 };
 const PERMISSION_TIERS = ["readonly", "edit", "danger"];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-let cleanupProfilePath;
+let cleanupFixture;
 process.once("exit", () => {
-  if (cleanupProfilePath) {
-    try { unlinkSync(cleanupProfilePath); } catch {}
-  }
+  if (cleanupFixture) removeCliFixture(cleanupFixture);
 });
 
 function parseArgs(argv) {
@@ -70,7 +68,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option: ${arg}`);
   }
   if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-  if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 4");
+  if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 5");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
   if (options.backend === "opencode" && options.thinking !== undefined && options.model === undefined) throw new Error("--thinking on --backend opencode names a model variant and needs --model provider/model");
   if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
@@ -115,7 +113,7 @@ function help() {
   console.log(`Usage: npm run e2e -- [options]
 
   --backend <claude|codex|agy|grok|muse|opencode|pi>  external backend (default: codex)
-  --harness <name>              required with --backend pi: a pi-* harness already registered in your own real settings.json version 4
+  --harness <name>              required with --backend pi: a pi-* harness already registered in your own real settings.json version 5
   --model <id>                  child model (backend default when omitted; ignored for pi, which pins its own)
   --thinking <level>            child thinking (default: high; ignored for pi, which pins its own)
   --permission <readonly|edit|danger>
@@ -235,7 +233,7 @@ function readSettingsFile(agentDir) {
   const legacyHarnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
   if (!existsSync(settingsPath)) {
     if (existsSync(legacyHarnessesPath)) {
-      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external config convert to upgrade it to settings.json version 4. This script will not modify ${agentDir}.`);
+      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external config convert to upgrade it to settings.json version 5. This script will not modify ${agentDir}.`);
     }
     return { settingsPath, missing: true };
   }
@@ -248,23 +246,24 @@ function readSettingsFile(agentDir) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${settingsPath} must be a JSON object. This script will not modify it.`);
   }
-  if (parsed.version !== 4) {
-    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 4. Run /external config convert to upgrade this installation. This script will not modify it.`);
+  // Conversion is the user's explicit, reviewed action; this script never converts a real installation.
+  if (parsed.version !== 5) {
+    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 5. Run /external config convert to upgrade this installation. This script will not modify it.`);
   }
   return { settingsPath, missing: false, parsed };
 }
 
 /**
  * Doctor-style precheck: confirm the named pi harness is registered in the
- * real settings.json version 4 harnesses map before spending time on the
+ * real settings.json version 5 harnesses map before spending time on the
  * real backend call. Model shape and presence only; live provider auth is
- * not verified here. A version 1–3 file is reported for conversion and is
+ * not verified here. A version 1–4 file is reported for conversion and is
  * never rewritten.
  */
 function preflightPiHarness(agentDir, harnessName) {
   const loaded = readSettingsFile(agentDir);
   if (loaded.missing) {
-    throw new Error(`No settings.json found at ${loaded.settingsPath}. Register "${harnessName}" under "harnesses" in settings.json version 4. This script will not create or modify it.`);
+    throw new Error(`No settings.json found at ${loaded.settingsPath}. Register "${harnessName}" under "harnesses" in settings.json version 5. This script will not create or modify it.`);
   }
   const harnesses = loaded.parsed.harnesses;
   const registry = harnesses && typeof harnesses === "object" && !Array.isArray(harnesses) ? harnesses : undefined;
@@ -278,26 +277,61 @@ function preflightPiHarness(agentDir, harnessName) {
   }
 }
 
+function writeSettingsAtomically(settingsPath, record) {
+  const staged = `${settingsPath}.${randomUUID()}.staged`;
+  writeFileSync(staged, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  renameSync(staged, settingsPath);
+}
+
 /**
- * Fresh CLI fixtures are settings.json version 4 plus one exact override.
- * An existing version 4 file is left byte-for-byte alone. Anything older, or
- * a leftover harnesses.json with no settings file, stops here unedited.
+ * CLI fixtures are one temporary role: its instructions live only in
+ * overrides/<backend>/<role>.md (description and body, nothing else) and
+ * its model/thinking are a sparse binding patch under
+ * harnesses.<backend>.roles.<role> in settings.json version 5. A missing
+ * settings file is created as version 5; an existing version 5 file gains
+ * only that one uniquely named patch, which cleanup removes again. Any other
+ * version, or a leftover harnesses.json, stops here unedited.
  */
 function installCliFixture(agentDir, backend, role, model, thinking) {
   const loaded = readSettingsFile(agentDir);
-  if (loaded.missing) {
-    mkdirSync(path.dirname(loaded.settingsPath), { recursive: true });
-    writeFileSync(loaded.settingsPath, `${JSON.stringify({ version: 4 }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  const patch = { ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) };
+  const record = loaded.missing ? { version: 5 } : loaded.parsed;
+  if (Object.keys(patch).length) {
+    const harnesses = record.harnesses ??= {};
+    const entry = harnesses[backend] ??= {};
+    (entry.roles ??= {})[role] = patch;
   }
-  const overridesDir = path.join(agentDir, "pi-flow-external", "overrides");
+  mkdirSync(path.dirname(loaded.settingsPath), { recursive: true });
+  if (loaded.missing) writeFileSync(loaded.settingsPath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  else if (Object.keys(patch).length) writeSettingsAtomically(loaded.settingsPath, record);
+  const overridesDir = path.join(agentDir, "pi-flow-external", "overrides", backend);
   mkdirSync(overridesDir, { recursive: true });
-  const profilePath = path.join(overridesDir, `${backend}-${role}.md`);
+  const profilePath = path.join(overridesDir, `${role}.md`);
   writeFileSync(
     profilePath,
-    `---\ndescription: Temporary ${backend} E2E profile.\nbackend: ${backend}\n${model ? `model: ${model}\n` : ""}${thinking ? `thinking: ${thinking}\n` : ""}---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
+    `---\ndescription: Temporary ${backend} E2E role.\n---\nRead requested files and reply exactly as instructed. Do not edit files.\n`,
     { flag: "wx", mode: 0o600 },
   );
-  return profilePath;
+  return { profilePath, settingsPath: loaded.settingsPath, backend, role, patched: Object.keys(patch).length > 0 };
+}
+
+/** Remove exactly what installCliFixture added; unrelated settings stay byte-for-byte except the removed patch. */
+function removeCliFixture(fixture) {
+  try { unlinkSync(fixture.profilePath); } catch {}
+  for (const dir of [path.dirname(fixture.profilePath), path.dirname(path.dirname(fixture.profilePath))]) {
+    try { rmdirSync(dir); } catch {}
+  }
+  if (!fixture.patched) return;
+  try {
+    const record = JSON.parse(readFileSync(fixture.settingsPath, "utf8"));
+    const entry = record?.harnesses?.[fixture.backend];
+    if (!entry?.roles || !Object.hasOwn(entry.roles, fixture.role)) return;
+    delete entry.roles[fixture.role];
+    if (!Object.keys(entry.roles).length) delete entry.roles;
+    if (!Object.keys(entry).length) delete record.harnesses[fixture.backend];
+    if (!Object.keys(record.harnesses).length) delete record.harnesses;
+    writeSettingsAtomically(fixture.settingsPath, record);
+  } catch {}
 }
 
 // The fixture content is an unpredictable nonce, generated fresh per run and
@@ -346,6 +380,7 @@ async function runRoutingSmoke(options) {
   mkdirSync(options.runRoot, { recursive: true });
 
   let profilePath;
+  let installed;
   let result;
   // Assume failure until the try block reaches its final "PASS" line, so a
   // thrown assertion or setup error (the common case worth investigating)
@@ -383,8 +418,9 @@ async function runRoutingSmoke(options) {
 
     const role = isPi ? "worker" : `zz-e2e-${randomUUID()}`;
     if (!isPi) {
-      profilePath = installCliFixture(options.agentDir, options.backend, role, options.model, options.thinking);
-      if (!options.keep) cleanupProfilePath = profilePath;
+      installed = installCliFixture(options.agentDir, options.backend, role, options.model, options.thinking);
+    profilePath = installed.profilePath;
+      if (!options.keep) cleanupFixture = installed;
     }
 
     const childPrompt = options.interrupt
@@ -436,8 +472,8 @@ async function runRoutingSmoke(options) {
     failed = false;
   } finally {
     if (!options.keep && !failed) {
-      if (profilePath) { try { unlinkSync(profilePath); } catch {} }
-      cleanupProfilePath = undefined;
+      if (installed) removeCliFixture(installed);
+      cleanupFixture = undefined;
       rmSync(options.runRoot, { recursive: true, force: true });
     } else {
       if (result) {
@@ -455,7 +491,7 @@ async function runRoutingSmoke(options) {
 // Agent/workflow/external_runs tool executors directly, exactly as
 // test/agent-contract.test.ts does. The selected external backend's child
 // (a real spawned CLI process, or, for --backend pi, a real in-process
-// nested Pi child against the caller's real settings.json version 4) is real.
+// nested Pi child against the caller's real settings.json version 5) is real.
 // ---------------------------------------------------------------------------
 
 function makeMockTheme(Theme) {
@@ -714,6 +750,7 @@ async function runDeterministic(options) {
   mkdirSync(options.runRoot, { recursive: true });
 
   let profilePath;
+  let installed;
   let built;
   // Assume failure until the try block reaches its final "PASS" line, so a
   // thrown assertion, setup error, or watchdog timeout (the common cases
@@ -740,8 +777,9 @@ async function runDeterministic(options) {
 
     const role = isPi ? "worker" : `zz-e2e-${randomUUID()}`;
     if (!isPi) {
-      profilePath = installCliFixture(agentDir, options.backend, role, options.model, options.thinking);
-      if (!options.keep) cleanupProfilePath = profilePath;
+      installed = installCliFixture(agentDir, options.backend, role, options.model, options.thinking);
+      profilePath = installed.profilePath;
+      if (!options.keep) cleanupFixture = installed;
     }
 
     const childPrompt = buildReadPrompt(targetPath);
@@ -778,8 +816,8 @@ async function runDeterministic(options) {
     if (originalRunsDirEnv === undefined) delete process.env.PI_FLOW_EXTERNAL_RUNS_DIR;
     else process.env.PI_FLOW_EXTERNAL_RUNS_DIR = originalRunsDirEnv;
     if (!options.keep && !failed) {
-      if (profilePath) { try { unlinkSync(profilePath); } catch {} }
-      cleanupProfilePath = undefined;
+      if (installed) removeCliFixture(installed);
+      cleanupFixture = undefined;
       rmSync(options.runRoot, { recursive: true, force: true });
     } else {
       console.log(`${failed ? "Preserved failing run" : "Kept"} artifacts at ${options.runRoot}${profilePath ? ` and ${profilePath}` : ""}`);

@@ -97,7 +97,9 @@ describe("pi-subagent muse backend", () => {
     expect(normalizeMuseReasoningEffort("medium")).toBe("medium");
     expect(normalizeMuseReasoningEffort("high")).toBe("high");
     expect(normalizeMuseReasoningEffort("xhigh")).toBe("xhigh");
-    expect(normalizeMuseReasoningEffort("unsupported")).toBeUndefined();
+    for (const effort of ["unsupported", "", "native", "parent"]) {
+      expect(() => normalizeMuseReasoningEffort(effort)).toThrow(/unsupported.*effort/i);
+    }
   });
 
   it("builds exact muse argv for normal, resume, and structured-output modes across permission tiers", () => {
@@ -860,7 +862,7 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'm
     const summary = JSON.parse(readFileSync(join(recordDirectory, "summary.json"), "utf8"));
     expect(summary.summary).toMatchObject({
       backend: "muse",
-      profile: "muse-worker",
+      profile: "muse/worker",
       status: "done",
       backendEventCount: 5,
       nestedActivitySeen: false,

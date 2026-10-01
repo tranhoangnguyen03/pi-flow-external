@@ -37,17 +37,15 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * `ultra`, which no Pi thinking level ever requests, so they never appear here.
  */
 export function normalizeMuseReasoningEffort(thinkingLevel: ThinkingLevel | undefined): MuseReasoningEffort | undefined {
-  const normalized = thinkingLevel?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
+  if (thinkingLevel === undefined) return undefined;
+  const normalized = thinkingLevel.trim().toLowerCase();
   if (normalized === "off") {
     return "none";
   }
   if (normalized === "minimal" || normalized === "low" || normalized === "medium" || normalized === "high" || normalized === "xhigh") {
     return normalized;
   }
-  return undefined;
+  throw new Error(`Unsupported Muse effort ${JSON.stringify(thinkingLevel)}.`);
 }
 
 /**

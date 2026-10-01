@@ -21,6 +21,7 @@ import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry } from "../core/run-registry.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
 import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownExternalProfileMessage } from "../profiles.ts";
+import { resolveExecutionProfile } from '../execution-config.ts';
 import { effectivePiResourcePreset, loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
@@ -47,7 +48,12 @@ export interface CreateWorkflowToolOptions {
 }
 
 /** Frozen execution identity for one resolved profile, including the Pi preset. */
-export function toWorkflowSubagentDescriptor(profile: SubagentProfile): WorkflowSubagentDescriptor {
+export function toWorkflowSubagentDescriptor(
+  profile: SubagentProfile,
+  parentThinking?: string,
+  defaultMaxBudgetUsd?: number,
+): WorkflowSubagentDescriptor {
+  profile = resolveExecutionProfile(profile, parentThinking, defaultMaxBudgetUsd);
   return {
     backend: profile.backend,
     harness: profile.harness,
@@ -56,7 +62,7 @@ export function toWorkflowSubagentDescriptor(profile: SubagentProfile): Workflow
     ...(profile.backend === "pi" ? { preset: effectivePiResourcePreset(profile.preset) } : {}),
     systemPrompt: profile.systemPrompt,
     tools: profile.tools,
-    maxBudgetUsd: profile.maxBudgetUsd,
+    maxBudgetUsd: profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
   };
 }
 
@@ -145,14 +151,19 @@ export function createWorkflowTool(
       // `profiles` map would leave every synthesized pi role without a model
       // entry, and runAgent's `usesPiBackend(profile) && !model` check would
       // then reject a call that resolveSubagentType already accepted.
-      const profiles = catalog.profiles;
-      const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
       const limiter = options.getLimiter();
       const thinkingLevel = options.getThinkingLevel();
       const timeoutMs = options.getSubagentTimeoutMs();
       const defaultPermission = options.getDefaultPermission();
       const defaultHarness = options.getDefaultHarness(ctx);
       const defaultMaxBudgetUsd = options.getDefaultMaxBudgetUsd();
+      const descriptors = new Map([...catalog.profiles].map(([name, profile]) =>
+        [name, toWorkflowSubagentDescriptor(profile, thinkingLevel, defaultMaxBudgetUsd)]));
+      const profiles = new Map([...catalog.profiles].map(([name, profile]) => {
+        const descriptor = descriptors.get(name)!;
+        return [name, { ...profile, model: descriptor.model, thinking: descriptor.thinking, maxBudgetUsd: descriptor.maxBudgetUsd }];
+      }));
+      const models = new Map([...profiles].map(([name, profile]) => [name, resolveProfileModel(profile, ctx)]));
       const background = params.background === true;
       const prepared = await prepareWorkflowToolSource(params, ctx);
       if (!prepared.ok) {
@@ -239,7 +250,7 @@ export function createWorkflowTool(
           context: call.context,
           profile,
           model,
-          thinkingLevel: profile.thinking ?? thinkingLevel,
+          thinkingLevel: profile.thinking,
           ctx: executionContext,
           signal: agentSignal,
           timeoutMs,
@@ -253,7 +264,7 @@ export function createWorkflowTool(
               return false;
             }
           })(),
-          maxBudgetUsd: call.maxBudgetUsd ?? profile.maxBudgetUsd ?? defaultMaxBudgetUsd,
+          maxBudgetUsd: call.maxBudgetUsd,
           resumeRunId: call.resumeRunId,
           executionStartedAt: call.executionStartedAt,
           onProgress: (partial) => {
@@ -401,10 +412,7 @@ export function createWorkflowTool(
               { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
             ).name;
           },
-          describeSubagentType: (name) => {
-            const profile = profiles.get(name);
-            return profile ? toWorkflowSubagentDescriptor(profile) : undefined;
-          },
+          describeSubagentType: (name) => descriptors.get(name),
           getDefaultPermission: () => defaultPermission,
           resumeAgentResults,
           onLog: (message) => {
@@ -431,7 +439,7 @@ export function createWorkflowTool(
                 description: event.label,
                 prompt: event.prompt,
                 authoredPrompt: event.authoredPrompt,
-                plannedConfiguration: { roleInstructions: profile?.systemPrompt, model: profile?.model, thinking: profile?.thinking ?? thinkingLevel, tools: profile?.tools, timeoutMs, permissionRequested: event.permission ?? "default", maxBudgetUsd: event.maxBudgetUsd ?? profile?.maxBudgetUsd ?? defaultMaxBudgetUsd, outputSchema: event.schema ?? null, outputInstructions: event.schema ? "Schema-constrained output; backend-specific instructions resolved at start" : WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE },
+                plannedConfiguration: { roleInstructions: profile?.systemPrompt, model: profile?.model, thinking: profile?.thinking, tools: profile?.tools, timeoutMs, permissionRequested: event.permission ?? "default", maxBudgetUsd: event.maxBudgetUsd, outputSchema: event.schema ?? null, outputInstructions: event.schema ? "Schema-constrained output; backend-specific instructions resolved at start" : WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE },
                 context: event.context ?? { mode: "none" },
                 profile: event.subagentType,
                 backend: profile?.backend,

@@ -55,7 +55,15 @@ export function resolvePiCodingAgentVersion(): string {
  * not a full tool-list hash): the goal is cache invalidation on policy
  * change, not a security boundary.
  */
-export const WORKFLOW_FINGERPRINT_POLICY_VERSION = `pi-flow-external:tier-tools-v1+pi-coding-agent@${resolvePiCodingAgentVersion()}`;
+export const WORKFLOW_FINGERPRINT_POLICY_VERSION = `pi-flow-external:resolved-config-v5+tier-tools-v1+pi-coding-agent@${resolvePiCodingAgentVersion()}`;
+
+/** Native CLI defaults are mutable outside the frozen catalog and cannot prove replay equivalence. */
+export function isWorkflowDescriptorReplayable(descriptor?: WorkflowSubagentDescriptor): boolean {
+  if (!descriptor || descriptor.backend === "pi") return true;
+  return Boolean(descriptor.model && descriptor.model !== "native"
+    && descriptor.thinking && descriptor.thinking !== "native" && descriptor.thinking !== "parent"
+    && !(descriptor.backend === "agy" && descriptor.thinking.trim().toLowerCase() === "off"));
+}
 
 export function fingerprintWorkflowAgentCall(
   call: WorkflowAgentCall,
@@ -83,7 +91,7 @@ export function fingerprintWorkflowAgentCall(
         descriptorPreset: descriptor.preset,
         descriptorSystemPrompt: descriptor.systemPrompt,
         descriptorTools: descriptor.tools,
-        descriptorMaxBudgetUsd: descriptor.maxBudgetUsd,
+        descriptorMaxBudgetUsd: call.maxBudgetUsd ?? descriptor.maxBudgetUsd,
         policyVersion: WORKFLOW_FINGERPRINT_POLICY_VERSION,
       }
       : {}),
