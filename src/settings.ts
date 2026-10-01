@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { CONFIG_NAME, executionProblems, knownHarnessShape, objectRecord, type HarnessSettings, type RoleSettings, type ExactSettings } from './config-v5.ts';
 import { join } from "node:path";
 import { HARNESS_NAME_PATTERN, parseHarnessEntry, VALID_THINKING_LEVELS, type HarnessConfig } from "./harnesses.ts";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { EXTERNAL_HARNESSES, PI_RESOURCE_PRESETS, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
-  version: 4,
+  version: 5,
   defaultHarness: "agy" as string,
   maxConcurrentSubagents: 12,
   subagentTimeoutMs: 2 * 60 * 60 * 1000,
@@ -16,8 +17,12 @@ export const DEFAULT_EXTERNAL_SETTINGS = {
 } as const;
 
 export type ExternalSettings = {
-  version: 4;
+  version: 4 | 5;
   harnesses?: Record<string, HarnessConfig>;
+  /** v5 execution defaults; legacy harnesses projection remains Pi-only for runtime consumers. */
+  harnessSettings?: Record<string, HarnessSettings>;
+  roles?: Record<string, RoleSettings>;
+  exact?: Record<string, ExactSettings>;
   disabledProfiles?: string[];
   /** Harness names (CLI or `pi-*`) excluded from selection. Definitions stay in place; unknown names are preserved. */
   disabledHarnesses?: string[];
@@ -43,6 +48,8 @@ const KNOWN_SETTING_KEYS = [
   "harnesses",
   "disabledProfiles",
   "disabledHarnesses",
+  "roles",
+  "exact",
   "defaultHarness",
   "maxConcurrentSubagents",
   "subagentTimeoutMs",
@@ -89,8 +96,8 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
   }
   const record = value as Record<string, unknown>;
   const diagnostics: string[] = [];
-  if (record.version !== 4) {
-    diagnostics.push("Settings require version 4. Run /external config convert for an older installation.");
+  if (record.version !== 4 && record.version !== 5) {
+    diagnostics.push("Settings require version 5. Run /external config convert for an older installation.");
   }
   for (const key of Object.keys(record)) {
     if (key === "piCapabilitySets") {
@@ -103,6 +110,7 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
   }
 
   const settings = defaults();
+  settings.version = record.version === 4 ? 4 : 5;
   if (isValidHarnessSelectorShape(record.defaultHarness)) {
     settings.defaultHarness = record.defaultHarness;
   } else if (record.defaultHarness !== undefined) {
@@ -141,9 +149,46 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
     else {
       settings.harnesses = {};
       for (const [name, raw] of Object.entries(record.harnesses)) {
-        const config = parseHarnessEntry(name, raw);
-        if (config) settings.harnesses[name] = config;
-        else diagnostics.push(`Invalid harness "${name}" in settings.json: use a pi-* name, provider/model, thinking: ${VALID_THINKING_LEVELS.join(", ")}, and preset: ${PI_RESOURCE_PRESETS.join(" or ")}.`);
+        if (record.version === 5) {
+          const errors = knownHarnessShape(name) ? executionProblems(raw, name, 'harness') : ['invalid harness name'];
+          if (errors.length) diagnostics.push(`Invalid v5 harness "${name}": ${errors.join('; ')}`);
+          else {
+            (settings.harnessSettings ??= {})[name] = raw as HarnessSettings;
+            if (name.startsWith('pi-')) {
+              const entry = raw as HarnessSettings;
+              settings.harnesses[name] = { model: entry.model!, thinking: entry.thinking === 'parent' ? 'off' : (entry.thinking ?? 'off') as HarnessConfig['thinking'], preset: entry.preset ?? 'minimal', owner: entry.owner };
+            }
+          }
+        } else {
+          const config = parseHarnessEntry(name, raw);
+          if (config) settings.harnesses[name] = config;
+          else diagnostics.push(`Invalid harness "${name}" in settings.json: use a pi-* name, provider/model, thinking: ${VALID_THINKING_LEVELS.join(", ")}, and preset: ${PI_RESOURCE_PRESETS.join(" or ")}.`);
+        }
+      }
+    }
+  }
+  if (record.version === 5) {
+    if (record.roles !== undefined) {
+      if (!objectRecord(record.roles)) diagnostics.push('roles must be an object');
+      else {
+        settings.roles = {};
+        for (const [name, raw] of Object.entries(record.roles)) {
+          if (!CONFIG_NAME.test(name) || !objectRecord(raw) || Object.keys(raw).some(k => k !== 'enabled') || (raw.enabled !== undefined && typeof raw.enabled !== 'boolean')) diagnostics.push(`Invalid role settings "${name}"`);
+          else settings.roles[name] = raw as RoleSettings;
+        }
+      }
+    }
+    if (record.exact !== undefined) {
+      if (!objectRecord(record.exact)) diagnostics.push('exact must be an object');
+      else {
+        settings.exact = {};
+        for (const [name, raw] of Object.entries(record.exact)) {
+          if (!CONFIG_NAME.test(name) || !objectRecord(raw) || typeof raw.harness !== 'string' || !knownHarnessShape(raw.harness) || typeof raw.description !== 'string' || typeof raw.instructions !== 'string') { diagnostics.push(`Invalid exact selector "${name}"`); continue; }
+          const { harness, instructions, description, ...fields } = raw;
+          const errors = executionProblems(fields, harness);
+          if (errors.length) diagnostics.push(`Invalid exact selector "${name}": ${errors.join('; ')}`);
+          else settings.exact[name] = raw as unknown as ExactSettings;
+        }
       }
     }
   }
@@ -186,16 +231,20 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
 }
 
 /** One canonical private atomic writer. Unknown keys are retained by callers' read-modify-write. */
-export function saveExternalSettings(agentDir: string, record: unknown, options: { repair?: boolean } = {}): string {
+export function saveExternalSettings(agentDir: string, record: unknown, options: { repair?: boolean; activateV5?: boolean } = {}): string {
   const parsed = parseSettings(record);
   const errors = parsed.diagnostics.filter(d => !d.startsWith("Unknown setting"));
   if (errors.length) throw new Error(errors.join(" "));
   const current = loadExternalSettings(agentDir);
+  let existing: unknown;
+  try { existing = JSON.parse(readFileSync(current.path, "utf8")); } catch { /* Explicit repair can replace malformed JSON. */ }
+  const version = existing && typeof existing === "object" ? (existing as Record<string, unknown>).version : undefined;
+  if ((version === 4 || version === 5) && parsed.settings.version !== version
+    && !(options.activateV5 && version === 4 && parsed.settings.version === 5)) {
+    throw new Error(`Changing settings version ${version} to ${parsed.settings.version} is not an edit. Use /external config convert; downgrade requires your backup.`);
+  }
   if (current.blocked) {
-    let existing: unknown;
-    try { existing = JSON.parse(readFileSync(current.path, "utf8")); } catch { /* Explicit editor repair can replace malformed JSON. */ }
-    const version = existing && typeof existing === "object" ? (existing as Record<string, unknown>).version : undefined;
-    if (!options.repair || current.upgradeRequired || (version !== undefined && version !== 4)) throw new Error(current.diagnostics.join(" "));
+    if (!options.repair || current.upgradeRequired || (version !== undefined && version !== 4 && version !== 5)) throw new Error(current.diagnostics.join(" "));
   }
   const path = externalSettingsPath(agentDir);
   mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });

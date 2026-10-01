@@ -54,9 +54,12 @@ describe("pi-subagent agy backend", () => {
       JSON.stringify(outputSchema),
     ]);
     expect(normalizeAgyEffort("xhigh")).toBe("high");
+    expect(normalizeAgyEffort("max")).toBe("high");
     expect(normalizeAgyEffort("minimal")).toBe("low");
     expect(normalizeAgyEffort("off")).toBeUndefined();
-    expect(normalizeAgyEffort("backend-specific")).toBeUndefined();
+    for (const effort of ["backend-specific", "", "native", "parent"]) {
+      expect(() => normalizeAgyEffort(effort)).toThrow(/unsupported.*effort/i);
+    }
   });
 
   it("maps the subagent timeout to agy's Go duration print timeout", () => {
@@ -195,7 +198,7 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
     const events = readFileSync(join(recordDirectory, "events.ndjson"), "utf8");
     expect(summary.summary).toMatchObject({
       backend: "agy",
-      profile: "agy-reviewer",
+      profile: "agy/reviewer",
       status: "done",
       backendEventCount: 5,
       nestedActivitySeen: true,

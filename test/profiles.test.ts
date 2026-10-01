@@ -46,6 +46,8 @@ describe("pi-subagent profiles", () => {
     tempDir = state.tempDir;
     cwd = state.cwd;
     agentDir = state.agentDir;
+    mkdirSync(join(agentDir, 'pi-flow-external'), { recursive: true });
+    writeFileSync(join(agentDir, 'pi-flow-external', 'settings.json'), JSON.stringify({ version: 4 }));
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
@@ -191,7 +193,7 @@ model: "gpt 5.4"
 
 Arbitrary Codex model prompt.`);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
 
     expect(profiles.get("codex-reviewer")).toMatchObject({
       name: "codex-reviewer",
@@ -234,7 +236,7 @@ thinking: max
 
 Arbitrary Claude model prompt.`);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
 
     expect(profiles.get("claude-reviewer")).toMatchObject({
       name: "claude-reviewer",
@@ -266,7 +268,7 @@ thinking: high
 
 Grok reviewer prompt.`);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
 
     expect(profiles.get("grok-reviewer")).toMatchObject({
       name: "grok-reviewer",
@@ -290,7 +292,7 @@ thinking: high
 
 Muse reviewer prompt.`);
 
-    const profiles = getSubagentProfiles(agentDir);
+    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
 
     expect(profiles.get("muse-reviewer")).toMatchObject({
       name: "muse-reviewer",

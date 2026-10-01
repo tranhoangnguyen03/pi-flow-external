@@ -290,9 +290,11 @@ describe("pi_flow_harness_create tool", () => {
       );
       expect(skills.details.status).toBe("done");
       expect(spawnSubagent).toHaveBeenCalledWith(expect.objectContaining({
+        permission: "readonly",
         profile: expect.objectContaining({ backend: "pi", harness: "pi-deepseek", preset: "skills" }),
       }));
       expect(ctx.ui.confirm).toHaveBeenCalledWith("Register pi-deepseek?", expect.stringContaining("Preset: skills"), { signal: undefined });
+      expect(ctx.ui.confirm).toHaveBeenCalledWith("Register pi-deepseek?", expect.stringMatching(/readonly.*curated tools.*not an OS sandbox/is), { signal: undefined });
 
       spawnSubagent.mockClear();
       const minimal = await tool.execute(

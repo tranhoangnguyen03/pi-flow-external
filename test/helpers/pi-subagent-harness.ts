@@ -25,6 +25,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach } from "vitest";
+import { applyV5Upgrade } from '../../src/config-v5-upgrade.ts';
 import { createSubagentExtension } from "../../src/pi-subagent.ts";
 
 export const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -72,6 +73,9 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     agentDir = join(tempDir, "agent");
     mkdirSync(cwd, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
+    // Existing backend fixtures author full v4 profiles; migration tests cover v5 activation separately.
+    mkdirSync(join(agentDir, 'pi-flow-external'), { recursive: true });
+    writeFileSync(join(agentDir, 'pi-flow-external', 'settings.json'), JSON.stringify({ version: 4 }));
     originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
     originalPathEnv = process.env.PATH;
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -160,7 +164,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const existingHarnesses = existing.harnesses && typeof existing.harnesses === "object" && !Array.isArray(existing.harnesses)
       ? existing.harnesses as Record<string, unknown>
       : {};
-    writeFileSync(path, JSON.stringify({ ...existing, version: 4, harnesses: { ...existingHarnesses, ...harnesses } }, null, 2));
+    writeFileSync(path, JSON.stringify({ ...existing, version: existing.version ?? 4, harnesses: { ...existingHarnesses, ...harnesses } }, null, 2));
   }
 
   async function createSession(options: CreateSessionOptions = {}) {
@@ -193,7 +197,9 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     if (piHarnesses) {
       writeHarnessSettings(piHarnesses, models);
     }
-    const modelRegistry = new ModelRegistry(modelRuntime);
+    const conversion = applyV5Upgrade(agentDir);
+    if (conversion.status === 'blocked') throw new Error(`Fixture conversion failed: ${conversion.diagnostics.join(' ')}`);
+const modelRegistry = new ModelRegistry(modelRuntime);
     const settingsManager = SettingsManager.inMemory({});
     if (projectTrusted) {
       settingsManager.setProjectTrusted(true);

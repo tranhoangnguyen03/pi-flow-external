@@ -14,7 +14,7 @@ describe("external-only Agent policy", () => {
   });
 
   it("filters built-in pi-backed profiles out of the Agent roster", () => {
-    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
+    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir, { legacyInspection: true }));
     expect(profiles.has("general-purpose")).toBe(false);
     expect(profiles.has("explorer")).toBe(false);
   });
@@ -52,7 +52,7 @@ describe("external-only Agent policy", () => {
     writeFileSync(join(overridesDir, "local-reviewer.md"), `---\ndescription: Local pi reviewer.\nbackend: pi\n---\n\nReview locally.\n`);
     writeFileSync(join(subagentsDir, "scout.md"), `---\ndescription: Native Pi scout.\nbackend: pi\n---\n\nNative work.\n`);
 
-    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
+    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir, { legacyInspection: true }));
     expect([...profiles.keys()].sort()).toEqual([...defaultProfileNames()].sort());
     expect(profiles.get("claude-explorer")).toMatchObject({ backend: "claude", model: "sonnet" });
     expect(profiles.get("codex-reviewer")).toMatchObject({ backend: "codex", model: "gpt-5.4-mini" });
@@ -78,7 +78,7 @@ describe("external-only Agent policy", () => {
     );
 
     const configuredPiHarnesses = getConfiguredHarnessNames(agentDir);
-    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir), configuredPiHarnesses);
+    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir, { legacyInspection: true }), configuredPiHarnesses);
     expect(profiles.has("pi-deepseek-reviewer")).toBe(true);
     expect(profiles.get("pi-deepseek-reviewer")).toMatchObject({
       backend: "pi",

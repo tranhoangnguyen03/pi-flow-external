@@ -10,6 +10,7 @@
     "src",
     "scripts/field-report.mjs",
     "docs/agent-public-contract.md",
+    "docs/ARCHITECTURE_SNAPSHOT.md",
     "docs/field-testing.md",
     "docs/releasing.md",
     "AGENTS.md",

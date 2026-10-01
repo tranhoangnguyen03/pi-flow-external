@@ -223,7 +223,7 @@ describe("external_help usage playbook", () => {
       const catalog = loadExternalCatalog(agentDir);
       for (const example of [...agentExamples, ...USAGE_WORKFLOW_CALLS.map((call) => call.options)]) {
         const profile = resolveExternalProfile(catalog.profiles, { role: example.role, harness: example.harness }, "agy");
-        expect(profile.name).toBe(`${example.harness}-${example.role}`);
+        expect(profile.name).toBe(`${example.harness}/${example.role}`);
         expect(profile.configurationError).toBeUndefined();
       }
 

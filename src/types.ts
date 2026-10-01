@@ -27,6 +27,10 @@ export interface SubagentProfile {
   /** Invalid/disabled catalog entries block selection instead of exposing a fallback. */
   configurationError?: string;
   source?: string;
+  /** Explicit pair identity; never recover it by splitting a display label. */
+  role?: string;
+  configVersion?: 5;
+  origins?: Record<string, string>;
   name: string;
   description: string;
   backend: SubagentBackend;

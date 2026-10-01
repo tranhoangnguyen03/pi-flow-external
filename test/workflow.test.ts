@@ -835,6 +835,32 @@ describe("runWorkflow", () => {
     expect(secondRunEvents[0].runId).toBe("run_first");
   });
 
+  it("stops replay at native-unresolved execution and reruns its unchanged suffix", async () => {
+    for (const unresolved of [{ model: undefined }, { thinking: undefined }, { model: "native" }, { thinking: "native" }, { backend: "agy" as const, thinking: "off" }, { backend: "agy" as const, thinking: " OFF " }]) {
+      const events: any[] = [];
+      const script = `${META}return [await agent('one'), await agent('two'), await agent('three')];`;
+      const options = {
+        cwd: "/tmp", limiter: new ConcurrencyLimiter(1),
+        runAgent: async (call: { prompt: string }) => call.prompt,
+        describeSubagentType: () => ({ backend: "codex" as const, model: "pinned", thinking: "high" }),
+        onAgentResult: (event: unknown) => { events.push(event); },
+      };
+      let count = 0;
+      const live: string[] = [];
+      await runWorkflow(script, {
+        ...options,
+        describeSubagentType: () => (++count === 2 ? { ...options.describeSubagentType(), ...unresolved } : options.describeSubagentType()),
+      });
+      count = 0;
+      await runWorkflow(script, {
+        ...options, resumeAgentResults: [...events],
+        describeSubagentType: () => (++count === 2 ? { ...options.describeSubagentType(), ...unresolved } : options.describeSubagentType()),
+        runAgent: async (call) => { live.push(call.prompt); return call.prompt; },
+      });
+      expect(live).toEqual(["two", "three"]);
+    }
+  });
+
   it("re-applies current harness policy on resume so a disabled harness cannot replay from cache", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-wf-disabled-"));
     try {
@@ -845,12 +871,12 @@ describe("runWorkflow", () => {
         const catalog = loadExternalCatalog(root);
         return (selection: Parameters<typeof resolveExternalProfile>[1]) => resolveExternalProfile(catalog.profiles, selection, "agy", { disabledHarnesses: catalog.disabledHarnesses }).name;
       };
-      writeFileSync(settingsPath, JSON.stringify({ version: 4 }));
+      writeFileSync(settingsPath, JSON.stringify({ version: 5, harnesses: { claude: { model: "test", thinking: "high" } } }));
       const recorded: any[] = [];
       await runWorkflow(script, { cwd: "/tmp", limiter: new ConcurrencyLimiter(1), runAgent: async () => "live", resolveSubagentType: resolveFrom(), onAgentResult: (event) => { recorded.push(event); } });
       expect(recorded).toHaveLength(1);
 
-      writeFileSync(settingsPath, JSON.stringify({ version: 4, disabledHarnesses: ["claude"] }));
+      writeFileSync(settingsPath, JSON.stringify({ version: 5, harnesses: { claude: { model: "test", thinking: "high", enabled: false } } }));
       const runAgent = vi.fn<WorkflowAgentRunner>();
       await expect(runWorkflow(script, {
         cwd: "/tmp",
@@ -1111,6 +1137,38 @@ describe("saved workflow registry", () => {
 });
 
 describe("workflow frozen Pi descriptor", () => {
+  it("freezes inherited effort and global budget into the execution descriptor", async () => {
+    const profile = { name: "codex-worker", description: "x", backend: "codex" as const, model: "pinned" };
+    const high = toWorkflowSubagentDescriptor(profile, "high", 2);
+    const low = toWorkflowSubagentDescriptor(profile, "low", 2);
+    const largerBudget = toWorkflowSubagentDescriptor(profile, "high", 3);
+    expect(high).toMatchObject({ thinking: "high", maxBudgetUsd: 2 });
+    expect(toWorkflowSubagentDescriptor({ ...profile, thinking: "parent" }, "high", 2)).toEqual(high);
+    expect(toWorkflowSubagentDescriptor({ ...profile, thinking: "native", model: "native" }, "high", 2)).toMatchObject({ thinking: undefined, model: undefined });
+    expect(toWorkflowSubagentDescriptor({ ...profile, backend: "opencode" }, "high", 2).thinking).toBeUndefined();
+    expect(toWorkflowSubagentDescriptor({ ...profile, configVersion: 5 }, "high", 2).thinking).toBeUndefined();
+    const events: any[] = [];
+    const script = `${META}return await agent('one');`;
+    const options = { cwd: "/tmp", limiter: new ConcurrencyLimiter(1), describeSubagentType: () => high,
+      runAgent: async (call: { maxBudgetUsd?: number }) => { expect(call.maxBudgetUsd).toBe(2); return "done"; },
+      onAgentResult: (event: unknown) => { events.push(event); } };
+    await runWorkflow(script, options);
+    const prior = [...events];
+    for (const descriptor of [low, largerBudget]) {
+      let live = false;
+      await runWorkflow(script, { ...options, describeSubagentType: () => descriptor, resumeAgentResults: prior,
+        runAgent: async (call) => { live = true; expect(call.maxBudgetUsd).toBe(descriptor.maxBudgetUsd); return "done"; } });
+      expect(live).toBe(true);
+    }
+    events.length = 0;
+    const overrideScript = `${META}return await agent('one', { max_budget_usd: 0 });`;
+    await runWorkflow(overrideScript, { ...options,
+      runAgent: async (call) => { expect(call.maxBudgetUsd).toBe(0); return "uncapped"; } });
+    await runWorkflow(overrideScript, { ...options, describeSubagentType: () => largerBudget, resumeAgentResults: [...events],
+      runAgent: async () => { throw new Error("explicit budget should still replay"); } });
+    expect(toWorkflowSubagentDescriptor({ ...profile, thinking: "low", maxBudgetUsd: 1 }, "high", 2)).toMatchObject({ thinking: "low", maxBudgetUsd: 1 });
+  });
+
   it("carries the registration preset for Pi profiles and omits it for CLI profiles", () => {
     const skills = toWorkflowSubagentDescriptor({
       name: "pi-deepseek-reviewer",
@@ -1175,7 +1233,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     cwd = state.cwd;
   });
 
-  function makeWorkflowTool(registry = new RunRegistry()) {
+  function makeWorkflowTool(registry = new RunRegistry(), defaultMaxBudgetUsd?: number) {
     return createWorkflowTool({
       registry,
       getLimiter: () => new ConcurrencyLimiter(2),
@@ -1183,7 +1241,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getSubagentTimeoutMs: () => 60_000,
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
-      getDefaultMaxBudgetUsd: () => undefined,
+      getDefaultMaxBudgetUsd: () => defaultMaxBudgetUsd,
       updateStatus: () => {},
     });
   }
@@ -1196,17 +1254,15 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     registration.setResponses([() => fauxAssistantMessage("CUSTOM_PI_WORKFLOW_OK")]);
 
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides", "pi-deepseek");
     mkdirSync(subagentsDir, { recursive: true });
 
     // 1. An on-disk custom profile that omits model and thinking (inheriting from harness pi-deepseek)
     writeFileSync(
-      join(subagentsDir, "pi-deepseek-custom.md"),
+      join(subagentsDir, "custom.md"),
       [
         "---",
         "description: Custom reviewer",
-        "backend: pi",
-        "harness: pi-deepseek",
         "---",
         "You are a custom reviewer.",
       ].join("\n"),
@@ -1214,19 +1270,17 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
 
     // 2. An on-disk profile with a conflicting model
     writeFileSync(
-      join(subagentsDir, "pi-deepseek-conflicting.md"),
+      join(subagentsDir, "conflicting.md"),
       [
         "---",
         "description: Conflicting reviewer",
-        "backend: pi",
-        "harness: pi-deepseek",
         "model: openai/gpt-5",
         "---",
         "You are conflicting.",
       ].join("\n"),
     );
 
-    const tool = makeWorkflowTool();
+    const tool = makeWorkflowTool(undefined, 2);
     const ctx = {
       cwd,
       modelRegistry,
@@ -1262,6 +1316,8 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     const childEvidence = JSON.parse(childLaunch.items.map(item => item.text).join(""));
     expect(childEvidence.intent.authoredPrompt).toBe("test task");
     expect(childEvidence.execution.configuration.harness).toBe("pi-deepseek");
+    expect(childEvidence.intent.plannedConfiguration.maxBudgetUsd).toBe(2);
+    expect(childEvidence.execution.configuration.maxBudgetUsd).toBe(2);
     expect(childEvidence.execution.roleInstructions).toContain("You are a custom reviewer.");
     expect(childEvidence.applied.tools).toContain("read");
     expect(childEvidence.applied.thinkingApplied).toBeDefined();
@@ -1274,11 +1330,11 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     });
     registration.setResponses([() => fauxAssistantMessage("done")]);
 
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides", "pi-deepseek");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
-      join(subagentsDir, "pi-deepseek-custom.md"),
-      "---\ndescription: Custom reviewer.\nbackend: pi\nharness: pi-deepseek\n---\nCustom.\n",
+      join(subagentsDir, "custom.md"),
+      "---\ndescription: Custom reviewer.\n---\nCustom.\n",
     );
 
     const registry = new RunRegistry();
@@ -1357,11 +1413,11 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     const heldResponse = new Promise<AssistantMessage>((resolve) => { resolveResponse = resolve; });
     registration.setResponses([() => heldResponse]);
 
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides", "pi-deepseek");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(
-      join(subagentsDir, "pi-deepseek-custom.md"),
-      "---\ndescription: Custom reviewer.\nbackend: pi\nharness: pi-deepseek\n---\nCustom.\n",
+      join(subagentsDir, "custom.md"),
+      "---\ndescription: Custom reviewer.\n---\nCustom.\n",
     );
 
     const registry = new RunRegistry();
@@ -1452,16 +1508,14 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       },
     });
 
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
+    const subagentsDir = join(agentDir, "pi-flow-external", "overrides", "pi-deepseek");
     mkdirSync(subagentsDir, { recursive: true });
 
     writeFileSync(
-      join(subagentsDir, "pi-deepseek-conflicting.md"),
+      join(subagentsDir, "conflicting.md"),
       [
         "---",
         "description: Conflicting reviewer",
-        "backend: pi",
-        "harness: pi-deepseek",
         "model: openai/gpt-5",
         "---",
         "You are conflicting.",
@@ -1491,7 +1545,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     );
 
     expect(result.details.status).toBe("error");
-    expect(result.details.error).toMatch(/conflicts with "pi-deepseek"'s registered model/);
+    expect(result.details.error).toMatch(/instruction metadata supports description only/);
   });
 
   it("exposes interrupted child output in the terminal workflow receipt when a child fails", async () => {

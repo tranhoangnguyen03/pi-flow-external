@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
 import type { SubagentProfile } from "../src/types.ts";
 import { buildOpencodeArgs, buildOpencodeEnv, spawnOpencodeSubagent } from "../src/core/opencode.ts";
-import { hasNestedAgentActivity } from "../src/core/spawn.ts";
+import { spawnSubagent, hasNestedAgentActivity } from "../src/core/spawn.ts";
 import { inspectRun } from "../src/core/run-inspection.ts";
 import { loadExternalCatalog, resolveExternalProfile } from "../src/profiles.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
@@ -87,6 +87,25 @@ describe("opencode backend", () => {
     return infoPath;
   }
 
+  it("records the actual pinned variant or backend effort default, ignoring inherited effort", async () => {
+    const infoPath = installFake("launch-evidence", STREAM);
+    for (const thinking of [undefined, "high"]) {
+      const result = await spawnSubagent({
+        toolCallId: "opencode-evidence", description: "Evidence", prompt: "Do the task.",
+        profile: profile({ model: "openai/gpt-5", thinking }), thinkingLevel: "low", signal: undefined,
+        ctx: { cwd } as ExtensionContext, timeoutMs: 5000, progressEnabled: false,
+        onProgress: undefined, onUsage: () => {}, excludeTools: [], permission: "danger",
+      });
+      expect(result.details.status).toBe("done");
+      const launch = await inspectRun({ runsDirectory: join(agentDir, "pi-flow-external", "runs"), runId: result.details.runId!, view: "launch" });
+      const evidence = JSON.parse(launch.items.map(item => item.text).join(""));
+      expect(evidence.execution.configuration.thinkingApplied).toBe(thinking ?? "Backend default");
+      expect(evidence.execution.configuration.thinkingRequested).toBe(thinking);
+      const { args } = JSON.parse(readFileSync(infoPath, "utf8"));
+      expect(args[args.indexOf("--model") + 1]).toBe(`openai/gpt-5${thinking ? `#${thinking}` : ""}`);
+    }
+  });
+
   function run(overrides: Partial<Parameters<typeof spawnOpencodeSubagent>[0]> = {}) {
     return spawnOpencodeSubagent({
       toolCallId: "call_opencode",
@@ -120,7 +139,15 @@ describe("opencode backend", () => {
     expect(() => buildOpencodeEnv("edit", { OPENCODE_CONFIG_CONTENT: "{}" }, "pi-flow-edit-n3")).toThrow(/already set/);
   });
 
-  it("blocks an opencode override whose thinking has no model to be a variant of, or whose model lacks a provider", () => {
+  it("blocks a v5 opencode binding whose effort has no model to be a variant of", () => {
+    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 5, harnesses: { opencode: { roles: { reviewer: { thinking: "high" }, qa: { model: "openrouter/anthropic/claude", thinking: "max" } } } } }));
+    const catalog = loadExternalCatalog(agentDir);
+    expect(catalog.blocked).toBe(false);
+    expect(() => resolveExternalProfile(catalog.profiles, { role: "reviewer", harness: "opencode" }, "agy")).toThrow(/requires a pinned model/);
+    expect(resolveExternalProfile(catalog.profiles, { role: "qa", harness: "opencode" }, "agy")).toMatchObject({ name: "opencode/qa", model: "openrouter/anthropic/claude", thinking: "max" });
+  });
+
+  it("blocks a legacy v4 opencode override whose thinking has no model to be a variant of, or whose model lacks a provider (inspection only)", () => {
     const overrides = join(agentDir, "pi-flow-external", "overrides");
     mkdirSync(overrides, { recursive: true });
     writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 4 }));
@@ -128,7 +155,8 @@ describe("opencode backend", () => {
     writeFileSync(join(overrides, "opencode-planner.md"), "---\ndescription: Plan\nbackend: opencode\nmodel: sonnet\n---\nPlan.");
     writeFileSync(join(overrides, "opencode-explorer.md"), "---\ndescription: Explore\nbackend: opencode\nmodel: openai/gpt-5#low\nthinking: high\n---\nExplore.");
     writeFileSync(join(overrides, "opencode-qa.md"), "---\ndescription: QA\nbackend: opencode\nmodel: openrouter/anthropic/claude\nthinking: max\n---\nQA.");
-    const catalog = loadExternalCatalog(agentDir);
+    expect(loadExternalCatalog(agentDir).blocked).toBe(true);
+    const catalog = loadExternalCatalog(agentDir, { legacyInspection: true });
     expect(() => resolveExternalProfile(catalog.profiles, { role: "reviewer", harness: "opencode" }, "agy")).toThrow(/without a model/);
     expect(() => resolveExternalProfile(catalog.profiles, { role: "planner", harness: "opencode" }, "agy")).toThrow(/provider\/model/);
     expect(() => resolveExternalProfile(catalog.profiles, { role: "explorer", harness: "opencode" }, "agy")).toThrow(/Keep one/);
@@ -301,7 +329,7 @@ emit('text', { part: part({ type: 'text', text: 'opencode child done' }) });
     const summary = JSON.parse(readFileSync(join(recordsRoot, runId!, "summary.json"), "utf8")).summary;
     expect(summary).toMatchObject({
       backend: "opencode",
-      profile: "opencode-worker",
+      profile: "opencode/worker",
       status: "done",
       backendEventCount: 2,
       permission: { tier: "danger", enforced: true },
