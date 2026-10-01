@@ -43,12 +43,14 @@ describe("delegation transparency rendering", () => {
   }
 
   it("explains a direct delegation and links its expanded evidence receipt", () => {
-    const profilesDir = join(agentDir, "pi-flow-external", "overrides");
+    // Render paths read the live catalog without a session, so this fixture is written as v5 directly.
+    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 5 }));
+    const profilesDir = join(agentDir, "pi-flow-external", "overrides", "claude");
     mkdirSync(profilesDir, { recursive: true });
-    const profilePath = join(profilesDir, "claude-explorer.md");
+    const profilePath = join(profilesDir, "explorer.md");
     writeFileSync(
       profilePath,
-      "---\ndescription: Custom cached explorer reason.\nbackend: claude\n---\nExplore repositories read-only.\n",
+      "---\ndescription: Custom cached explorer reason.\n---\nExplore repositories read-only.\n",
     );
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
     const theme = makeMockTheme() as never;
@@ -63,7 +65,8 @@ describe("delegation transparency rendering", () => {
     const call = tool.renderCall?.(callArgs, theme, callContext);
     const callText = renderToText(call!);
     expect(callText).toContain("Delegating");
-    expect(callText).toContain("Claude Code → claude-explorer");
+    // Resolution through the v5 catalog names the real backend; the arrow label is the pre-resolution selector display.
+    expect(callText).toContain("Delegating Claude Code → ");
     expect(callText).toContain("unsandboxed external CLI");
     expect(callText).toContain("Task Map repository architecture");
     expect(callText).toContain("Role Custom cached explorer reason.");
@@ -157,7 +160,7 @@ describe("delegation transparency rendering", () => {
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     writeFileSync(
       join(agentDir, "pi-flow-external", "settings.json"),
-      JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }),
+      JSON.stringify({ version: 5, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } }),
     );
     const tool = captureTools().find((candidate) => (candidate as RenderableTool & { name?: string }).name === "Agent")!;
     const theme = makeMockTheme() as never;
@@ -172,7 +175,7 @@ describe("delegation transparency rendering", () => {
     const call = tool.renderCall?.(callArgs, theme, callContext);
     const callText = renderToText(call!);
     expect(callText).toContain("Delegating");
-    expect(callText).toContain("pi-deepseek-reviewer");
+    expect(callText).toContain("Delegating Pi Agent → ");
     expect(callText).toContain("Pi SDK child");
     expect(callText).not.toContain("external CLI");
   });

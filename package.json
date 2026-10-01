@@ -9,6 +9,7 @@
     "index.ts",
     "src",
     "scripts/field-report.mjs",
+    "docs/ARCHITECTURE_SNAPSHOT.md",
     "docs/field-testing.md",
     "docs/releasing.md",
     "AGENTS.md",

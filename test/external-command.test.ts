@@ -66,14 +66,14 @@ describe("/external command", () => {
         const options = commandOptions({ settings: settingsV4(root) });
         registerExternalCommand(pi as never, options as never);
 
+        const verbs = (group: string, list: string[]) => list.map((verb) => `config ${group} ${verb}`);
         expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-          "doctor", "config", "config edit", "config convert", "config harnesses", "config harness create",
-          "config enable", "config disable", "config default", "roles", "role create", "role inspect", "role override", "[danger]purge-old-files",
-          "workflows", "runs", "runs summary", "runs --prune", "help",
+          "doctor", "config", "config text", "config edit", "config convert",
+          ...verbs("harness", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "default", "test", "assist"]),
+          ...verbs("role", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "assist"]),
+          "[danger]purge-old-files", "workflows", "runs", "runs summary", "runs --prune", "help",
         ]);
-        expect(command?.getArgumentCompletions("role")?.map((item) => item.value)).toEqual([
-          "roles", "role create", "role inspect", "role override",
-        ]);
+        expect(command?.getArgumentCompletions("config role inspect rev")?.map((item) => item.value)).toEqual(["config role inspect reviewer"]);
 
         const notices: string[] = [];
         const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
@@ -84,16 +84,29 @@ describe("/external command", () => {
         expect(notices.at(-1)).toContain("Harnesses: 6 CLI");
         expect(notices.at(-1)).toContain(options.settings.path);
 
-        // Roles groups by role instead of dumping the harness × role product.
-        await command?.handler("roles", ctx);
-        expect(notices.at(-1)).toContain("reviewer: 6 harness(es)");
-        expect(notices.at(-1)).not.toContain("claude-reviewer: claude");
+        // Roles list one row per role instead of the harness × role product.
+        await command?.handler("config role list", ctx);
+        expect(notices.at(-1)).toContain("- reviewer · built-in · enabled");
+        expect(notices.at(-1)).not.toContain("claude/reviewer");
 
-        // Harness creation routes to the harness interview, role creation to the role interview.
+        // Assisted interviews are explicit; deterministic creation never starts one.
         await command?.handler("config harness create", ctx);
+        expect(notices.at(-1)).toContain("Usage: /external config harness create pi-NAME --model");
+        await command?.handler("config harness assist", ctx);
         expect(options.startHarnessInterview).toHaveBeenCalledOnce();
-        await command?.handler("role create", ctx);
+        await command?.handler("config role assist", ctx);
         expect(options.startRoleInterview).toHaveBeenCalledOnce();
+
+        // Replaced routes do not run; help names their replacements.
+        for (const old of ["roles", "role create", "role inspect reviewer", "role override reviewer claude", "config harnesses", "config enable codex", "config disable codex", "config default codex"]) {
+          await command?.handler(old, ctx);
+          expect(notices.at(-1)).toContain("Usage: /external doctor");
+        }
+        await command?.handler("config role frobnicate", ctx);
+        expect(notices.at(-1)).toContain("/external config role set NAME --harness NAME");
+        await command?.handler("help", ctx);
+        expect(notices.at(-1)).toContain("/external role override <role> <harness> → /external config role edit <role> --harness NAME");
+        expect(notices.at(-1)).toContain("/external config enable|disable|default <harness> → /external config harness enable|disable|default <harness>");
 
         // Unknown commands get ordinary usage help only: no alias, no interview, no legacy pointer.
         await command?.handler("profiles", ctx);
@@ -133,6 +146,13 @@ describe("/external command", () => {
         expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
         expect(notices.at(-1)).toContain(options.settings.path);
 
+        // The explicit text route must not open a dialog, even with a TUI context.
+        const custom = vi.fn();
+        await command?.handler("config text", { ...ctx, mode: "tui", hasUI: true, ui: { ...ctx.ui, custom } });
+        expect(notices.at(-1)).toContain("defaultHarness: agy (global)");
+        expect(custom).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+
         mkdirSync(join(root, ".pi", "pi-flow-external"), { recursive: true });
         writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
         await command?.handler("config", { ...ctx, isProjectTrusted: () => true });
@@ -146,20 +166,42 @@ describe("/external command", () => {
         expect(notices.at(-1)).toContain("CLI: available (claude 1.2.3)");
         expect(exec).toHaveBeenCalledWith("claude", ["--version"], { timeout: 10_000 });
 
-        await command?.handler("config harnesses", ctx);
-        expect(notices.at(-1)).toContain("- codex · CLI · enabled");
+        await command?.handler("config harness list", ctx);
+        expect(notices.at(-1)).toContain("- codex · CLI (model native · effort native) · enabled");
         expect(notices.at(-1)).toContain("no named Pi harnesses");
+
+        // Readiness is explicit and honest that no model request was made.
+        await command?.handler("config harness test claude", ctx);
+        expect(notices.at(-1)).toContain("CLI: available (claude 1.2.3)");
+        expect(notices.at(-1)).toContain("No model request was made");
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("toggles harnesses and the default through the validated writer, guarding the effective default and skipping disabled readiness", async () => {
+  it("reports the configured Pi parent effort policy instead of the legacy projection", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pi-flow-command-parent-'));
+    try {
+      await withAgentDir(root, async () => {
+        mkdirSync(join(root, 'pi-flow-external'));
+        writeFileSync(join(root, 'pi-flow-external/settings.json'), JSON.stringify({ version: 5, harnesses: { 'pi-check': { model: 'p/m', thinking: 'parent' } } }));
+        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+        registerExternalCommand({ exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } } as never,
+          commandOptions({ settings: settingsV4(root) }) as never);
+        const notices: string[] = [];
+        await command?.handler('config text', { cwd: root, isProjectTrusted: () => false, ui: { notify: (text: string) => notices.push(text) } });
+        expect(notices.at(-1)).toContain('Pi (p/m · parent');
+        expect(notices.at(-1)).not.toContain('default thinking');
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("manages harnesses through the validated writer, guarding defaults, previewing deletes, and skipping disabled readiness", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-toggle-"));
     const settingsPath = join(root, "pi-flow-external", "settings.json");
     mkdirSync(join(root, "pi-flow-external"), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } }));
+    writeFileSync(settingsPath, JSON.stringify({ version: 5, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } }));
     try {
       await withAgentDir(root, async () => {
         let command: { getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null; handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
@@ -168,25 +210,26 @@ describe("/external command", () => {
         registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root) }) as never);
         const notices: string[] = [];
         const find = vi.fn(() => undefined);
-        const ctx = { cwd: root, isProjectTrusted: () => false, modelRegistry: { find }, ui: { notify: (message: string) => notices.push(message) } };
+        const confirm = vi.fn(async () => false);
+        const ctx = { cwd: root, hasUI: true, isProjectTrusted: () => false, modelRegistry: { find }, ui: { notify: (message: string) => notices.push(message), confirm } };
         const saved = () => JSON.parse(readFileSync(settingsPath, "utf8"));
 
-        expect(command?.getArgumentCompletions("config disable pi")?.map((item) => item.value)).toEqual(["config disable pi-check"]);
+        expect(command?.getArgumentCompletions("config harness disable pi")?.map((item) => item.value)).toEqual(["config harness disable pi-check"]);
 
         // The effective default cannot be disabled, and a disabled harness cannot become the default.
-        await command?.handler("config disable agy", ctx);
-        expect(notices.at(-1)).toMatch(/Cannot disable "agy".*config default/);
-        await command?.handler("config disable nope", ctx);
+        await command?.handler("config harness disable agy", ctx);
+        expect(notices.at(-1)).toMatch(/Cannot disable "agy".*harness default/);
+        await command?.handler("config harness disable nope", ctx);
         expect(notices.at(-1)).toMatch(/Unknown harness "nope"/);
-        await command?.handler("config disable codex", ctx);
-        await command?.handler("config disable pi-check", ctx);
-        await command?.handler("config default codex", ctx);
-        expect(notices.at(-1)).toMatch(/Cannot make "codex" the default.*config enable codex/);
-        expect(saved()).toEqual({ version: 4, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli", "codex", "pi-check"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal" } } });
+        await command?.handler("config harness disable codex", ctx);
+        await command?.handler("config harness disable pi-check", ctx);
+        await command?.handler("config harness default codex", ctx);
+        expect(notices.at(-1)).toMatch(/Cannot make "codex" the default.*harness enable codex/);
+        expect(saved()).toEqual({ version: 5, defaultHarness: "agy", futureField: { keep: true }, disabledHarnesses: ["future-cli"], harnesses: { "pi-check": { model: "test/model", thinking: "off", preset: "minimal", enabled: false }, codex: { enabled: false } } });
 
-        await command?.handler("config harnesses", ctx);
-        expect(notices.at(-1)).toContain("- codex · CLI · disabled");
-        expect(notices.at(-1)).toContain("- pi-check · Pi (test/model · default thinking · minimal) · disabled");
+        await command?.handler("config harness list", ctx);
+        expect(notices.at(-1)).toContain("- codex · CLI (model native · effort native) · disabled");
+        expect(notices.at(-1)).toContain("- pi-check · Pi (model test/model · effort off · preset minimal) · disabled");
         expect(notices.at(-1)).toContain("- future-cli · unknown · disabled");
 
         // Doctor skips readiness probes for disabled CLI and Pi harnesses.
@@ -195,98 +238,118 @@ describe("/external command", () => {
         expect(find).not.toHaveBeenCalled();
         expect(notices.at(-1)).toContain("○ codex: disabled (readiness not checked)");
 
+        // Set and field reset change only named properties; the gate survives and nothing is re-enabled.
+        await command?.handler('config harness set codex --model "gpt-x" --effort high', ctx);
+        await command?.handler("config harness reset codex --effort", ctx);
+        expect(saved().harnesses.codex).toEqual({ enabled: false, model: "gpt-x" });
+        await command?.handler("config harness inspect codex", ctx);
+        expect(notices.at(-1)).toContain("Model: gpt-x · settings harnesses.codex");
+        expect(notices.at(-1)).toContain("Effort: native (backend's own default) · backend default");
+        await command?.handler("config harness set codex --effort hgh", ctx);
+        expect(notices.at(-1)).toMatch(/Settings were not changed: .*unsupported reasoning effort/);
+
         // A project default is also guarded; enabling an unknown preserved name removes only that name.
         mkdirSync(join(root, ".pi", "pi-flow-external"), { recursive: true });
         writeFileSync(join(root, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "claude" }));
-        await command?.handler("config disable claude", { ...ctx, isProjectTrusted: () => true });
+        await command?.handler("config harness disable claude", { ...ctx, isProjectTrusted: () => true });
         expect(notices.at(-1)).toMatch(/Cannot disable "claude": it is the project default/);
-        await command?.handler("config enable future-cli", ctx);
-        await command?.handler("config enable codex", ctx);
-        await command?.handler("config default codex", ctx);
-        expect(saved()).toMatchObject({ defaultHarness: "codex", futureField: { keep: true }, disabledHarnesses: ["pi-check"] });
+        await command?.handler("config harness enable future-cli", ctx);
+        await command?.handler("config harness enable codex", ctx);
+        await command?.handler("config harness default codex", ctx);
+        expect(saved()).toMatchObject({ defaultHarness: "codex", futureField: { keep: true }, disabledHarnesses: [], harnesses: { codex: { model: "gpt-x" } } });
+
+        // Deterministic creation, then delete with an impact preview; built-ins and cancelled deletes change nothing.
+        await command?.handler("config harness create pi-new --model p/m --preset skills", ctx);
+        expect(saved().harnesses["pi-new"]).toEqual({ model: "p/m", thinking: "off", preset: "skills", owner: "user" });
+        expect(notices.at(-1)).toContain("No readiness check was run");
+        await command?.handler("config harness test pi-new", ctx);
+        expect(notices.at(-1)).toContain("No model test");
+        await command?.handler("config harness delete codex", ctx);
+        expect(notices.at(-1)).toMatch(/built-in CLI harness and cannot be deleted/);
+        await command?.handler("config harness delete pi-new", ctx);
+        expect(confirm).toHaveBeenLastCalledWith("Delete harness pi-new?", expect.stringContaining("- harnesses.pi-new"));
+        expect(saved().harnesses["pi-new"]).toBeDefined();
+        confirm.mockResolvedValueOnce(true);
+        await command?.handler("config harness delete pi-new", ctx);
+        expect(saved().harnesses["pi-new"]).toBeUndefined();
+
+        // Arguments are strict: duplicate flags, extra positionals, and irrelevant flags change nothing.
+        const before = readFileSync(settingsPath, "utf8");
+        for (const bad of ["config harness set codex --model a --model b", "config harness set codex extra --model a", "config harness inspect codex --model a", "config harness list extra", "config role list --harness codex", "config role set reviewer --harness codex --harness claude --effort high", "config role enable reviewer extra"]) {
+          await command?.handler(bad, ctx);
+          expect(notices.at(-1), bad).toMatch(/more than once|Unexpected argument|Unknown option/);
+        }
+        expect(readFileSync(settingsPath, "utf8")).toBe(before);
+
+        // A change between preview and confirmation (here: the default moves to the target) refuses the delete.
+        await command?.handler("config harness create pi-late --model p/m", ctx);
+        confirm.mockImplementationOnce(async () => { writeFileSync(settingsPath, JSON.stringify({ ...saved(), defaultHarness: "pi-late" })); return true; });
+        await command?.handler("config harness delete pi-late", ctx);
+        expect(notices.at(-1)).toMatch(/not deleted: .*global default/);
+        expect(saved().harnesses["pi-late"]).toBeDefined();
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("inspects the effective role for a harness and refuses unknown bindings with candidates", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-inspect-"));
+  it("authors, customizes, inspects, resets, and deletes roles deterministically in the editor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-roles-"));
+    const base = join(root, "pi-flow-external");
+    mkdirSync(base, { recursive: true });
+    writeFileSync(join(base, "settings.json"), JSON.stringify({ version: 5 }));
     try {
       await withAgentDir(root, async () => {
         let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
         const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const profiles = new Map<string, SubagentProfile>([
-          ["agy-reviewer", { name: "agy-reviewer", description: "Review.", backend: "agy", systemPrompt: "Check diffs.", source: "built-in" }],
-          ["claude-reviewer", { name: "claude-reviewer", description: "Review.", backend: "claude", systemPrompt: "Check diffs.", source: "built-in" }],
-        ]);
-        const options = commandOptions({
-          settings: settingsV4(root),
-          getCatalog: () => ({ profiles, diagnostics: [], blocked: false, harnessConfigs: new Map() }),
-        });
+        const options = commandOptions({ settings: settingsV4(root) });
         registerExternalCommand(pi as never, options as never);
-
-        const notices: Array<{ message: string; level: string }> = [];
-        const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string, level: string) => notices.push({ message, level }) } };
-
-        await command?.handler("role inspect reviewer", ctx);
-        expect(notices.at(-1)?.message).toContain("agy-reviewer: Review.");
-        expect(notices.at(-1)?.message).toContain("Source: built-in");
-        expect(notices.at(-1)?.message).toContain("call permission danger");
-        expect(notices.at(-1)?.message).toContain("autonomous");
-        expect(notices.at(-1)?.message).toContain("Check diffs.");
-
-        await command?.handler("role inspect reviewer claude", ctx);
-        expect(notices.at(-1)?.message).toContain("claude-reviewer");
-
-        await command?.handler("role inspect reviewer pi-missing", ctx);
-        expect(notices.at(-1)?.message).toContain("Available bindings: agy-reviewer, claude-reviewer");
-
-        await command?.handler("role inspect nope", ctx);
-        expect(notices.at(-1)?.message).toContain('Unknown role "nope"');
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("materializes one exact override without touching the live catalog source", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-override-"));
-    try {
-      await withAgentDir(root, async () => {
-        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
-        const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const profiles = new Map<string, SubagentProfile>([
-          ["claude-reviewer", { name: "claude-reviewer", description: "Review.", backend: "claude", systemPrompt: "Check diffs.", source: "built-in" }],
-        ]);
-        const options = commandOptions({
-          settings: settingsV4(root),
-          getCatalog: () => ({ profiles, diagnostics: [], blocked: false, harnessConfigs: new Map() }),
-        });
-        registerExternalCommand(pi as never, options as never);
-
         const notices: string[] = [];
-        const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
+        const editor = vi.fn(async (_title: string, _content: string) => "---\ndescription: Audit changes\n---\nAudit now.");
+        const confirm = vi.fn(async () => true);
+        const ctx = { cwd: root, hasUI: true, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message), editor, confirm } };
+        const saved = () => JSON.parse(readFileSync(join(base, "settings.json"), "utf8"));
 
-        await command?.handler("role override", ctx);
-        expect(notices.at(-1)).toContain("Usage: /external role override <role> <harness>");
+        await command?.handler("config role create audit", ctx);
+        expect(readFileSync(join(base, "roles", "audit.md"), "utf8")).toBe('---\ndescription: "Audit changes"\n---\nAudit now.\n');
+        editor.mockResolvedValueOnce("---\ndescription: Codex audit\n---\n");
+        await command?.handler("config role edit audit --harness codex", ctx);
+        expect(editor).toHaveBeenLastCalledWith("role audit on codex", expect.stringContaining("Audit now."));
+        expect(existsSync(join(base, "overrides", "codex", "audit.md"))).toBe(true);
+        await command?.handler("config role set audit --model gpt-x", ctx);
+        expect(notices.at(-1)).toContain("--harness NAME");
+        await command?.handler("config role set audit --harness codex --model gpt-x --budget 3", ctx);
+        expect(saved()).toEqual({ version: 5, harnesses: { codex: { roles: { audit: { model: "gpt-x", max_budget_usd: 3 } } } } });
 
-        await command?.handler("role override reviewer claude", ctx);
-        const finalPath = join(root, "pi-flow-external", "overrides", "claude-reviewer.md");
-        expect(existsSync(finalPath)).toBe(true);
-        expect(notices.at(-1)).toContain("complete replacement (not a merge)");
-        expect(notices.at(-1)).toContain("Values apply from the next invocation; frozen workflows keep their prior snapshot");
-        expect(notices.at(-1)).not.toContain("parent syncs");
+        await command?.handler("config role inspect audit --harness codex", ctx);
+        expect(notices.at(-1)).toContain("codex/audit: Codex audit");
+        expect(notices.at(-1)).toContain("Model: gpt-x · role audit on codex");
+        expect(notices.at(-1)).toContain(`Instructions: ${join(base, "overrides", "codex", "audit.md")}`);
+        expect(notices.at(-1)).toContain("(empty instructions)");
+        expect(notices.at(-1)).toContain("Codex --sandbox axis");
+        await command?.handler("config role inspect audit", ctx);
+        expect(notices.at(-1)).toContain("- codex: available · model gpt-x · effort native · instruction override");
+        expect(notices.at(-1)).toContain("- claude: available · model native");
 
-        // Repeat invocation refuses to overwrite.
-        await command?.handler("role override reviewer claude", ctx);
-        expect(notices.at(-1)).toContain("already exists");
-        expect(notices.at(-1)).toContain("was not changed");
+        // Enabling one gate reports the remaining one instead of implying availability.
+        await command?.handler("config role disable audit", ctx);
+        await command?.handler("config role enable audit --harness codex", ctx);
+        expect(notices.at(-1)).toMatch(/already enabled\. Still blocked: role "audit" is disabled/);
 
-        // Unknown bindings name the missing identity instead of writing.
-        await command?.handler("role override reviewer agy", ctx);
-        expect(notices.at(-1)).toContain("no effective role");
-        expect(existsSync(join(root, "pi-flow-external", "overrides", "agy-reviewer.md"))).toBe(false);
+        // Broad binding reset previews, keeps the gate, and removes the override and scalars.
+        await command?.handler("config role reset audit --harness codex", ctx);
+        expect(confirm).toHaveBeenLastCalledWith("Reset codex/audit?", expect.stringContaining(join(base, "overrides", "codex", "audit.md")));
+        expect(saved()).toEqual({ version: 5, roles: { audit: { enabled: false } } });
+        expect(existsSync(join(base, "overrides", "codex", "audit.md"))).toBe(false);
+
+        await command?.handler("config role delete reviewer", ctx);
+        expect(notices.at(-1)).toMatch(/built-in role and cannot be deleted/);
+        await command?.handler("config role delete audit", { ...ctx, hasUI: false });
+        expect(notices.at(-1)).toContain("needs interactive confirmation");
+        expect(existsSync(join(base, "roles", "audit.md"))).toBe(true);
+        await command?.handler("config role delete audit", ctx);
+        expect(existsSync(join(base, "roles", "audit.md"))).toBe(false);
+        expect(saved()).toEqual({ version: 5 });
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -438,9 +501,14 @@ describe("/external command", () => {
         expect(existsSync(join(root, "pi-flow-external", "overrides", "claude-security-reviewer.md"))).toBe(true);
         expect(existsSync(join(root, "subagents", "claude-security-reviewer.md"))).toBe(true);
 
-        // A second run reports current instead of converting again.
+        // v5 previews disclose retained unresolved exclusions before confirmation.
+        const settingsPath = join(root, 'pi-flow-external/settings.json');
+        writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, 'utf8')), disabledProfiles: ['unknown-name'], disabledHarnesses: ['pi-gone'] }));
         await command?.handler("config convert", ctx);
-        expect(notices.at(-1)).toContain("already version 4");
+        expect(confirm.mock.calls.at(-1)).toEqual(expect.arrayContaining([expect.stringContaining('Retained unresolved disabled identity unknown-name')]));
+        expect(notices.at(-1)).toContain("Converted to v5");
+        await command?.handler("config convert", ctx);
+        expect(notices.at(-1)).toContain("already version 5");
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

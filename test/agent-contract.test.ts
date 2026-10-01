@@ -206,6 +206,53 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     disposeSession(session);
   });
 
+  it("delegates through v5 harness defaults and sparse pair exceptions, omitting native effort", async () => {
+    // A v5 file is already current, so the session's conversion step leaves it untouched.
+    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({
+      version: 5,
+      harnesses: { codex: { model: "gpt-harness", thinking: "medium", roles: { reviewer: { thinking: "native" }, worker: { model: "gpt-pair" } } } },
+    }));
+    const binDir = join(tempDir, "bin-v5");
+    const argsLog = join(tempDir, "v5-args.ndjson");
+    mkdirSync(binDir, { recursive: true });
+    const fakeCodex = join(binDir, "codex");
+    writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+appendFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'v5-test' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
+`);
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const { session, model, modelRegistry } = await createSession({ thinkingLevel: "high" });
+    const agent = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const results: any[] = [];
+    for (const role of ["explorer", "reviewer", "worker"]) {
+      results.push(await agent.execute(`v5-${role}`, { description: `v5 ${role}`, prompt: `Do ${role}.`, role, harness: "codex" }, undefined, undefined, context));
+    }
+    expect(results.map((result) => result.details.status)).toEqual(["done", "done", "done"]);
+    expect(results.map((result) => result.details.subagentType)).toEqual(["codex/explorer", "codex/reviewer", "codex/worker"]);
+    const [explorer, reviewer, worker] = readFileSync(argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const flag = (args: string[], name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
+    const effort = (args: string[]) => args.find((arg) => arg.startsWith("model_reasoning_effort"));
+    // Harness default applies to a role with no exception.
+    expect(flag(explorer!, "--model")).toBe("gpt-harness");
+    expect(effort(explorer!)).toMatch(/medium/);
+    // A native pair exception omits effort entirely rather than forwarding the parent's "high".
+    expect(flag(reviewer!, "--model")).toBe("gpt-harness");
+    expect(effort(reviewer!)).toBeUndefined();
+    expect(reviewer!.join(" ")).not.toMatch(/high/);
+    // A pair model exception overrides only the model; effort still inherits the harness default.
+    expect(flag(worker!, "--model")).toBe("gpt-pair");
+    expect(effort(worker!)).toMatch(/medium/);
+    disposeSession(session);
+  });
+
   it("keeps queuedAt and executionStartedAt visible in live timing after the backend's own progress node replaces the queued one", async () => {
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-live-timing");
@@ -473,7 +520,7 @@ setInterval(() => {}, 1000);
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
     expect(result.content[0].text).toContain("security-reviewer (claude)");
-    expect(result.content[0].text).toContain("claude-security-reviewer: Custom security review through Claude.");
+    expect(result.content[0].text).toContain("claude/security-reviewer: Custom security review through Claude.");
     expect(result.content[0].text).toContain("specialist (codex): Exact-only Codex specialist.");
 
     disposeSession(session);

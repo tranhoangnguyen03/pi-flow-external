@@ -34,7 +34,7 @@ export const ROLE_INTERVIEW_PROMPT = `Help me create one reusable pi-flow extern
 
 A role is shared authoring only: one markdown file under pi-flow-external/roles/ that works with any harness (agy, claude, codex, grok, muse, opencode, or a registered pi-* harness). Ask one question at a time, only when the answer is not already known. Collect enough information to write a focused role: its intended work, boundaries (especially read-only versus file modification), useful output, validation expectations, and stop/escalation rules. Suggest a lowercase role name such as security-reviewer (no backend prefix; naming it reviewer replaces the built-in reviewer across harnesses).
 
-Describe read-only or editing intent in the instructions. Do not ask for a permission tier: a role does not grant authority. The caller passes permission, or the global defaultPermission applies. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific customizations belong in an exact override created later via /external role override. When ready, summarize once and call ${ROLE_TOOL_NAME}.
+Describe read-only or editing intent in the instructions. Do not ask for a permission tier: a role does not grant authority. The caller passes permission, or the global defaultPermission applies. Do not ask about backend, model, or thinking: shared roles never pin those, and backend-specific execution settings belong in /external config role set <role> --harness <name>; instruction replacements use /external config role edit <role> --harness <name>. When ready, summarize once and call ${ROLE_TOOL_NAME}.
 
 Do not write files yourself and do not run Agent or workflow. The tool will show what will be created for review, request confirmation, and write it offline without a backend smoke test. A role is not an authenticated connection; readiness smoke testing belongs to harness registration.`;
 
@@ -241,7 +241,7 @@ function harnessReview(name: string, model: string, thinking: string, preset: Pi
   const resources = preset === "skills"
     ? "Preset: skills. The smoke test loads installed skills."
     : "Preset: minimal. The smoke test loads no skills.";
-  return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n${resources}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory.`;
+  return `Name: ${name}\nModel: ${model}\nThinking: ${thinking}\n${resources}\n\nThe six canonical roles (explorer, planner, implementer, reviewer, qa, worker) become automatically available on this harness once registered. The smoke test launches an in-process pi child pinned to this model from an empty temporary working directory with explicit readonly permission: curated tools with host access, not an OS sandbox.`;
 }
 
 // Each interview activates only its own finalizer: the role interview exposes
@@ -256,7 +256,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const roleTool = defineTool({
     name: ROLE_TOOL_NAME,
     label: "Create pi-flow role",
-    description: "Finalize a shared role during the /external role create interview. Shows the compiled role for user confirmation and writes it offline to pi-flow-external/roles/ without a backend smoke test.",
+    description: "Finalize a shared role during the /external config role assist interview. Shows the compiled role for user confirmation and writes it offline to pi-flow-external/roles/ without a backend smoke test.",
     parameters: roleParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       void toolCallId;
@@ -354,7 +354,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
   const harnessTool = defineTool({
     name: HARNESS_TOOL_NAME,
     label: "Create named Pi harness",
-    description: "Finalize a new named Pi harness configuration during the /external config harness create interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
+    description: "Finalize a new named Pi harness configuration during the /external config harness assist interview. Shows what will be registered for confirmation, smoke-tests the real pi runtime against the pinned model, and rolls back on failure.",
     parameters: harnessParameters,
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const name = params.name.trim();
@@ -425,6 +425,7 @@ export function registerProfileCreator(pi: ExtensionAPI, options: ProfileCreator
               const result = await spawnSubagent({
                 toolCallId: `${toolCallId}-smoke`,
                 description: "Harness smoke test",
+                permission: "readonly",
                 prompt: smokePrompt(),
                 profile: { name: `${name}-smoke`, description: "Harness smoke test", backend: "pi", harness: name, model, thinking, preset },
                 model: resolvedModel,

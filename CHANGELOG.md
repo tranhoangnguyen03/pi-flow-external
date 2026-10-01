@@ -4,6 +4,33 @@ All notable changes to pi-flow external are documented here.
 
 ## Unreleased
 
+### Breaking: configuration v5 (issue #73)
+- Require explicit v4→v5 conversion before delegation. `/external config convert` (or **Preview format update…** on the guided recovery screen) previews changes, preserves `settings.v4.backup.json` and original files, and installs instruction copies before activation. Pre-v4 installations first convert to v4, then v5. No automatic consolidation of repeated pins or deletion of copied instructions.
+- Replace `/external config harnesses` → `/external config harness list`; `/external config enable|disable|default NAME` → `/external config harness enable|disable|default NAME`.
+- Replace the `/external config harness create` interview → `/external config harness create pi-NAME --model provider/model [--effort LEVEL] [--preset minimal|skills]`, which saves offline and sends no request, or `/external config harness assist` for the model-assisted interview, which smoke-tests before saving.
+- Replace `/external roles` → `/external config role list`; `/external role create` → `/external config role create NAME` (or `/external config role assist`); `/external role inspect ROLE HARNESS` → `/external config role inspect ROLE --harness HARNESS`; `/external role override ROLE HARNESS` → `/external config role edit ROLE --harness HARNESS` for instructions, or `/external config role set ROLE --harness HARNESS` for model, effort, budget, or tools. Removed routes are not aliases.
+- Bare `/external` and `/external config` now open the guided window in the terminal and in RPC instead of printing text. Scripts that read their output should use `/external config text`, which prints the configuration in any mode. Without UI, both commands still print text.
+- Canonical binding identities use `harness/role`; unambiguous legacy exact selectors remain accepted. Separate path segments prevent hyphenated identity collisions.
+
+### Added
+- Name-based model selection from backend catalogs/aliases and Pi registry, current-value markers, searchable menus, readable access settings, timeout presets and role customization summaries. Model lists come from Codex's local catalog, Claude aliases, or the Antigravity/Grok/OpenCode `models` command when a picker opens; Muse has no listing. Listing sends no prompt but a CLI may contact its service. A listed model or configured account does not imply account eligibility; manual IDs remain a fallback. The window offers Antigravity and Grok only the reasoning levels their adapters forward unchanged.
+- Guided modal configuration through `/external` and `/external config`: agent-first settings, role customization, registry-backed Pi creation, contextual checks, recovery, and Advanced. Existing explicit commands remain available; RPC uses standard dialogs and headless mode retains text output. Opening the window never probes or sends a model request.
+- Role customization distinguishes **Same as <agent>** (remove the role's own value and inherit) from **Use <agent> settings** (an explicit native CLI default, even over an agent pin).
+- Guided Pi creation (**Add a Pi agent…**) picks a provider and model from Pi's registry, then a name, and saves offline only on **Create agent**. **Send a test message…** is a separately confirmed, potentially paid readonly request from an empty temporary directory, limited to 60 seconds, and writes no run record. Esc cancels it and model listing in the terminal window; RPC dialogs cannot cancel them.
+- `/external config text` prints effective configuration, sources, and the settings path in any mode.
+- Instruction editing supports an external editor (`$VISUAL`/`$EDITOR`) and keeps the draft if it fails. The window returns to the recovery screen if settings become invalid while it is open.
+- CLI harness-wide model/effort defaults, sparse role-on-harness exceptions, role-wide enablement, deterministic create/edit/set/reset/delete operations, impact previews and effective configuration origins.
+- Named Pi model/effort exceptions use the same inheritance rules as CLI settings. JSON owns scalars; Markdown owns authored instructions. Fresh CLI defaults are native; converted installations preserve explicit parent effort policy.
+
+### Fixed
+- Keep exact-selector exclusions independent from structured binding gates, and fail closed on symlinked configuration/instruction roots.
+- Prevent settings-editor version changes from bypassing explicit conversion or downgrade safeguards.
+- Preserve enforceable Pi tools during migration, disclose omitted unenforced CLI tools and frozen exact Pi pins, and report unsupported legacy effort with source-specific repair guidance. Include retained-exclusion warnings in conversion previews.
+- Preserve scalar settings when role-reset instruction removal fails; report partial file removal if a later settings write fails. Show Pi parent effort policies accurately in text inspection.
+- Restrict harness smoke tests explicitly to readonly curated tools; no implicit danger fallback.
+- Fingerprint effective inherited effort/budget, conservatively reject replay of unresolved native defaults, and record OpenCode's actual variant/default rather than ignored parent effort.
+- Reject malformed settings and unsupported effort instead of silently dropping them; align blocked discovery with selection and validate destructive preview ownership before applying.
+
 ## [2.10.0-external.0] - 2026-09-25
 
 ### Added

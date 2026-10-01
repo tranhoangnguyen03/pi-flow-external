@@ -56,7 +56,7 @@ Override with `--model`/`--thinking`. Use `--keep` only when evidence inspection
 
 Grok's `readonly`/`edit` tiers run under its own kernel sandbox (`--sandbox read-only`/`workspace`). Grok 1.0.40 on macOS can refuse startup with `sandbox could not be applied: socket deny resolution failed: could not resolve runtime-socket deny path /var/run/docker.sock: endpoint is a symlink`. This is an upstream CLI/environment incompatibility, not proof that the adapter's sandbox flags are wrong. The failed receipt retains the diagnostic and requested permission metadata; the adapter never retries with sandbox off. Do **not** remove or alter the Docker socket as a runner workaround. Verify sandbox enforcement on a compatible host or check a newer Grok version with an actual sandboxed invocation, not just `--help`. An explicitly requested `danger` run has no OS isolation and does not validate readonly delegation. Track compatibility and any confirmed upstream fix in [#61](https://github.com/tranhoangnguyen03/pi-flow-external/issues/61); no fixed upstream version has been verified.
 
-Muse Code 1.3.0 accepts `none` in help text but its `meta` provider rejects `--reasoning-effort none`. Effective `thinking: off` (including the parent session's inherited default, and an exact override that pins `off`) therefore fails before launch with remediation; it is never silently mapped to minimal. Built-in Muse roles do not pin thinking. Pin an exact override to `minimal`, `low`, `medium`, `high`, or `xhigh`, or select a supported parent thinking level. Clearing an override pin does not help when the parent still inherits `off`. Compatibility probes must invoke provider validation, not merely inspect `--help`.
+Muse Code 1.3.0 accepts `none` in help text but its `meta` provider rejects `--reasoning-effort none`. Effective `thinking: off` therefore fails before launch with remediation; it is never silently mapped to minimal. Fresh v5 Muse roles use native effort unless configured; converted settings may retain `parent`. Set supported harness/binding effort (`minimal`, `low`, `medium`, `high`, or `xhigh`), or choose a supported root level when using `parent`. Clearing a binding pin still inherits the harness policy. Compatibility probes must invoke provider validation, not merely inspect `--help`.
 
 Muse's `meta` provider performs its own internal retries (observed up to 10 attempts with growing backoff on transient 503/504 errors) entirely inside the `muse` process; this is unrelated to and invisible from this extension's own no-auto-retry contract, and shows up only as activity narration (e.g. "retrying meta model stream in 60000ms (attempt 3/10)"). A run that never reports usage/cost is expected — Muse has never been observed to report either.
 
@@ -72,7 +72,7 @@ Run only when the pi runtime contract, harness registration, or the in-memory ro
 npm run e2e -- --backend pi --harness pi-deepseek
 ```
 
-This lane reads your real agent directory and does not write a role file for the built-in `worker` role. It does not register or pay for the harness. The faux root model is registered only in-process, and the harness's own real model/auth resolve normally through your real `models.json`/`auth.json`. It delegates to the harness you name and requires the same one complete `done` receipt. A missing credential is not a pass.
+This lane reads your real agent directory and does not write a role file for the built-in `worker` role. It does not register the harness, but it does send a real request to its model and can incur usage charges. The faux root model is registered only in-process, and the harness's own real model/auth resolve normally through your real `models.json`/`auth.json`. It delegates to the harness you name and requires the same one complete `done` receipt. A missing credential is not a pass.
 
 ## Supervised workflow receipt
 
@@ -152,28 +152,82 @@ Local fixture tests already cover batch pagination/cursor/byte-limit edge cases,
 
 ## Change-triggered project default-harness check
 
-Run only when project default-harness resolution changes. In a fresh Pi session against a trusted read-only fixture containing `.pi/pi-flow-external/settings.json` with `"defaultHarness": "claude"`, verify `/external config` reports `defaultHarness: claude (project: ...)`, delegate one read-only task with `role` only (no `harness`) and verify the receipt names a `claude-*` identity, then confirm an explicit `harness: "codex"` call still routes to codex. Repeat once in the same fixture with trust removed and confirm the override is ignored with a warning. Confirm the project file is still `defaultHarness` only.
+Run only when project default-harness resolution changes. In a fresh Pi session against a trusted read-only fixture containing `.pi/pi-flow-external/settings.json` with `"defaultHarness": "claude"`:
+- In TUI mode, verify `/external` or `/external config` shows `Default: Claude Code (this project)` on the home screen. In headless/text mode (`/external config text` or no UI), verify it reports `defaultHarness: claude (project: ...)`.
+- Delegate one read-only task with `role` only (no `harness`) and verify the receipt names a `claude/explorer` (or legacy `claude-explorer`) identity.
+- Confirm an explicit `harness: "codex"` call still routes to Codex. Repeat once in the same fixture with trust removed and confirm the override is ignored with a warning. Confirm the project file is still `defaultHarness` only.
 
 ## Change-triggered configuration surface check
 
 Run when settings ownership, the role catalog, slash commands, upgrade, or purge behavior changes. Use a disposable `PI_CODING_AGENT_DIR`. This check uses the product commands. It does not add an E2E flag.
 
-1. Fresh directory: start Pi against this checkout. `/external` shows the default harness, six built-in roles, six CLI harnesses (`agy`, `claude`, `codex`, `grok`, `muse`, `opencode`), and the settings path. The directory gains no extension role files under `subagents/` and no `.pi-flow-defaults-seeded-v1`, `-v2`, or `-v3` markers. Reading settings does not create `settings.json`.
-2. `/reload`, then start another session. Still no generated role files. `/external role create` writes one file under `pi-flow-external/roles/` and no per-harness copies.
-3. `/external config harness create` for one named Pi harness writes that entry into `settings.json` only. `/external roles` and a following `Agent` or `workflow` call on that harness use the same model binding. No role file appears for the six built-ins.
-4. Upgrade: place a pre-v4 `settings.json`, a `pi-flow-external/harnesses.json` registry, one customized external profile, and `subagents/pi-reviewer.md` with `harness: "pi-*"` plus a `piCapabilitySets` entry in the disposable directory. `/external config` points at `/external config convert`. Run convert, confirm the preview, and check that originals remain. Conversion writes `roles/reviewer.md` for every harness and does not copy `piCapabilitySets`. A following delegation reads the version 4 catalog. Old paths are ignored after activation. Confirm a deleted seeded identity from a historical cohort is present in `disabledProfiles` and is not recreated. An auth-blocked backend is not a passing receipt.
+1. Fresh directory: start Pi against this checkout. In TUI mode, `/external` opens the Config Hub modal displaying configured agents, the effective default, Roles, Recent runs, and Advanced. In headless/text mode (`/external` with no UI), it reports the text overview. `/external doctor` reports catalog validity separately from CLI and Pi readiness — for a fresh install, missing or unauthenticated CLIs are reported as readiness observations, not catalog validation failures. The directory gains no extension role files under `subagents/` and no `.pi-flow-defaults-seeded-v1`, `-v2`, or `-v3` markers. Reading settings does not create `settings.json`.
+2. `/reload`, then start another session. Still no generated role files. Authoring via `/external config role create NAME` (or Roles → Create role in the modal) writes one file under `pi-flow-external/roles/<name>.md` with `description` frontmatter only, and no per-harness copies.
+3. Registration via `/external config harness create pi-NAME --model provider/model` (or Add a Pi agent in the modal) writes that entry into settings v5 `harnesses` only. `/external config role list` and a following `Agent` or `workflow` call on that harness use the same model binding. No role file appears for the six built-ins.
+4. Upgrade: place a pre-v4 `settings.json`, a `pi-flow-external/harnesses.json` registry, one customized external profile, and `subagents/pi-reviewer.md` with `harness: "pi-*"` plus a `piCapabilitySets` entry in the disposable directory. Runtime delegation blocks until conversion (version 5 is required; unconverted v4 settings are not executed under fallback compatibility). `/external config` (or the modal recovery screen) points to `/external config convert`. Run convert: pre-v4 converts to v4 first, preserving originals and writing `roles/reviewer.md`. Run `/external config convert` again to preview and apply the v5 conversion. Confirm `settings.v4.backup.json` is preserved, instruction replacements land in nested `overrides/<harness>/<role>.md` directories with `description` frontmatter only, and legacy exact selectors are preserved under `exact` in `settings.json`. A following delegation reads the version 5 catalog. Old paths are ignored after activation. Confirm a deleted seeded identity from a historical cohort stays disabled and is not recreated: known pairs become binding `enabled: false` gates; unresolved names retain their exclusions. An auth-blocked backend is not a passing receipt.
 5. Frozen workflow: start a workflow, edit the role file or settings while it runs, and confirm that run keeps the snapshot from its start. The next invocation outside that workflow sees the edit. Lower `maxConcurrentSubagents` while work is active or queued and confirm the cap stays until that work drains.
 6. Optional purge: `/external [danger]purge-old-files` lists candidates, including customized legacy copies. Select individual paths, then confirm. Skipping the purge still leaves delegation working. Confirm current `settings.json`, `roles/`, `overrides/`, project settings, native profiles, and `runs/` stay. Repeat the command and confirm it reports nothing further to delete.
-7. Because catalog and command guidance changed, also run `--routing-smoke` for a backend you can authenticate. Unknown `/external profile create` must list the current commands and must not start the old interview.
+7. Because catalog and command guidance changed, also run `--routing-smoke` for a backend you can authenticate. Unknown `/external profile create` or `/external roles` must list current usage and point to `/external help`; help lists the replacement mappings. Neither starts an old interview.
 8. Presets: register two named Pi harnesses, one with `"preset": "minimal"` and one with `"preset": "skills"`, plus one entry that omits `preset`. Confirm the omitted entry is treated as `minimal`. Confirm neither preset loads extensions, prompt templates, or themes. `skills` loads installed skills, and project skills only when the project is trusted. `minimal` leaves skills unloaded.
 9. Permission default and call override: set `defaultPermission` to `readonly`. A Claude or Codex call that omits `permission` records readonly. The next call with `permission: "danger"` records danger. A role or override file that still contains `permission` is rejected and does not change the tier.
 10. Antigravity rejection: `permission: "readonly"` and `permission: "edit"` on `agy` fail before launch. The receipt is a rejection. It is not an unsandboxed run described as advisory.
 
 ### Harness toggles and config routing
 
-In the disposable agent directory, use `/external config default claude`, then `/external config disable muse`. Verify config lists Muse as disabled, doctor skips its readiness probe, and executable discovery omits it. Both `role: "worker", harness: "muse"` and `subagent_type: "muse-worker"` must reject without spawning. Repeat with a named Pi harness and a nonstandard exact override. Re-enable and confirm the saved registration and override are unchanged; individual `disabledProfiles` exclusions must remain in effect.
+In the disposable agent directory, use `/external config harness default claude`, then `/external config harness disable muse` (or toggle them in the modal: Make default on Claude Code; Turn off on Muse Code). Verify config lists Muse as disabled, doctor skips its readiness probe, and executable discovery omits it. Both `role: "worker", harness: "muse"` and legacy `subagent_type: "muse-worker"` (or canonical `muse/worker`) must reject without spawning. Repeat with a named Pi harness and a nonstandard exact override. Re-enable (`/external config harness enable muse` or Turn on) and confirm the saved registration and override are unchanged; individual `disabledProfiles` exclusions remain in effect.
 
-Try disabling the effective default and selecting a disabled default: guided commands must refuse. Manually make the default disabled and verify delegation fails without choosing another harness. Confirm a running workflow retains its snapshot, while a new invocation (including replay) observes the toggle. `/external role create` must still author a role; `/external config harness create` must start the harness interview. Superseded settings/harness commands must not launch old routes.
+Try disabling the effective default and selecting a disabled default: guided commands and the modal must refuse. Manually make the default disabled and verify delegation fails without choosing another harness. Confirm a running workflow retains its snapshot, while a new invocation (including replay) observes the toggle.
+Deterministic role creation uses `/external config role create NAME`; deterministic Pi harness registration uses `/external config harness create pi-NAME --model ...`; assisted interviews are explicit under `/external config role assist` and `/external config harness assist`. Superseded commands (`/external roles`, `/external role create`, `/external settings`, `/external config harnesses`, `/external config default`) must not launch old routes and must display the current replacement mapping in help.
+
+## Task-based modal, RPC, and headless acceptance checks
+
+Run these checks in a disposable `PI_CODING_AGENT_DIR` without touching live settings. For terminal navigation and Claude's static model choices, no credentials are needed:
+
+```bash
+REPO="$PWD" # repository checkout
+TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pi-flow-ui.XXXXXX")"
+mkdir -p "$TEST_DIR/agent" "$TEST_DIR/workspace"
+(cd "$TEST_DIR/workspace" && PI_CODING_AGENT_DIR="$TEST_DIR/agent" \
+  pi --no-extensions --no-skills --no-prompt-templates -e "$REPO/index.ts")
+# After exiting Pi, remove the disposable directory:
+rm -ri "$TEST_DIR"
+```
+
+Pi may create its own root files; opening the extension must not create `agent/pi-flow-external/settings.json` or role files. For Pi creation/credential flows, use controlled registry fixtures or separately prepared disposable credentials, not a live configuration copy that could be converted accidentally.
+
+- **Verification levels:**
+  - *Offline / fixture checks (Level 0):* Zero network/model requests; local cache, static aliases and fake handlers only. A real terminal smoke may start Pi itself, but does not invoke backend CLIs.
+  - *CLI metadata listing checks (Level 1):* Bounded `models` CLI inspection on picker entry for agy/grok/opencode (10s timeout, abort signal on cancel, never sends a prompt; no eligibility/access claim).
+  - *Separately authorized paid tests (Level 2):* Explicit "Send a test message" in the Pi modal, requiring separate confirmation that warns about token costs. Run only when authorized.
+
+### Task 1: Modal navigation, model choice, search, and cancel-safety (TUI)
+- Launch `/external` in TUI mode. Inspect home screen: configured agents, active default, Roles, Recent runs, and Advanced.
+- Select an agent (e.g. Codex CLI) → Model:
+  - Claude shows static alias choices (`sonnet`, `opus`, `fable`).
+  - Codex reads local cache (`~/.codex/models_cache.json` or `$CODEX_HOME`) without network calls.
+  - `agy`, `grok`, and `opencode` query their native `models` CLI command only upon opening the picker (Level 1 metadata check, abortable).
+  - Pi model picker reads Pi's local registry, initially filtering providers to configured credentials (all providers when none are configured), with a "Show all providers…" option for others.
+- Press `/` to search model names; type a filter and confirm matching choices filter interactively.
+- Confirm active/stored model is labeled `· Current`.
+- Press `Esc` to clear the search, then again to return without selecting; verify the previous menu selection position is remembered.
+- Terminal cancellation during busy waits: while a Level 1 metadata command or Level 2 test is running, pressing `Esc` or `Ctrl+C` in the terminal aborts the active operation via its `AbortSignal`. Note: RPC mode does NOT support busy cancellation; cancellation during busy waits is terminal-only.
+
+### Task 2: Role inheritance vs. explicit native setting
+- In Roles → select a role (e.g. `reviewer`) → select an agent (e.g. `Codex CLI`), or navigate from Agent → Role customizations:
+- Reasoning options: "Same as Codex CLI · …" removes the local binding override, inheriting the agent default. "Use Codex CLI settings" explicitly sets `thinking: "native"`, bypassing the agent's pinned thinking level.
+- Instructions: "Customize for this agent" opens the editor pre-filled with effective instructions. Saving writes `pi-flow-external/overrides/<harness>/<role>.md` with `description` frontmatter only. "Use shared instructions" prompts with a preview to confirm removing the override.
+
+### Task 3: Cancel-safe creation and confirmations
+- Add a Pi agent: Select "Add a Pi agent…", pick provider/model, enter a name, then review model/reasoning/skills. Cancel before "Create agent"; verify nothing is written to extension settings. Creation itself sends no request.
+- Terminal destructive confirmations: Trigger any reset or deletion (e.g. reset instructions, delete custom role). Confirm the prompt choices are `['Cancel', 'Confirm']` with `Cancel` as the initial default. Pressing `Enter` safely cancels without modifying files or settings.
+
+### Task 4: Default guards and recovery screen
+- Attempt to turn off the global default harness or a trusted-project default; confirm the interface guards against this and requires selecting another default first.
+- Set an unsupported/old settings format or malformed JSON in `settings.json`; launch `/external`. Confirm the TUI presents a recovery screen explaining the issue and offering conversion/repair options, never executing with fallback values. In headless mode, `/external config` reports the conversion/repair requirement.
+
+### Task 5: RPC and headless acceptance checks
+- In RPC mode (`ctx.mode === 'rpc'`), verify that commands use native host dialogs (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) rather than rendering a custom TUI terminal overlay component. Note: RPC mode does not support busy cancellation.
+- In headless mode (`ctx.hasUI === false`), verify that `/external` outputs a readable text overview, `/external config` (or `/external config text`) outputs text configuration, and noninteractive lifecycle operations (`/external config harness set ...`, `/external config role list`, etc.) execute without dialogs. Editor/confirmation operations must refuse without UI, not silently apply.
 
 ## Release minimum
 
@@ -184,7 +238,7 @@ Before a runtime release:
 3. Run all six supervised workflow receipts, plus one named Pi harness direct receipt and its workflow receipt when a real harness is registered.
 4. Run interruption checks for adapters whose cancellation/output path changed.
 5. Run `--routing-smoke` (mechanical) and the manual qualitative routing smoke when role discovery, tool descriptions, coordinator guidance, or slash commands changed. This configuration release requires that smoke. An auth-blocked lane is not a pass.
-6. Run the configuration surface check when settings, the role catalog, upgrade, or purge behavior changed.
+6. Run the configuration surface check and task-based modal/RPC/headless acceptance checks when settings, the role catalog, slash commands, upgrade, or purge behavior changed.
 7. Run the nested timeout check only if nested detection or timeout behavior changed.
 8. Run the background-run observability check only if batch inspection, the `final` view, timing projection, or `/external runs` browsing changed.
 9. Remove temporary runner evidence. Ordinary use does not require `/external [danger]purge-old-files`.

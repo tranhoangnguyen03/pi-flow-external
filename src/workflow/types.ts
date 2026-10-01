@@ -82,7 +82,7 @@ export interface WorkflowAgentCall {
   schema?: unknown;
   /** Permission tier for this child: the call's permission, otherwise settings defaultPermission. A role does not set this. */
   permission?: import("../types.ts").PermissionTier;
-  /** USD budget cap for this child, when any. */
+  /** Effective USD budget cap: call override, otherwise frozen descriptor default. */
   maxBudgetUsd?: number;
   /** Prior run id whose backend conversation this child continues. */
   resumeRunId?: string;
@@ -172,6 +172,7 @@ export interface WorkflowSubagentDescriptor {
   backend: import("../types.ts").SubagentBackend;
   harness?: string;
   model?: string;
+  /** Effective effort, with parent inheritance resolved; undefined leaves the backend default unresolved. */
   thinking?: string;
   /** Named Pi registration preset. Absent on CLI descriptors. */
   preset?: import("../types.ts").PiResourcePreset;

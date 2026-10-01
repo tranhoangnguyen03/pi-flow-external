@@ -98,8 +98,9 @@ export function agyUsageToSubagentUsage(usage: AgyTokenUsage): SubagentUsage {
 }
 
 export function normalizeAgyEffort(thinkingLevel: ThinkingLevel | undefined): "low" | "medium" | "high" | undefined {
-  const normalized = thinkingLevel?.trim().toLowerCase();
-  if (!normalized || normalized === "off") {
+  if (thinkingLevel === undefined) return undefined;
+  const normalized = thinkingLevel.trim().toLowerCase();
+  if (normalized === "off") {
     return undefined;
   }
   if (normalized === "minimal" || normalized === "low") {
@@ -111,7 +112,7 @@ export function normalizeAgyEffort(thinkingLevel: ThinkingLevel | undefined): "l
   if (normalized === "high" || normalized === "xhigh" || normalized === "max") {
     return "high";
   }
-  return undefined;
+  throw new Error(`Unsupported Antigravity effort ${JSON.stringify(thinkingLevel)}.`);
 }
 
 export function extractAgyTerminalResult(event: Record<string, unknown>): AgyTerminalResult | undefined {

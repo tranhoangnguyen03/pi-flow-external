@@ -7,7 +7,10 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { resolveExecutionProfile } from './execution-config.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
@@ -197,7 +200,7 @@ function formatSelectionForDisplay(args: Record<string, unknown>, defaultHarness
   if (typeof args.subagent_type === "string" && args.subagent_type.trim()) return args.subagent_type.trim();
   if (typeof args.role === "string" && args.role.trim()) {
     const harness = typeof args.harness === "string" && args.harness.trim() ? args.harness.trim() : defaultHarness;
-    return `${harness}-${args.role.trim()}`;
+    return `${harness}/${args.role.trim()}`;
   }
   return "profile";
 }
@@ -353,7 +356,7 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, or registered Pi harness role.",
+    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, OpenCode, or registered Pi harness role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     parameters: agentToolParameters,
     executionMode: "parallel",
@@ -412,6 +415,7 @@ function createAgentTool(
         );
       }
       const subagentType = profile.name;
+      profile = resolveExecutionProfile(profile, options.getThinkingLevel(), state.defaultMaxBudgetUsd);
 
       const model = resolveProfileModel(profile, ctx);
       if (usesPiBackend(profile) && !model) {
@@ -436,7 +440,7 @@ function createAgentTool(
       const executionContext = { cwd: project, modelRegistry: ctx.modelRegistry } as ExtensionContext;
       const limiter = state.limiter;
       const timeoutMs = state.subagentTimeoutMs;
-      const thinkingLevel = profile.thinking ?? options.getThinkingLevel();
+      const thinkingLevel = profile.thinking;
       const defaultPermission = state.defaultPermission;
       const maxBudgetUsd = params.max_budget_usd ?? profile.maxBudgetUsd ?? state.defaultMaxBudgetUsd;
       const background = params.background === true;
@@ -694,6 +698,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       default: "",
     });
 
+    const readinessControllers = new Set<AbortController>();
     const rootState: DelegationState = {
       limiter: new ConcurrencyLimiter(defaultMaxConcurrentSubagents),
       maxConcurrentSubagents: defaultMaxConcurrentSubagents,
@@ -772,6 +777,31 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getMaxRunRecords: () => rootState.maxRunRecords,
       startRoleInterview,
       startHarnessInterview,
+      getThinkingLevel: () => pi.getThinkingLevel(),
+      testHarness: async (ctx, harness, signal) => {
+        const loaded = loadExternalSettings(getAgentDir());
+        const config = loaded.settings.harnessSettings?.[harness];
+        if (loaded.blocked || !config?.model) return { ok: false, error: loaded.diagnostics.join(' ') || 'No harness model configured' };
+        if (!ctx.hasUI || !await ctx.ui.confirm(`Test ${harness}?`, `This sends one potentially paid request to ${config.model} with readonly curated Pi tools (not an OS sandbox), from an empty temporary directory. No configuration is changed.`)) return { ok: false, error: 'Test cancelled' };
+        const profile: SubagentProfile = { name: `${harness}/smoke`, harness, backend: 'pi', description: 'Harness readiness test', model: config.model, thinking: config.thinking === 'parent' ? pi.getThinkingLevel() : config.thinking ?? 'off', preset: config.preset ?? 'minimal' };
+        const model = resolveProfileModel(profile, ctx);
+        if (!model) return { ok: false, error: describeMissingModel(profile, ctx.modelRegistry) };
+        const controller = new AbortController();
+        readinessControllers.add(controller);
+        const abort=()=>controller.abort(signal?.reason);
+        if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+        const deadline = setTimeout(() => controller.abort(new Error('Readiness test timed out')), 60000);
+        let release: (() => void) | undefined;
+        let cwd: string | undefined;
+        try {
+          release = await syncMaxConcurrentSubagents().limiter.acquire(controller.signal);
+          cwd = await mkdtemp(join(tmpdir(), 'pi-flow-readiness-'));
+          const result = await spawnSubagent({ toolCallId: `readiness-${Date.now()}`, description: profile.description, prompt: 'Do not use tools. Reply exactly PI_FLOW_READY.', profile, model, thinkingLevel: profile.thinking, ctx: { ...ctx, cwd }, permission: 'readonly', signal: controller.signal, timeoutMs: Math.min(rootState.subagentTimeoutMs || 60000, 60000), progressEnabled: false, onProgress: undefined, onUsage: () => {}, excludeTools: CHILD_EXCLUDED_TOOLS, recordRun: false });
+          const details = result.details as { status?: string; result?: string; error?: string };
+          return details.status === 'done' && details.result?.trim() === 'PI_FLOW_READY' ? { ok: true, detail: config.model } : { ok: false, error: details.error ?? 'Unexpected smoke response' };
+        } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+        finally { clearTimeout(deadline); signal?.removeEventListener('abort',abort); readinessControllers.delete(controller); release?.(); if (cwd) await rm(cwd, { recursive: true, force: true }); }
+      },
       externalRuns,
     });
     if (workflowEnabled) {
@@ -807,6 +837,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
+      for (const controller of readinessControllers) controller.abort(new Error('Session shutting down'));
       const cleanup = await rootState.registry.shutdownSession(ctx.sessionManager.getSessionId());
       if (cleanup.pending.length && ctx.hasUI) {
         const shown = cleanup.pending.slice(0, 10);

@@ -1,3 +1,8 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createRunRecord } from "../src/core/run-record.ts";
 import { describe, expect, it, vi } from "vitest";
 import { agyActivityFromEvent } from "../src/core/agy.ts";
 import { claudeActivityFromEvent } from "../src/core/claude.ts";
@@ -6,7 +11,7 @@ import { getBackendAgentLabel } from "../src/core/display.ts";
 import { grokActivityFromEvent } from "../src/core/grok.ts";
 import { museActivityFromEvent } from "../src/core/muse.ts";
 import { createProgressEmitter } from "../src/core/progress.ts";
-import { hasNestedAgentActivity } from "../src/core/spawn.ts";
+import { hasNestedAgentActivity, spawnSubagent } from "../src/core/spawn.ts";
 
 describe("external nested-agent observation", () => {
   it("recognizes known Claude, Codex, and Antigravity event shapes", () => {
@@ -103,5 +108,28 @@ describe("external nested-agent observation", () => {
     expect(getBackendAgentLabel("claude")).toBe("Claude Code");
     expect(getBackendAgentLabel("codex")).toBe("Codex CLI");
     expect(getBackendAgentLabel("agy")).toBe("Antigravity");
+  });
+});
+
+describe("spawn validation evidence", () => {
+  it("finishes an unlaunched receipt when effort normalization rejects a value", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-flow-effort-"));
+    try {
+      for (const backend of ["agy", "grok", "muse", "claude", "codex"] as const) {
+        const runRecord = createRunRecord({ directory, metadata: { backend } });
+        const result = await spawnSubagent({
+          toolCallId: "invalid-effort", description: "Invalid effort", prompt: "Do the task.",
+          profile: { name: `${backend}-worker`, description: "x", backend, configVersion: 5 }, thinkingLevel: "typo",
+          ctx: { cwd: directory } as ExtensionContext, signal: undefined, timeoutMs: 5000,
+          progressEnabled: false, onProgress: undefined, onUsage: () => {}, permission: "danger", runRecord,
+        });
+        expect(result.details).toMatchObject({ status: "error", error: expect.stringMatching(/unsupported.*effort/i), runId: runRecord.runId });
+        const summary = JSON.parse(await readFile(runRecord.summaryPath, "utf8"));
+        expect(summary.summary).toMatchObject({ status: "error", backendStarted: false });
+        expect(await readFile(runRecord.eventsPath, "utf8")).not.toContain("process_started");
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

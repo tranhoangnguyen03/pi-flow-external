@@ -5,6 +5,7 @@ import { EXTERNAL_HARNESSES, type ExternalHarness, type SubagentBackend, type Su
 import { defaultRoleNames, roleDefinition } from "./default-roles.ts";
 import type { HarnessConfig } from "./harnesses.ts";
 import { loadExternalSettings } from "./settings.ts";
+import { bindingKey, loadV5Catalog } from './catalog-v5.ts';
 
 const EXTERNAL_AGENT_BACKENDS: readonly SubagentBackend[] = EXTERNAL_HARNESSES;
 const NO_PI_HARNESSES: ReadonlySet<string> = new Set();
@@ -13,7 +14,7 @@ const NO_HARNESS_CONFIGS: ReadonlyMap<string, HarnessConfig> = new Map();
 const VALID_PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 export function isValidSubagentName(name: string): boolean {
-  return VALID_PROFILE_NAME.test(name);
+  return VALID_PROFILE_NAME.test(name) && name !== 'constructor' && name !== 'prototype';
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -91,6 +92,7 @@ export function parseSubagentProfileContent(
     return undefined;
   }
   const harness = optionalString(parsed.frontmatter.harness);
+  if (['model', 'thinking'].some(key => parsed.frontmatter[key] !== undefined && parsed.frontmatter[key] !== null && typeof parsed.frontmatter[key] !== 'string')) return undefined;
   const model = parseModel(parsed.frontmatter.model);
   const thinking = parseThinking(parsed.frontmatter.thinking);
   const tools = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "tools")
@@ -161,8 +163,8 @@ export function loadCustomSubagentProfiles(agentDir = getAgentDir()): Map<string
   return profiles;
 }
 
-export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, SubagentProfile> {
-  const catalog = loadExternalCatalog(agentDir);
+export function getSubagentProfiles(agentDir = getAgentDir(), options: { legacyInspection?: boolean } = {}): Map<string, SubagentProfile> {
+  const catalog = loadExternalCatalog(agentDir, options);
   if (catalog.blocked) throw new Error(catalog.diagnostics.join(" "));
   return catalog.profiles;
 }
@@ -214,12 +216,14 @@ export function filterExternalAgentProfiles(
 /** Actionable rejection for a disabled harness. Selection never substitutes another harness. */
 export function disabledHarnessMessage(harness: string, isDefault = false): string {
   return isDefault
-    ? `Default harness "${harness}" is disabled in settings.json. Pass another harness explicitly, choose a new default with /external config default <harness>, or enable it with /external config enable ${harness}.`
-    : `Harness "${harness}" is disabled in settings.json. Enable it with /external config enable ${harness}, or choose another harness.`;
+    ? `Default harness "${harness}" is disabled in settings.json. Pass another harness explicitly, choose a new default with /external config harness default <harness>, or enable it with /external config harness enable ${harness}.`
+    : `Harness "${harness}" is disabled in settings.json. Enable it with /external config harness enable ${harness}, or choose another harness.`;
 }
 
-export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig>; disabledHarnesses: Set<string> } {
+export function loadExternalCatalog(agentDir = getAgentDir(), options: { legacyInspection?: boolean } = {}): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig>; disabledHarnesses: Set<string> } {
   const loaded = loadExternalSettings(agentDir);
+  if (loaded.settings.version === 4 && !options.legacyInspection) return { profiles: new Map<string, SubagentProfile>(), diagnostics: [...loaded.diagnostics, 'Settings version 4 requires explicit conversion. Run /external config convert.'], blocked: true, harnessConfigs: new Map(Object.entries(loaded.settings.harnesses ?? {})), disabledHarnesses: new Set(loaded.settings.disabledHarnesses ?? []) };
+  if (loaded.settings.version === 5) return loadV5Catalog(agentDir, loaded);
   const diagnostics = [...loaded.diagnostics];
   const profiles = new Map<string, SubagentProfile>();
   const harnesses = new Map(Object.entries(loaded.settings.harnesses ?? {}));
@@ -227,7 +231,7 @@ export function loadExternalCatalog(agentDir = getAgentDir()): { profiles: Map<s
   if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses, disabledHarnesses };
   const names = [...EXTERNAL_HARNESSES, ...harnesses.keys()];
   for (const name of disabledHarnesses) {
-    if (!names.includes(name)) diagnostics.push(`disabledHarnesses entry "${name}" is not a known harness. It is kept and applies if that harness appears; remove it with /external config enable ${name}.`);
+    if (!names.includes(name)) diagnostics.push(`disabledHarnesses entry "${name}" is not a known harness. It is kept and applies if that harness appears; remove it with /external config harness enable ${name}.`);
   }
   const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code", opencode: "OpenCode" };
   const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
@@ -318,6 +322,7 @@ export function selectorHarness(profile: SubagentProfile): string {
  * membership; callers work from an already-filtered profiles map.
  */
 export function externalProfileRole(profile: SubagentProfile): string | undefined {
+  if (profile.configVersion === 5) return profile.role;
   const isShapedForRoleExtraction = EXTERNAL_AGENT_BACKENDS.includes(profile.backend)
     || (profile.backend === "pi" && profile.harness !== undefined);
   if (!isShapedForRoleExtraction) return undefined;
@@ -387,7 +392,7 @@ export function computeReconciledPiProfile(
   profile: SubagentProfile,
   harnessConfigs: ReadonlyMap<string, HarnessConfig>,
 ): { profile: SubagentProfile; conflict?: string } {
-  if (profile.backend !== "pi") {
+  if (profile.backend !== "pi" || profile.configVersion === 5) {
     return { profile };
   }
   if (!profile.harness) return { profile };
@@ -519,7 +524,9 @@ export function resolveExternalProfile(
     if (role || harness) {
       throw new Error("Choose either role (with optional harness) or legacy subagent_type; do not combine them.");
     }
-    const profile = profiles.get(subagentType);
+    const matches = [...profiles.values()].filter(p => p.configVersion === 5 && p.role && `${selectorHarness(p)}-${p.role}` === subagentType);
+    if (!profiles.has(subagentType) && matches.length > 1) throw new Error(`Ambiguous legacy selector "${subagentType}"; use role and harness explicitly.`);
+    const profile = profiles.get(subagentType) ?? matches[0];
     if (!profile) {
       throw new Error(unknownExternalProfileMessage(subagentType, profiles.keys()));
     }
@@ -540,7 +547,8 @@ export function resolveExternalProfile(
     throw new Error(disabledHarnessMessage(selectedHarness, !harness));
   }
 
-  const exact = profiles.get(`${selectedHarness}-${role}`);
+  const legacy = profiles.get(`${selectedHarness}-${role}`);
+  const exact = profiles.get(bindingKey(selectedHarness, role)) ?? (legacy?.configVersion === 5 ? undefined : legacy);
   if (exact) {
     if (exact.configurationError) throw new Error(exact.configurationError);
     if (selectorHarness(exact) !== selectedHarness || externalProfileRole(exact) !== role) throw new Error(`Override "${exact.name}" does not match selected harness "${selectedHarness}".`);

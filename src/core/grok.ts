@@ -42,10 +42,8 @@ function asFiniteNumber(value: unknown): number | undefined {
 }
 
 export function normalizeGrokReasoningEffort(thinkingLevel: ThinkingLevel | undefined): GrokReasoningEffort | undefined {
-  const normalized = thinkingLevel?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
+  if (thinkingLevel === undefined) return undefined;
+  const normalized = thinkingLevel.trim().toLowerCase();
   if (normalized === "off" || normalized === "minimal" || normalized === "low") {
     return "low";
   }
@@ -58,7 +56,7 @@ export function normalizeGrokReasoningEffort(thinkingLevel: ThinkingLevel | unde
   if (normalized === "xhigh") {
     return "xhigh";
   }
-  return undefined;
+  throw new Error(`Unsupported Grok effort ${JSON.stringify(thinkingLevel)}.`);
 }
 
 export function buildGrokArgs({

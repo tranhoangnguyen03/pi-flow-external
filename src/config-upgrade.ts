@@ -813,7 +813,7 @@ function planInner(root: string): ConfigUpgradePlan {
       return emptyPlan(root, "blocked", [`${path} is not valid JSON.`]);
     }
     if (!isRecord(parsed)) return emptyPlan(root, "blocked", [`${path} must be a JSON object.`]);
-    if (parsed.version === 4) return emptyPlan(root, "current");
+    if (parsed.version === 4 || parsed.version === 5) return emptyPlan(root, "current");
     if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) {
       return emptyPlan(root, "blocked", [`${path} is version ${JSON.stringify(parsed.version)}. Conversion leaves that file in place.`]);
     }
@@ -1015,7 +1015,7 @@ function version4Active(root: string): { ok: true } | { ok: false; diagnostic: s
   }
   try {
     const parsed = JSON.parse(read.bytes.toString("utf8"));
-    if (isRecord(parsed) && parsed.version === 4) return { ok: true };
+    if (isRecord(parsed) && (parsed.version === 4 || parsed.version === 5)) return { ok: true };
   } catch {
     // The version is unreadable, so the conversion is not active.
   }
