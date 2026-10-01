@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const temporaryDirectories: string[] = [];
@@ -115,7 +116,7 @@ describe("field report", () => {
     const malformedDirectory = await makeRunDirectory(baseDirectory, "run_malformed");
     await writeFile(join(malformedDirectory, "summary.json"), "{}\n");
 
-    const output = execFileSync(process.execPath, [reportScript.pathname, "--json", baseDirectory], {
+    const output = execFileSync(process.execPath, [fileURLToPath(reportScript), "--json", baseDirectory], {
       encoding: "utf8",
     });
     const report = JSON.parse(output);
