@@ -8,9 +8,12 @@ import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
 import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
 import { museActivityFromEvent } from "./muse.ts";
 import { extractOpencodeText, opencodeActivityFromEvent } from "./opencode.ts";
+import { ExpectedFlowError } from "./errors.ts";
 import { extractTextContent } from "./progress.ts";
 
 const CURSOR_VERSION = 1;
+/** Version 2 pages output/diagnostics as one lossless stream: a "\n" separates each new message from the previous one. */
+const INSPECT_CURSOR_VERSION = 2;
 const DEFAULT_PAGE_BYTES = 32 * 1024;
 const MAX_PAGE_BYTES = 64 * 1024;
 const MAX_CURSOR_CHARS = 4096;
@@ -85,9 +88,11 @@ export interface RunRecordListItem {
   integrity: RunRecordIntegrity;
 }
 
-interface CursorBase { v: typeof CURSOR_VERSION; kind: "inspect"; runId: string; view: RunInspectionView }
+interface CursorBase { v: typeof INSPECT_CURSOR_VERSION; kind: "inspect"; runId: string; view: RunInspectionView }
+/** What precedes an event in the stream: nothing, a whole message, or a streaming message that a same-id delta continues. */
+type StreamPrev = null | "item" | `stream:${string}`;
 type InspectionCursor = CursorBase & (
-  | { source: "events"; position: number; textOffset: number }
+  | { source: "events"; position: number; textOffset: number; prev: StreamPrev }
   | { source: "terminal"; itemIndex: number; textOffset: number; revision: string }
   | { source: "summary"; itemIndex: 0; textOffset: number; revision: string }
 );
@@ -129,9 +134,9 @@ export async function inspectRun({
   assertRunId(runId);
   const limit = normalizeByteLimit(limitBytes);
   const decoded = cursor ? decodeCursor(cursor) : undefined;
-  if (decoded && decoded.kind !== "inspect") throw new Error("Invalid inspection cursor");
-  if (decoded?.runId !== undefined && decoded.runId !== runId) throw new Error("Cursor belongs to a different run");
-  if (decoded?.view !== undefined && decoded.view !== view) throw new Error("Cursor belongs to a different view");
+  if (decoded && decoded.kind !== "inspect") throw cursorInvalid("Invalid inspection cursor");
+  if (decoded?.runId !== undefined && decoded.runId !== runId) throw cursorInvalid("Cursor belongs to a different run");
+  if (decoded?.view !== undefined && decoded.view !== view) throw cursorInvalid("Cursor belongs to a different view");
 
   const directory = join(runsDirectory, runId);
   const eventsPath = join(directory, "events.ndjson");
@@ -141,7 +146,7 @@ export async function inspectRun({
   const finalAvailable = isFinalAvailable(terminal);
 
   if (view === "summary" || view === "launch") {
-    if (decoded?.kind === "inspect" && decoded.source !== "summary") throw new Error("Cursor source does not match summary view");
+    if (decoded?.kind === "inspect" && decoded.source !== "summary") throw cursorInvalid("Cursor source does not match summary view");
     const observation = await readObservation(eventsPath, runId);
     const text = JSON.stringify(view === "launch" ? {
       runId,
@@ -164,12 +169,12 @@ export async function inspectRun({
       integrity: mergedIntegrity(summary, observation),
       truncatedTail: observation.truncatedTail,
       ...(portion.nextOffset < text.length
-        ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "summary", itemIndex: 0, textOffset: portion.nextOffset, revision }) }
+        ? { nextCursor: encodeCursor({ v: INSPECT_CURSOR_VERSION, kind: "inspect", runId, view, source: "summary", itemIndex: 0, textOffset: portion.nextOffset, revision }) }
         : {}),
     };
   }
 
-  if (decoded?.kind === "inspect" && decoded.source === "summary") throw new Error("Cursor source does not match inspection view");
+  if (decoded?.kind === "inspect" && decoded.source === "summary") throw cursorInvalid("Cursor source does not match inspection view");
 
   if (view === "final") {
     // Reuses the same canonical terminal result every other view already reads
@@ -182,8 +187,8 @@ export async function inspectRun({
     const revision = contentRevision(finalText ?? "");
     const finalCursor = decoded?.kind === "inspect"
       ? decoded
-      : { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
-    if (finalCursor.source !== "terminal") throw new Error("Cursor source does not match final view");
+      : { v: INSPECT_CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
+    if (finalCursor.source !== "terminal") throw cursorInvalid("Cursor source does not match final view");
     if (finalCursor.revision !== revision) throw staleCursorError();
     return terminalPage(
       runId,
@@ -205,8 +210,8 @@ export async function inspectRun({
     const revision = contentRevision(JSON.stringify(items));
     const terminalCursor = decoded?.kind === "inspect"
       ? decoded
-      : { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
-    if (terminalCursor.source !== "terminal") throw new Error("Cursor source does not match output view");
+      : { v: INSPECT_CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", itemIndex: 0, textOffset: 0, revision } as const;
+    if (terminalCursor.source !== "terminal") throw cursorInvalid("Cursor source does not match output view");
     if (terminalCursor.revision !== revision) throw staleCursorError();
     return terminalPage(
       runId,
@@ -220,52 +225,48 @@ export async function inspectRun({
       finalAvailable,
     );
   }
-  if (decoded?.kind === "inspect" && decoded.source === "terminal") throw new Error("Cursor source does not match diagnostics view");
+  if (decoded?.kind === "inspect" && decoded.source === "terminal") throw cursorInvalid("Cursor source does not match diagnostics view");
 
   const state = decoded?.kind === "inspect" && decoded.source === "events"
     ? decoded
-    : eventCursor(runId, view, 0, 0);
+    : eventCursor(runId, view, 0, 0, null);
   await validateEventCursor(eventsPath, runId, view, state);
 
   const items: RunInspectionItem[] = [];
   let usedBytes = 0;
   let nextCursor: InspectionCursor | undefined;
-  // agy and muse stream incremental deltas that must be concatenated onto the
-  // same growing item; every other kind's outputFromEvent already returns one
-  // complete message per event, so each becomes its own item.
-  const STREAMING_DELTA_KINDS = new Set(["agy", "muse"]);
-  let activeStreamingId: string | undefined;
+  let prev = state.prev;
   const scan = await scanCompleteLines(eventsPath, state.position, (line) => {
     const event = parseEvent(line.text, runId);
     if (!event) return "malformed";
     const projected = view === "output" ? outputFromEvent(event) : diagnosticFromEvent(event);
     if (!projected) return "continue";
+    const piece = streamPiece(projected, view, prev);
     const startingOffset = line.start === state.position ? state.textOffset : 0;
     const remaining = limit - usedBytes;
     if (remaining <= 0) {
-      nextCursor = eventCursor(runId, view, line.start, startingOffset);
+      nextCursor = eventCursor(runId, view, line.start, startingOffset, prev);
       return "stop";
     }
-    const chunk = sliceUtf8(projected.text, startingOffset, remaining);
-    if (!chunk.text && startingOffset < projected.text.length) {
-      nextCursor = eventCursor(runId, view, line.start, startingOffset);
+    const chunk = sliceUtf8(piece.text, startingOffset, remaining);
+    if (!chunk.text && startingOffset < piece.text.length) {
+      nextCursor = eventCursor(runId, view, line.start, startingOffset, prev);
       return "stop";
     }
     if (chunk.text) {
-      const isStreamingDelta = STREAMING_DELTA_KINDS.has(projected.kind);
-      if (view === "output" && isStreamingDelta && activeStreamingId === projected.id && items.length > 0) items[items.length - 1]!.text += chunk.text;
+      if (piece.continues && items.length > 0) items[items.length - 1]!.text += chunk.text;
       else items.push({ ...(projected.id ? { id: projected.id } : {}), text: chunk.text });
-      activeStreamingId = isStreamingDelta ? projected.id : undefined;
       usedBytes += Buffer.byteLength(chunk.text);
     }
-    if (chunk.nextOffset < projected.text.length) {
-      nextCursor = eventCursor(runId, view, line.start, chunk.nextOffset);
+    if (chunk.nextOffset < piece.text.length) {
+      nextCursor = eventCursor(runId, view, line.start, chunk.nextOffset, prev);
       return "stop";
     }
+    prev = piece.next;
     return "continue";
   });
 
-  if (!nextCursor && !summary.document && !scan.missing) nextCursor = eventCursor(runId, view, scan.endPosition, 0);
+  if (!nextCursor && !summary.document && !scan.missing) nextCursor = eventCursor(runId, view, scan.endPosition, 0, prev);
 
   const integrity: RunRecordIntegrity = scan.malformed || scan.missing || (summary.document && scan.truncatedTail) ? "damaged" : summary.integrity;
   return {
@@ -296,12 +297,12 @@ export async function listRunRecords({
   cursor?: string;
 }): Promise<{ items: RunRecordListItem[]; nextCursor?: string }> {
   const scope = JSON.stringify({ sessionId, project, workflowRunId });
-  if (scope.length > 1024) throw new Error("Run list scope is too long");
+  if (scope.length > 1024) throw new ExpectedFlowError("request_invalid", "Run list scope is too long");
   const decoded = cursor ? decodeCursor(cursor) : undefined;
-  if (decoded && decoded.kind !== "list") throw new Error("Invalid list cursor");
-  if (decoded?.kind === "list" && decoded.scope !== scope) throw new Error("Cursor belongs to a different list scope");
+  if (decoded && decoded.kind !== "list") throw cursorInvalid("Invalid list cursor");
+  if (decoded?.kind === "list" && decoded.scope !== scope) throw cursorInvalid("Cursor belongs to a different list scope");
   const after = decoded?.kind === "list" ? decoded.after : undefined;
-  if (!Number.isFinite(limit)) throw new Error("Run list limit must be finite");
+  if (!Number.isFinite(limit)) throw new ExpectedFlowError("request_invalid", "Run list limit must be finite");
   const pageSize = Math.max(1, Math.min(100, Math.floor(limit)));
   let entries: string[];
   try {
@@ -514,8 +515,8 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
   }
   if (envelope?.backend === "muse" && backendEvent.payload_type === "run.output.delta") {
     // Deltas carry no id: every chunk within a run belongs to the same
-    // ongoing stream, so activeStreamingId's undefined===undefined match
-    // below concatenates them in order onto one growing item.
+    // ongoing stream, so streamPiece's empty-id match concatenates them in
+    // order onto one growing message.
     const payload = asRecord(backendEvent.payload);
     const text = typeof payload?.text === "string" ? payload.text : undefined;
     return text ? { kind: "muse", text } : undefined;
@@ -593,21 +594,21 @@ async function validateEventCursor(path: string, runId: string, view: RunInspect
   try {
     handle = await open(path, "r");
     const size = (await handle.stat()).size;
-    if (cursor.position > size) throw new Error("Cursor points past available evidence");
+    if (cursor.position > size) throw staleCursorError();
     if (cursor.position > 0) {
       const prior = Buffer.alloc(1);
       await handle.read(prior, 0, 1, cursor.position - 1);
-      if (prior[0] !== 0x0a) throw new Error("Cursor is not at a record boundary");
+      if (prior[0] !== 0x0a) throw cursorInvalid("Cursor is not at a record boundary");
     }
     if (cursor.textOffset > 0) {
-      let projected: RunInspectionItem | undefined;
+      let projected: ReturnType<typeof outputFromEvent>;
       await scanCompleteLines(path, cursor.position, (line) => {
         const event = parseEvent(line.text, runId);
         projected = event ? (view === "output" ? outputFromEvent(event) : diagnosticFromEvent(event)) : undefined;
         return "stop";
       });
-      if (!projected) throw new Error("Cursor text offset has no matching record");
-      assertTextOffset(projected.text, cursor.textOffset, "cursor");
+      if (!projected) throw cursorInvalid("Cursor text offset has no matching record");
+      assertTextOffset(streamPiece(projected, view, cursor.prev).text, cursor.textOffset, "cursor");
     }
   } catch (error) {
     if (isNotFound(error) && cursor.position === 0 && cursor.textOffset === 0) return;
@@ -628,7 +629,7 @@ function terminalPage(runId: string, view: "output" | "final", items: RunInspect
     finalAvailable,
     integrity,
     truncatedTail,
-    ...(served.next ? { nextCursor: encodeCursor({ v: CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next, revision: cursor.revision }) } : {}),
+    ...(served.next ? { nextCursor: encodeCursor({ v: INSPECT_CURSOR_VERSION, kind: "inspect", runId, view, source: "terminal", ...served.next, revision: cursor.revision }) } : {}),
   };
 }
 
@@ -637,12 +638,13 @@ function serveItems(items: RunInspectionItem[], itemIndex: number, textOffset: n
   let remaining = budget;
   for (let index = itemIndex; index < items.length; index++) {
     const item = items[index]!;
+    const text = separatedItemText(items, index);
     const offset = index === itemIndex ? textOffset : 0;
     if (remaining <= 0) return { items: served, next: { itemIndex: index, textOffset: offset } };
-    const chunk = sliceUtf8(item.text, offset, remaining);
+    const chunk = sliceUtf8(text, offset, remaining);
     if (chunk.text) served.push({ ...(item.id ? { id: item.id } : {}), text: chunk.text });
     remaining -= Buffer.byteLength(chunk.text);
-    if (chunk.nextOffset < item.text.length) return { items: served, next: { itemIndex: index, textOffset: chunk.nextOffset } };
+    if (chunk.nextOffset < text.length) return { items: served, next: { itemIndex: index, textOffset: chunk.nextOffset } };
   }
   return { items: served };
 }
@@ -692,7 +694,30 @@ function contentRevision(text: string): string {
 }
 
 function staleCursorError(): Error {
-  return new Error("Run changed while paging; restart inspection without a cursor");
+  return new ExpectedFlowError("cursor_stale", "Run changed while paging; restart inspection without a cursor");
+}
+
+function cursorInvalid(message = "Invalid cursor"): Error {
+  return new ExpectedFlowError("cursor_invalid", message);
+}
+
+/**
+ * Pages concatenate losslessly: every message after the first is preceded by
+ * one "\n" separator. Only agy/muse output deltas with the same id continue
+ * the previous message without a separator.
+ */
+function streamPiece(projected: { kind?: string; id?: string; text: string }, view: RunInspectionView, prev: StreamPrev): { text: string; continues: boolean; next: StreamPrev } {
+  const streaming = view === "output" && (projected.kind === "agy" || projected.kind === "muse");
+  const continues = streaming && prev === `stream:${projected.id ?? ""}`;
+  return {
+    text: prev === null || continues ? projected.text : `\n${projected.text}`,
+    continues,
+    next: streaming ? `stream:${projected.id ?? ""}` : "item",
+  };
+}
+
+function separatedItemText(items: RunInspectionItem[], index: number): string {
+  return index === 0 ? items[index]!.text : `\n${items[index]!.text}`;
 }
 
 function canonicalResult(summary: Record<string, unknown> | undefined): string | undefined {
@@ -797,16 +822,16 @@ function compactObject(value: Record<string, unknown>): Record<string, unknown> 
 }
 
 function normalizeByteLimit(value: number): number {
-  if (!Number.isFinite(value)) throw new Error("limitBytes must be finite");
+  if (!Number.isFinite(value)) throw new ExpectedFlowError("request_invalid", "limitBytes must be finite");
   return Math.max(4, Math.min(MAX_PAGE_BYTES, Math.floor(value)));
 }
 
 function assertRunId(runId: string): void {
-  if (!RUN_ID_PATTERN.test(runId)) throw new Error("Invalid run ID");
+  if (!RUN_ID_PATTERN.test(runId)) throw new ExpectedFlowError("request_invalid", "Invalid run ID");
 }
 
-function eventCursor(runId: string, view: RunInspectionView, position: number, textOffset: number): Extract<InspectionCursor, { source: "events" }> {
-  return { v: CURSOR_VERSION, kind: "inspect", runId, view, source: "events", position, textOffset };
+function eventCursor(runId: string, view: RunInspectionView, position: number, textOffset: number, prev: StreamPrev): Extract<InspectionCursor, { source: "events" }> {
+  return { v: INSPECT_CURSOR_VERSION, kind: "inspect", runId, view, source: "events", position, textOffset, prev };
 }
 
 function encodeCursor(cursor: InspectionCursor | ListCursor): string {
@@ -814,36 +839,46 @@ function encodeCursor(cursor: InspectionCursor | ListCursor): string {
 }
 
 function decodeCursor(value: string): InspectionCursor | ListCursor {
-  if (!value || value.length > MAX_CURSOR_CHARS) throw new Error("Invalid cursor");
+  if (!value || value.length > MAX_CURSOR_CHARS) throw cursorInvalid();
+  let parsed: Record<string, unknown> | undefined;
   try {
-    const parsed = asRecord(JSON.parse(Buffer.from(value, "base64url").toString("utf8")));
-    if (!parsed || parsed.v !== CURSOR_VERSION || (parsed.kind !== "inspect" && parsed.kind !== "list")) throw new Error();
+    parsed = asRecord(JSON.parse(Buffer.from(value, "base64url").toString("utf8")));
+  } catch {
+    throw cursorInvalid();
+  }
+  // A version-1 inspection cursor counted offsets over the old page format.
+  if (parsed?.kind === "inspect" && parsed.v === CURSOR_VERSION) throw staleCursorError();
+  try {
+    if (!parsed || (parsed.kind === "list" ? parsed.v !== CURSOR_VERSION : parsed.kind !== "inspect" || parsed.v !== INSPECT_CURSOR_VERSION)) throw new Error();
     if (parsed.kind === "list") {
       if (!hasKeys(parsed, ["v", "kind", "scope", "after"]) || typeof parsed.scope !== "string" || !RUN_ID_PATTERN.test(asString(parsed.after) ?? "")) throw new Error();
       return parsed as unknown as ListCursor;
     }
     if (!RUN_ID_PATTERN.test(asString(parsed.runId) ?? "") || !isView(parsed.view) || (parsed.source !== "events" && parsed.source !== "terminal" && parsed.source !== "summary")) throw new Error();
     if (parsed.source === "events") {
-      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "position", "textOffset"]) || !isNonNegativeInteger(parsed.position) || !isNonNegativeInteger(parsed.textOffset)) throw new Error();
+      if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "position", "textOffset", "prev"]) || !isNonNegativeInteger(parsed.position) || !isNonNegativeInteger(parsed.textOffset) || !isStreamPrev(parsed.prev)) throw new Error();
     } else {
       if (!hasKeys(parsed, ["v", "kind", "runId", "view", "source", "itemIndex", "textOffset", "revision"]) || !isNonNegativeInteger(parsed.itemIndex) || !isNonNegativeInteger(parsed.textOffset) || typeof parsed.revision !== "string" || !/^[a-f0-9]{64}$/.test(parsed.revision)) throw new Error();
       if (parsed.source === "summary" && parsed.itemIndex !== 0) throw new Error();
     }
     return parsed as unknown as InspectionCursor;
   } catch {
-    throw new Error("Invalid cursor");
+    throw cursorInvalid();
   }
 }
 
+function isStreamPrev(value: unknown): value is StreamPrev {
+  return value === null || value === "item" || (typeof value === "string" && value.startsWith("stream:") && value.length <= 512);
+}
+
 function validateItemCursor(items: RunInspectionItem[], itemIndex: number, textOffset: number): void {
-  const item = items[itemIndex];
-  if (!item) throw new Error("Cursor item is outside available terminal output");
-  assertTextOffset(item.text, textOffset, "cursor");
+  if (!items[itemIndex]) throw cursorInvalid("Cursor item is outside available terminal output");
+  assertTextOffset(separatedItemText(items, itemIndex), textOffset, "cursor");
 }
 
 function assertTextOffset(text: string, offset: number, label: string): void {
   const splitsSurrogate = offset > 0 && offset < text.length && /[\uD800-\uDBFF]/.test(text[offset - 1]!) && /[\uDC00-\uDFFF]/.test(text[offset]!);
-  if (!isNonNegativeInteger(offset) || (offset >= text.length && offset !== 0) || splitsSurrogate) throw new Error(`${label === "cursor" ? "Cursor" : label} text offset is outside available content`);
+  if (!isNonNegativeInteger(offset) || (offset >= text.length && offset !== 0) || splitsSurrogate) throw cursorInvalid(`${label === "cursor" ? "Cursor" : label} text offset is outside available content`);
 }
 
 function hasKeys(value: Record<string, unknown>, keys: string[]): boolean {

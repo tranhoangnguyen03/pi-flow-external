@@ -10,13 +10,19 @@ export const strings = <T extends string[]>(...values: T) => StringEnum(values);
 export const errorSchema = Type.Object({ code: StringEnum(FLOW_ERROR_CODES), message: Type.String() });
 export type PublicError = Static<typeof errorSchema>;
 
+const envelopeFields = (tool: string, action: TSchema) => ({ contractVersion: Type.Literal(1), tool: Type.Literal(tool), action, observedAt: Type.String(), warnings: Type.Array(Type.String()) });
+
+export function successVariant<S extends TSchema>(tool: string, action: TSchema, data: S) {
+  return Type.Object({ ...envelopeFields(tool, action), ok: Type.Literal(true), data, error: Type.Optional(Type.Never()) });
+}
+
+export function failureVariant<F extends TSchema>(tool: string, action: TSchema, data: F) {
+  return Type.Object({ ...envelopeFields(tool, action), ok: Type.Literal(false), data, error: errorSchema });
+}
+
 /** The versioned envelope shared by every public tool: `ok` discriminates `data` and `error`. */
 export function contractEnvelope<S extends TSchema, F extends TSchema>(tool: string, action: TSchema, success: S, failure: F) {
-  const common = { contractVersion: Type.Literal(1), tool: Type.Literal(tool), action, observedAt: Type.String(), warnings: Type.Array(Type.String()) };
-  return Type.Union([
-    Type.Object({ ...common, ok: Type.Literal(true), data: success, error: Type.Optional(Type.Never()) }),
-    Type.Object({ ...common, ok: Type.Literal(false), data: failure, error: errorSchema }),
-  ]);
+  return Type.Union([successVariant(tool, action, success), failureVariant(tool, action, failure)]);
 }
 
 /** Builds one envelope as plain JSON. `redact` re-redacts the whole envelope (Agent and workflow receipts). */
@@ -59,9 +65,9 @@ export function deliverValue(value: unknown, { finalAvailable, inlineBudget, ins
 
 export type TextContent = { type: "text"; text: string };
 
-export interface ContractResult {
+export interface ContractResult<D = unknown> {
   content: TextContent[];
-  details: unknown;
+  details: D;
   data: unknown;
   warnings?: string[];
   /** A returned failure keeps the caller's own content, details and data. */
@@ -71,18 +77,19 @@ export interface ContractResult {
 /**
  * Runs one tool body and returns `content`/`details` plus the public
  * `structuredContent`, with `isError === !ok`. A thrown ExpectedFlowError
- * becomes a returned failure with `failureData`; anything else is rethrown.
+ * becomes a returned failure with `failureData` and `{error, code}` details
+ * (so `D` must accept that shape); anything else is rethrown.
  */
-export async function withContract(
+export async function withContract<D>(
   { tool, action, failureData, redact = false }: { tool: string; action: string; failureData: unknown; redact?: boolean },
-  body: () => Promise<ContractResult>,
-): Promise<{ content: TextContent[]; details: unknown; structuredContent: JsonObject; isError: boolean }> {
-  let settled: ContractResult;
+  body: () => Promise<ContractResult<D>>,
+): Promise<{ content: TextContent[]; details: D; structuredContent: JsonObject; isError: boolean }> {
+  let settled: ContractResult<D>;
   try {
     settled = await body();
   } catch (error) {
     if (!(error instanceof ExpectedFlowError)) throw error;
-    settled = { content: [{ type: "text", text: error.message }], details: { error: error.message, code: error.code }, data: failureData, error };
+    settled = { content: [{ type: "text", text: error.message }], details: { error: error.message, code: error.code } as D, data: failureData, error };
   }
   const structuredContent = envelope({ tool, action, data: settled.data, warnings: settled.warnings, error: settled.error, redact });
   const content = redact ? redactSecrets(settled.content) as TextContent[] : settled.content;

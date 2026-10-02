@@ -50,6 +50,19 @@ async function withAgentDir<T>(root: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
+/** external_runs results as `/external runs` reads them: the public contract, not renderer details. */
+function listResult(data: Record<string, unknown>) {
+  return { content: [{ type: "text", text: "list" }], details: data, structuredContent: { ok: true, data } };
+}
+
+function pageResult(text: string, { nextCursor, ...extra }: { nextCursor?: string; finalAvailable?: boolean } = {}) {
+  return { content: [{ type: "text", text }], details: {}, structuredContent: { ok: true, data: { mode: "single", page: { text, ...(nextCursor ? { nextCursor } : {}) }, ...extra } } };
+}
+
+function failureResult(code: string, message: string) {
+  return { content: [{ type: "text", text: message }], details: { error: message, code }, isError: true, structuredContent: { ok: false, data: null, error: { code, message } } };
+}
+
 describe("/external command", () => {
   it("registers the new surface, drops the old profile commands, and routes overview without model turns", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-"));
@@ -622,9 +635,7 @@ describe("/external command", () => {
         const externalRuns = {
           execute: vi.fn(async (_id: string, params: any) => {
             listCalls++;
-            return {
-              content: [{ type: "text", text: "list" }],
-              details: {
+            return listResult({
                 workflows: [],
                 runs: [
                   {
@@ -656,8 +667,7 @@ describe("/external command", () => {
                   },
                 ],
                 nextCursor: listCalls === 1 ? "run-next" : undefined,
-              },
-            };
+            });
           }),
         };
         registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root), externalRuns: externalRuns as never }));
@@ -715,10 +725,8 @@ describe("/external command", () => {
         });
         const externalRuns = {
           execute: vi.fn(async (_id: string, params: any) => {
-            if (params.action === "list") {
-              return { content: [{ type: "text", text: "list" }], details: { workflows: [], runs: [{ runId: "run_1", status: "done" }] } };
-            }
-            return { content: [{ type: "text", text: summaryJson }], details: {} };
+            if (params.action === "list") return listResult({ workflows: [], runs: [{ runId: "run_1", status: "done" }] });
+            return pageResult(summaryJson);
           }),
         };
         registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root), externalRuns: externalRuns as never }));
@@ -754,6 +762,56 @@ describe("/external command", () => {
     }
   });
 
+  it("restarts a stale paged summary from page 1 by error code, and keeps navigating after any other returned failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-stale-summary-"));
+    try {
+      await withAgentDir(root, async () => {
+        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+        const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
+        let staleServed = false;
+        const externalRuns = {
+          execute: vi.fn(async (_id: string, params: any) => {
+            if (params.action === "list") return listResult({ workflows: [], runs: [{ runId: "run_1", status: "done" }, { runId: "run_gone", status: "done" }] });
+            if (params.runId === "run_gone") return failureResult("run_unavailable", "Run is unknown or unavailable in this session");
+            if (!params.cursor) return pageResult('{"runId":"run_1",', { nextCursor: "c1" });
+            if (!staleServed) {
+              staleServed = true;
+              return failureResult("cursor_stale", "Run changed while paging; restart inspection without a cursor");
+            }
+            return pageResult('"state":{"status":"done"}}');
+          }),
+        };
+        registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root), externalRuns: externalRuns as never }));
+        const opened: string[] = [];
+        const ctx = {
+          cwd: root,
+          isProjectTrusted: () => false,
+          hasUI: true,
+          ui: {
+            notify: vi.fn(),
+            editor: vi.fn(async () => ""),
+            select: vi.fn(async (title: string, choices: string[]) => {
+              if (title === "External runs") {
+                const next = ["run_gone", "run_1"].find((runId) => !opened.includes(runId));
+                if (!next) return "Back";
+                opened.push(next);
+                return choices.find((choice) => choice.includes(next));
+              }
+              return "Back";
+            }),
+          },
+        };
+        await command?.handler("runs", ctx as never);
+        expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Could not inspect run_gone"), "warning");
+        // run_1 was reached after the failure, and its summary was re-read from page 1 after the stale cursor.
+        expect(ctx.ui.select).toHaveBeenCalledWith("Run run_1", expect.any(Array));
+        expect(externalRuns.execute.mock.calls.filter(([, params]) => params.runId === "run_1" && !params.cursor)).toHaveLength(2);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("routes Final and recovers stale Launch pages without leaving run navigation", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-final-"));
     try {
@@ -762,17 +820,14 @@ describe("/external command", () => {
         const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
         const externalRuns = {
           execute: vi.fn(async (_id: string, params: any) => {
-            if (params.action === "list") {
-              return { content: [{ type: "text", text: "list" }], details: { workflows: [], runs: [{ runId: "run_1", status: "done" }] } };
-            }
+            if (params.action === "list") return listResult({ workflows: [], runs: [{ runId: "run_1", status: "done" }] });
             if (params.view === "launch") {
-              if (params.cursor) throw new Error("Run changed while paging; restart inspection without a cursor");
-              return { content: [{ type: "text", text: "launch snapshot" }], details: { nextCursor: "old-page" } };
+              // Recovery keys on the returned code, never on the message prose.
+              if (params.cursor) return failureResult("cursor_stale", "Evidence moved on");
+              return pageResult("launch snapshot", { nextCursor: "old-page" });
             }
-            if (params.action === "inspect" && params.view === "final") {
-              return { content: [{ type: "text", text: "canonical final answer" }], details: { finalAvailable: true } };
-            }
-            return { content: [{ type: "text", text: JSON.stringify({ runId: "run_1", state: { status: "done" } }) }], details: {} };
+            if (params.action === "inspect" && params.view === "final") return pageResult("canonical final answer", { finalAvailable: true });
+            return pageResult(JSON.stringify({ runId: "run_1", state: { status: "done" } }));
           }),
         };
         registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root), externalRuns: externalRuns as never }));
