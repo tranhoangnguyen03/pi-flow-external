@@ -43,7 +43,7 @@ All notable changes to pi-flow external are documented here.
 ## [3.1.1-external.0] - 2026-10-02
 
 ### Fixed
-- `external_runs list` no longer reports live work as `interrupted_or_uncertain` on later pages, or lists a live run twice. Live state now replaces a run's persisted row on whichever page that row falls; the first page additionally lists live runs that have no persisted row yet. Live runs with a persisted row are no longer all moved to the first page, so pages stay within `limit`.
+- `external_runs list` no longer reports live work as `interrupted_or_uncertain` on later pages, or lists a live run twice. Live state now replaces a run's persisted row on whichever page that row falls. Live runs with no persisted row yet (for example, while evidence writes fail) are paged first and count against `limit`, so every page stays within `limit`. One race remains: a run persisted between two page requests can appear on both.
 - One unreadable workflow journal (an incompatible version, a corrupt start line, or a read error) no longer fails the whole `list`. It is listed as one `interrupted_or_uncertain` row with the read error; `inspect` of that ID still reports the error.
 - A workflow launched after its session closed no longer throws with its journal left open. The journal is settled as failed, and the call returns an error result naming the closed session.
 - Workflow resume no longer reveals that another project's run exists: it reports the same "run journal not found" message as an unknown run ID.

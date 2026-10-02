@@ -205,7 +205,7 @@ Every failure in a resumed run is therefore a fresh run of that child in this at
 **list**: `data: {runs: PublicRun[], workflows: PublicRun[], nextCursor?, nextWorkflowCursor?}`.
 - **Preserved:** the two cursor streams, ordering, and the `workflowRunId` filter.
 - **`nextCursor` means *scan incomplete*,** not *more rows exist*. `listRunRecords` stops at `MAX_LIST_SCAN`, so an empty next page is possible. This is now documented.
-- **B1 (live work misreported), fixed on every page.** Every durable or journal row whose `runId` is in the registry uses the live projection. Page 1 additionally includes only live entries that have no persisted row yet. A run is never listed twice, and live work is never reported as interrupted. Tests cover a run that sits beyond page 1 while live.
+- **B1 (live work misreported), fixed on every page.** Every durable or journal row whose `runId` is in the registry uses the live projection. Live entries with no persisted row yet are paged first, inside the same `limit`, through an unpersisted stage of the same opaque list cursor; after them the cursor starts the persisted listing. Live work is never reported as interrupted, and pages never exceed `limit`. Tests cover a run that sits beyond page 1 while live, and registry-only runs at `limit: 1`.
 - **B3 (one bad journal fails the whole list), fixed:** a journal that fails to load becomes one row with `status: interrupted_or_uncertain` and `integrity: damaged` (or `unknown` for an unsupported version). It no longer fails the whole list.
 
 **inspect, batch** (`runIds`, summary view): `data: {mode: "batch", entries: PublicRun[], nextCursor?}`.
