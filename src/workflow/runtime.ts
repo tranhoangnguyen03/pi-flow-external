@@ -482,6 +482,8 @@ export async function runWorkflow<T = unknown>(
               error: error instanceof Error ? error.message : String(error),
             });
           } else {
+            // The single site where a script learns an agent() call failed.
+            if (!finished) options.onChildFailureDelivered?.();
             postToWorker({
               type: "agentResult",
               id: message.id,

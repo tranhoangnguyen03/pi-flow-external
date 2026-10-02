@@ -4,6 +4,8 @@ import { Value } from "typebox/value";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { agentOutputSchema } from "../src/contract/agent.ts";
+import { externalRunsOutputSchema } from "../src/contract/runs.ts";
+import { workflowOutputSchema } from "../src/contract/workflow.ts";
 
 afterEach(() => vi.restoreAllMocks());
 const { createSession } = setupPiSubagentTestHarness();
@@ -130,4 +132,46 @@ it.each(["settles", "unreadable"])("observes background state after evidence I/O
   ]);
   await session.prompt("Run race probe.");
   expect(receipt).toMatchObject({ok:true,data:{run:{live:false,state:{status:"done"},output:{value:"child done"},evidence:{integrity:mode === "unreadable" ? "unknown" : "complete"}}}});
+});
+
+
+it("resolves workflow and external_runs typed failures and successes in native codemode instead of throwing", async () => {
+  const results: Record<string, { structuredContent: unknown; isError: boolean | undefined }[]> = { workflow: [], external_runs: [] };
+  const { session, registration } = await createSession({ codemode: true,
+    piHarnesses: { "pi-test": { modelId: "faux-thinker" } },
+    extensions: [(pi) => { pi.on("tool_result", (event) => {
+      if (event.toolName in results) results[event.toolName]!.push({ structuredContent: event.structuredContent, isError: event.isError });
+    }); }],
+  });
+  const code = `
+    const missing = await tools.workflow({ name: "missing-saved-workflow" });
+    const unknown = await tools.external_runs({ action: "inspect", runIds: ["run_missing"] });
+    const ran = await tools.workflow({ script: 'export const meta = { apiVersion: 1, name: "probe", description: "d" };\\nreturn await agent("WF_CHILD", { role: "worker", harness: "pi-test" });' });
+    const waited = await tools.external_runs({ action: "wait", runIds: [ran.data.run.runId] });
+    return [missing.ok, missing.error.code, unknown.ok, unknown.error.code, ran.ok, ran.data.run.output.value, waited.data.completed[0].output.value].join(",");`;
+  registration.setResponses([
+    () => fauxAssistantMessage([fauxToolCall("codemode", { code })]),
+    () => fauxAssistantMessage("child ok"),
+    () => fauxAssistantMessage("done"),
+  ]);
+  await session.prompt("Run the workflow contract probe.");
+  expect(scriptOutput(session)).toBe("false,selection_invalid,false,run_unavailable,true,child ok,child ok");
+  expect(results.workflow.map((result) => result.isError)).toEqual([true, false]);
+  expect(results.external_runs.map((result) => result.isError)).toEqual([true, false]);
+  for (const result of results.workflow) expect(Value.Check(workflowOutputSchema, result.structuredContent)).toBe(true);
+  for (const result of results.external_runs) expect(Value.Check(externalRunsOutputSchema, result.structuredContent)).toBe(true);
+});
+
+it.each(["workflow", "external_runs"])("discovers the %s return declaration through native codemode", async (tool) => {
+  const { session, registration } = await createSession({ codemode: true });
+  registration.setResponses([
+    () => fauxAssistantMessage([fauxToolCall("codemode", { code: `return describeTool(${JSON.stringify(tool)});` })]),
+    () => fauxAssistantMessage("done"),
+  ]);
+  await session.prompt(`Describe ${tool}.`);
+  const declaration = scriptOutput(session);
+  expect(declaration).toContain("ok: true");
+  expect(declaration).toContain("ok: false");
+  expect(declaration).not.toContain("Promise<unknown>");
+  console.info(`Native ${tool} declaration: ${Buffer.byteLength(declaration)} UTF-8 bytes`);
 });

@@ -214,6 +214,12 @@ export interface RunWorkflowOptions {
   onAgentStart?: (event: { index: number; label: string; phase?: string; subagentType: string; prompt: string; cached?: boolean; runId?: string; executionStartedAt?: number }) => void;
   onAgentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean; error?: SerializedChildRunError }) => void;
   onAgentResult?: (event: WorkflowAgentResultEvent) => void | Promise<void>;
+  /**
+   * One failed agent() call delivered to the script as a catchable rejection,
+   * including failures before a child is indexed. Fatal replies are excluded:
+   * they always fail the root.
+   */
+  onChildFailureDelivered?: () => void;
 }
 
 export interface WorkflowRunResult<T = unknown> {
