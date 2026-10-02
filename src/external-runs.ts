@@ -1004,6 +1004,13 @@ export function createExternalRunsTool(
           const page = projectionPage(runId, view, JSON.stringify(source), params.cursor, params.limitBytes);
           return single(page.text, "json", { runId, view, text: page.text, nextCursor: page.nextCursor });
         }
+        // A settled successful result in the registry is the verified final
+        // answer, so a final reference stays followable even when evidence
+        // was never persisted.
+        if (view === "final" && entry?.kind === "agent" && entry.outcome?.status === "done" && entry.outcome.result !== undefined && (!params.cursor || isProjectionCursor(params.cursor))) {
+          const page = projectionPage(runId, view, liveAgentOutput(entry) ?? "", params.cursor, params.limitBytes);
+          return single(page.text, "text", { runId, view, text: page.text, finalAvailable: true, outputStatus: "final", nextCursor: page.nextCursor }, { finalAvailable: true, outputStatus: "final" });
+        }
         if (view === "output" && entry?.kind === "agent" && (!params.cursor || isProjectionCursor(params.cursor))) {
           const text = liveAgentOutput(entry);
           if (text !== undefined) {

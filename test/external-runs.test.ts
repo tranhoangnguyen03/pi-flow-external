@@ -265,6 +265,17 @@ describe("external_runs", () => {
     expect(completed.map((run: any) => run.runId)).toEqual(ids);
     for (const [index, value] of values.entries()) expect(completed[index].output).toEqual({ available: true, finalAvailable: true, delivery: "inline", value });
     expect(completed[4].output.delivery).toBe("reference");
+    // The reference is followable from memory: this registry-only run never persisted evidence.
+    const { tool: _tool, ...finalRef } = completed[4].refs.final;
+    let final = "";
+    let finalCursor: string | undefined;
+    do {
+      const page = await execute({ ...finalRef, limitBytes: 8192, ...(finalCursor ? { cursor: finalCursor } : {}) });
+      expect(page.structuredContent.data).toMatchObject({ finalAvailable: true, outputStatus: "final" });
+      final += page.structuredContent.data.page.text;
+      finalCursor = page.structuredContent.data.page.nextCursor;
+    } while (finalCursor);
+    expect(final).toBe("x".repeat(20_000));
     expect(completed[5].output.value).toBe("token Bearer [REDACTED] end");
     expect(waited.structuredContent.warnings).toContain("output_redacted");
     expect(completed[6]).toMatchObject({ runId: durable.runId, live: false, output: { delivery: "reference" }, evidence: { integrity: "complete" } });
