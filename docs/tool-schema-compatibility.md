@@ -12,7 +12,7 @@ valid omission. This is not evidence that the source forgot `Type.Optional`.
 
 ## Verified client boundary
 
-With the pinned Pi SDK 0.79.4, run:
+With the pinned Pi SDK 0.99.2, run:
 
 ```sh
 npx vitest run test/tool-schema-provider.test.ts
@@ -26,10 +26,12 @@ compatibility setting match the affected configuration.
 
 | Tool | Outbound `required` | Outbound `strict` |
 | --- | --- | --- |
-| `external_runs` | `["action"]` | `false` |
-| `external_help` | `["topic"]` | `false` |
+| `external_runs` | `["action"]` | omitted (non-strict) |
+| `external_help` | `["topic"]` | omitted (non-strict) |
 
-`pi-ai/dist/providers/openai-completions.js` passes `tool.parameters` through in
+The original 0.79.4 capture emitted explicit `false`; 0.99.2 omits `strict` for this compatible provider. The regression rejects `true` and still checks exact required fields.
+
+`pi-ai/dist/api/openai-completions.js` passes `tool.parameters` through in
 `convertTools`; it does not promote optional fields to required. An independent
 Grok reviewer also captured a loopback HTTP POST with equivalent schemas and
 observed the same arrays. Existing `external-runs` and `external-help` tests own

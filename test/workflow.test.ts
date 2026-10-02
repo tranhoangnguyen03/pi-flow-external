@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { SessionManager, Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager, Theme, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, type AssistantMessage } from "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
@@ -31,7 +31,7 @@ function delay(ms: number): Promise<void> {
 }
 
 function makeMockTheme(): Theme {
-  const theme = new Theme({} as never, {} as never, "truecolor");
+  const theme = Object.create(Theme.prototype) as Theme;
   (theme as unknown as { fg: (color: string, text: string) => string }).fg = (_color, text) => text;
   (theme as unknown as { bold: (text: string) => string }).bold = (text) => text;
   return theme;
@@ -1286,7 +1286,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       modelRegistry,
       sessionManager: session.sessionManager,
       isProjectTrusted: () => true,
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     // Run workflow that selects the custom profile omitting model/thinking:
     const result = await tool.execute(
@@ -1358,7 +1358,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       modelRegistry,
       sessionManager: session.sessionManager,
       isProjectTrusted: () => true,
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     const runPromise = tool.execute(
       "queued-visibility",
@@ -1446,7 +1446,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       modelRegistry,
       sessionManager: session.sessionManager,
       isProjectTrusted: () => true,
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     const runPromise = tool.execute(
       "execution-transition",
@@ -1528,7 +1528,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       modelRegistry,
       sessionManager: session.sessionManager,
       isProjectTrusted: () => true,
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     // Selecting the conflicting profile via subagent_type
     const result = await tool.execute(
@@ -1564,7 +1564,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       modelRegistry,
       sessionManager: session.sessionManager,
       isProjectTrusted: () => true,
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     const result = await tool.execute(
       "call-fail-output",

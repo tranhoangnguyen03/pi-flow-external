@@ -2,6 +2,16 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [3.1.0-external.0] - 2026-10-02
+
+### Added
+- Versioned Agent receipts (`outputSchema`, `structuredContent`, and accurate `isError`) for native Pi codemode. Scripts must check `ok`; expected failures are data, while host dispatch failures and unexpected exceptions still throw.
+- Registry-backed lifecycle/output/evidence projections, a 16 KiB UTF-8 JSON inline cap, inspect references, and explicit output-redaction warnings. Human renderer details remain separate. Workflow and supervision contracts remain follow-up work.
+
+### Changed
+- Require Pi `~0.99.2`, with development packages pinned to 0.99.2; older hosts are no longer claimed as supported. Pi children inherit registered providers and runtime API keys through ModelRuntime. Flow retains six concrete thinking levels (not SDK `max`); virtual models are rejected because their registrations cannot be inherited.
+- Port isolated faux-provider and E2E harnesses to Pi 0.99.2. Native codemode regressions cover returned errors, host rejection/throws, redaction, declaration discovery, and background settlement during evidence reads.
+
 ## [3.0.0-external.0] - 2026-10-01
 
 ### Breaking: configuration v5 (issue #73)

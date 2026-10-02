@@ -1,3 +1,4 @@
+import { ExpectedFlowError } from "./errors.ts";
 import { buildSessionContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 
@@ -20,12 +21,12 @@ export interface ParentContextReceipt {
 
 export function parseParentContext(value: unknown): ParentContext | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("context must be an object");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ExpectedFlowError("context_invalid", "context must be an object");
   const { mode, turns } = value as Record<string, unknown>;
   if (!["none", "recent", "full"].includes(mode as string) ||
       Object.keys(value).some((key) => key !== "mode" && !(mode === "recent" && key === "turns")) ||
       (mode === "recent" && (typeof turns !== "number" || !Number.isSafeInteger(turns) || turns < 1))) {
-    throw new Error("context must be {mode:'none'}, {mode:'recent',turns:positive integer}, or {mode:'full'}");
+    throw new ExpectedFlowError("context_invalid", "context must be {mode:'none'}, {mode:'recent',turns:positive integer}, or {mode:'full'}");
   }
   return mode === "recent" ? { mode, turns: turns as number } : { mode: mode as "none" | "full" };
 }
@@ -46,8 +47,8 @@ export function prepareParentContext(
   const context = parseParentContext(selection);
   if (!context || context.mode === "none") return { prompt };
   const resumeId = typeof resume === "string" && resume.trim() !== "" ? resume.trim() : undefined;
-  if (resumeId !== undefined) throw new Error("context sharing cannot be combined with resume; continue the child or start a new one");
-  if (!messages) throw new Error("Parent context is unavailable; use context:none and a self-contained prompt");
+  if (resumeId !== undefined) throw new ExpectedFlowError("context_invalid", "context sharing cannot be combined with resume; continue the child or start a new one");
+  if (!messages) throw new ExpectedFlowError("context_invalid", "Parent context is unavailable; use context:none and a self-contained prompt");
   const compacted = messages.some((message) => message.role === "compactionSummary");
   let start = 0;
   if (context.mode === "recent") {
@@ -64,6 +65,8 @@ export function prepareParentContext(
   const transcript: unknown[] = [];
   let sharedTurns = 0;
   for (const message of selected) {
+    // SDK transcripts include system messages; sharing excludes their content.
+    if (message.role === "system") continue;
     if (message.role === "bashExecution") {
       if (!message.excludeFromContext) transcript.push({ role: message.role, command: message.command, output: message.output, exitCode: message.exitCode, truncated: message.truncated });
       continue;
@@ -73,7 +76,7 @@ export function prepareParentContext(
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult" && message.role !== "custom") {
-      throw new Error("Unsupported parent context message role");
+      throw new ExpectedFlowError("context_invalid", "Unsupported parent context message role");
     }
     if (message.role === "toolResult" && message.toolCallId === toolCallId) continue;
     if (message.role === "toolResult") {
@@ -91,7 +94,7 @@ export function prepareParentContext(
       if (block.type === "text") blocks.push({ type: "text", text: block.text });
       else if (block.type === "toolCall") {
         if (completed.has(block.id)) blocks.push({ type: "toolCall", id: block.id, name: block.name, arguments: block.arguments });
-      } else throw new Error(`Unsupported parent context content: ${block.type}; share fewer turns or provide a text briefing`);
+      } else throw new ExpectedFlowError("context_invalid", `Unsupported parent context content: ${block.type}; share fewer turns or provide a text briefing`);
     }
     if (blocks.length) transcript.push({ role: message.role, content: blocks,
       ...(message.role === "toolResult" ? { toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError } : {}),
@@ -101,7 +104,7 @@ export function prepareParentContext(
   const text = JSON.stringify(transcript);
   const bytes = Buffer.byteLength(text, "utf8");
   // ponytail: fixed transport ceiling, backend-specific token budgeting if needed.
-  if (bytes > 1024 * 1024) throw new Error("Parent context is too large (over 1 MiB); share fewer turns or provide a text briefing. Nothing was truncated.");
+  if (bytes > 1024 * 1024) throw new ExpectedFlowError("context_invalid", "Parent context is too large (over 1 MiB); share fewer turns or provide a text briefing. Nothing was truncated.");
   const receipt: ParentContextReceipt = { mode: context.mode, ...(context.mode === "recent" ? { requestedTurns: context.turns } : {}), sharedTurns, messages: transcript.length, bytes, compacted };
   return {
     context: receipt,

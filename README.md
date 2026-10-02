@@ -14,7 +14,7 @@ Six built-in roles are available in memory on every one of those harnesses. A fr
 
 The ordinary driver has four tools (`workflow` can be disabled):
 
-- `Agent` resolves and runs one external role.
+- `Agent` resolves and runs one external role. Its [versioned public receipt](docs/agent-public-contract.md) is available to native Pi codemode; scripts must check `ok`.
 - `workflow` orchestrates multiple external roles with trusted JavaScript.
 - `external_help` returns the usage playbook, role details, permission behavior, or workflow guidance on demand.
 - `external_runs` lists, inspects, waits for, and cancels session-owned runs.
@@ -22,6 +22,8 @@ The ordinary driver has four tools (`workflow` can be disabled):
 `Agent` and `workflow` accept a role with an optional harness — `agy`, `claude`, `codex`, `grok`, `muse`, `opencode`, or a registered `pi-*` name. A registered Pi harness uses that same selection. Legacy exact `subagent_type` remains available and cannot be combined with `role` or `harness`. `pi_flow_role_create` is active only during `/external config role assist`. `pi_flow_harness_create` is active only during `/external config harness assist`. Worked calls are `external_help` topic `usage`.
 
 ## Install
+
+Host baseline: **Pi 0.99.2**, with Pi peers restricted to `~0.99.2` (0.99.x patches from 0.99.2). The offline suite is pinned to exactly 0.99.2; older hosts and later minor versions are not claimed as supported.
 
 Global installation:
 
@@ -370,7 +372,7 @@ Disable a role everywhere with `/external config role disable reviewer`, or add 
 
 ### Named Pi harness configurations
 
-A named Pi harness runs in-process through Pi's own SDK, for any model Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Register it with **Add a Pi agent…** in `/external`, or with `/external config harness create pi-NAME --model provider/model`: a `pi-<label>` name, a `provider/model` id, a reasoning policy (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `parent`, stored explicitly on creation), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. Registration is saved into the `harnesses` object of `settings.json` without sending a request. `/external config harness assist` is the model-assisted alternative; its smoke test uses the selected preset and runs before saving. A legacy entry that omits `preset` is `minimal`. The six CLI harnesses are built in and do not need entries there.
+A named Pi harness runs in-process through Pi's own SDK, for physical models Pi can already resolve (built-in, self-hosted, or a custom-registered provider). Children inherit in-memory provider registrations and the selected provider's runtime API key; stored authentication uses the same agent directory. Virtual model registrations cannot be transferred through the SDK registry and are rejected. Flow retains six concrete thinking levels; SDK `max` remains unsupported. Register it with **Add a Pi agent…** in `/external`, or with `/external config harness create pi-NAME --model provider/model`: a `pi-<label>` name, a `provider/model` id, a reasoning policy (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `parent`, stored explicitly on creation), and a resource preset (`minimal` or `skills`). `minimal` is the default and leaves skills unloaded. `skills` loads installed skills, and project skills only when the project is trusted. Registration is saved into the `harnesses` object of `settings.json` without sending a request. `/external config harness assist` is the model-assisted alternative; its smoke test uses the selected preset and runs before saving. A legacy entry that omits `preset` is `minimal`. The six CLI harnesses are built in and do not need entries there.
 
 ```json
 {

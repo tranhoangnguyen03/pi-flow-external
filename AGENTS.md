@@ -43,6 +43,8 @@ This fork changes the original pi-flow contract: `Agent` is not a generic Pi sub
 
 ## Receipt and evidence invariants
 
+- Agent public contract v1 uses a discriminated `ok` envelope with `isError === !ok`; renderer details remain independent. Expected errors are coded at their source, not parsed from prose. Canonical output is inline only within 16 KiB UTF-8 JSON after redaction, with `output_redacted` disclosed when changed. Refs must be resolvable, liveness must be observed after evidence I/O, and unavailable evidence must not discard a settled result. Native codemode tests must assert script output and hook-captured flags outside hooks (the SDK catches hook exceptions).
+
 - Success requires a recognized backend terminal-success event, a zero process exit, and a non-empty result.
 - A backend failure with a complete local record is different from an incomplete or damaged record; preserve that distinction in reports.
 - Normal runs write private best-effort evidence under `~/.pi/agent/pi-flow-external/runs/` or `PI_FLOW_EXTERNAL_RUNS_DIR`. Records may still contain sensitive prompts, excerpts, and tool output despite redaction.

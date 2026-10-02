@@ -2,6 +2,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   type ExtensionContext,
@@ -925,12 +926,33 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     // markModified()/save(), so this still never reaches the settings file.
     settingsManager.applyOverrides({ retry: { enabled: false } });
 
+    // The extension context exposes a registry, not its owning runtime. Rebuild
+    // from the same files and carry over in-memory provider/auth registrations.
+    if (model.api === "pi-virtual") {
+      throw new Error("Named Pi harnesses require a physical model; virtual model registrations cannot be inherited through the SDK registry.");
+    }
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+    });
+    for (const id of ctx.modelRegistry.getRegisteredProviderIds()) {
+      const native = ctx.modelRegistry.getRegisteredNativeProvider(id);
+      if (native) modelRuntime.registerNativeProvider(native);
+      const config = ctx.modelRegistry.getRegisteredProviderConfig(id);
+      if (config) modelRuntime.registerProvider(id, config);
+    }
+    if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source === "runtime") {
+      const key = await ctx.modelRegistry.getApiKeyForProvider(model.provider);
+      if (key) await modelRuntime.setRuntimeApiKey(model.provider, key);
+    }
+    if (signal?.aborted) throw new Error("Subagent aborted before prompt start");
+
     ({ session } = await createAgentSession({
       cwd,
       agentDir,
       model,
       thinkingLevel: thinkingLevel as NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"],
-      modelRegistry: ctx.modelRegistry,
+      modelRuntime,
       settingsManager,
       sessionManager: SessionManager.inMemory(cwd),
       resourceLoader,

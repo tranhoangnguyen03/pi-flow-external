@@ -1,7 +1,8 @@
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  AuthStorage,
+  ModelRuntime,
   createAgentSession,
   DefaultResourceLoader,
   ModelRegistry,
@@ -12,7 +13,7 @@ import {
 import {
   fauxAssistantMessage,
   fauxToolCall,
-  registerFauxProvider,
+  fauxProvider,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -409,9 +410,9 @@ setInterval(() => {}, 1000);
 
     await session.prompt("Just say noted.");
 
-    expect(rootContext?.systemPrompt).toContain("# External delegation");
-    expect(rootContext?.systemPrompt).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
-    expect(rootContext?.systemPrompt).toContain("agy alone may make one disclosed infrastructure retry");
+    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).toContain("# External delegation");
+    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
+    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).toContain("agy alone may make one disclosed infrastructure retry");
     expect(getToolNames(rootContext)).toContain("Agent");
     expect(getToolNames(rootContext)).toContain("external_help");
     expect(getToolNames(rootContext)).toContain("external_runs");
@@ -438,7 +439,7 @@ setInterval(() => {}, 1000);
     let trustedPrompt = "";
     trusted.registration.setResponses([
       (context) => {
-        trustedPrompt = context.systemPrompt ?? "";
+        trustedPrompt = getCurrentSystemPrompt(context.messages);
         return fauxAssistantMessage("noted");
       },
     ]);
@@ -528,15 +529,13 @@ setInterval(() => {}, 1000);
 
 
   it("registers the Agent tool when loaded via additionalExtensionPaths", async () => {
-    const registration = registerFauxProvider({
+    const registration = fauxProvider({
       models: [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }],
     });
-    registrations.push(registration);
-
     const model = registration.getModel("faux-thinker") as Model<string>;
-    const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-    authStorage.setRuntimeApiKey(model.provider, "test-api-key");
-    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+    const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, refreshOnCreate: false });
+    modelRuntime.registerNativeProvider(registration.provider);
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key");
     const settingsManager = SettingsManager.inMemory({});
     const sessionManager = SessionManager.inMemory(cwd);
     const resourceLoader = new DefaultResourceLoader({
@@ -555,8 +554,7 @@ setInterval(() => {}, 1000);
     const { session } = await createAgentSession({
       cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       thinkingLevel: "high",
       settingsManager,

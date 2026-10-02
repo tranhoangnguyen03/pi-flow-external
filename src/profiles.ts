@@ -1,3 +1,4 @@
+import { ExpectedFlowError } from "./core/errors.ts";
 import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
@@ -431,7 +432,7 @@ export function reconcilePiProfileWithHarness(
   harnessConfigs: ReadonlyMap<string, HarnessConfig>,
 ): SubagentProfile {
   const { profile: reconciled, conflict } = computeReconciledPiProfile(profile, harnessConfigs);
-  if (conflict) throw new Error(conflict);
+  if (conflict) throw new ExpectedFlowError("selection_invalid", conflict);
   return reconciled;
 }
 
@@ -522,36 +523,36 @@ export function resolveExternalProfile(
 
   if (subagentType) {
     if (role || harness) {
-      throw new Error("Choose either role (with optional harness) or legacy subagent_type; do not combine them.");
+      throw new ExpectedFlowError("selection_invalid", "Choose either role (with optional harness) or legacy subagent_type; do not combine them.");
     }
     const matches = [...profiles.values()].filter(p => p.configVersion === 5 && p.role && `${selectorHarness(p)}-${p.role}` === subagentType);
-    if (!profiles.has(subagentType) && matches.length > 1) throw new Error(`Ambiguous legacy selector "${subagentType}"; use role and harness explicitly.`);
+    if (!profiles.has(subagentType) && matches.length > 1) throw new ExpectedFlowError("selection_invalid", `Ambiguous legacy selector "${subagentType}"; use role and harness explicitly.`);
     const profile = profiles.get(subagentType) ?? matches[0];
     if (!profile) {
-      throw new Error(unknownExternalProfileMessage(subagentType, profiles.keys()));
+      throw new ExpectedFlowError("selection_invalid", unknownExternalProfileMessage(subagentType, profiles.keys()));
     }
-    if (profile.configurationError) throw new Error(profile.configurationError);
+    if (profile.configurationError) throw new ExpectedFlowError("selection_invalid", profile.configurationError);
     return reconcilePiProfileWithHarness(profile, harnessConfigs);
   }
 
   if (!role) {
-    throw new Error(harness
+    throw new ExpectedFlowError("selection_invalid", harness
       ? "role is required when harness is provided; otherwise provide role or legacy subagent_type."
       : "Either role or legacy subagent_type is required.");
   }
   const selectedHarness = harness || defaultHarness;
   if (!configuredHarnessNames.has(selectedHarness)) {
-    throw new Error(`Unknown external harness "${selectedHarness}". Choose one of: ${[...configuredHarnessNames].join(", ") || "none"}.`);
+    throw new ExpectedFlowError("selection_invalid", `Unknown external harness "${selectedHarness}". Choose one of: ${[...configuredHarnessNames].join(", ") || "none"}.`);
   }
   if ((options.disabledHarnesses ?? DEFAULT_RESOLVE_OPTIONS.disabledHarnesses).has(selectedHarness)) {
-    throw new Error(disabledHarnessMessage(selectedHarness, !harness));
+    throw new ExpectedFlowError("selection_invalid", disabledHarnessMessage(selectedHarness, !harness));
   }
 
   const legacy = profiles.get(`${selectedHarness}-${role}`);
   const exact = profiles.get(bindingKey(selectedHarness, role)) ?? (legacy?.configVersion === 5 ? undefined : legacy);
   if (exact) {
-    if (exact.configurationError) throw new Error(exact.configurationError);
-    if (selectorHarness(exact) !== selectedHarness || externalProfileRole(exact) !== role) throw new Error(`Override "${exact.name}" does not match selected harness "${selectedHarness}".`);
+    if (exact.configurationError) throw new ExpectedFlowError("selection_invalid", exact.configurationError);
+    if (selectorHarness(exact) !== selectedHarness || externalProfileRole(exact) !== role) throw new ExpectedFlowError("selection_invalid", `Override "${exact.name}" does not match selected harness "${selectedHarness}".`);
     return reconcilePiProfileWithHarness(exact, harnessConfigs);
   }
 
@@ -566,12 +567,12 @@ export function resolveExternalProfile(
   const availability = externalRoleAvailability(profiles);
   const supported = availability.get(role);
   if (supported?.length) {
-    throw new Error(
+    throw new ExpectedFlowError("selection_invalid",
       `Role "${role}" is unavailable for harness "${selectedHarness}". Supported harnesses for this role: ${supported.join(", ")}. Choose one of those harnesses or add profile "${selectedHarness}-${role}".`,
     );
   }
   const knownRoles = new Set([...availability.keys(), ...(EXTERNAL_HARNESSES.includes(selectedHarness as ExternalHarness) ? [] : defaultRoleNames())]);
-  throw new Error(
+  throw new ExpectedFlowError("selection_invalid",
     `Unknown external role "${role}". Available roles: ${[...knownRoles].join(", ") || "none"}. Nonstandard profile names must be selected with legacy subagent_type.`,
   );
 }

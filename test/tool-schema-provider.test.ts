@@ -1,4 +1,5 @@
-import { streamSimple, type Model } from "@earendil-works/pi-ai";
+import { normalizeContext, type Model } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/api/openai-completions";
 import { expect, it } from "vitest";
 import { createExternalRunsTool } from "../src/external-runs.ts";
 import { createExternalHelpTool } from "../src/external-help.ts";
@@ -19,9 +20,9 @@ it("preserves optional selectors in the actual openai-completions provider paylo
   };
   let captured: unknown;
   const sentinel = "offline schema capture complete";
-  const response = streamSimple(model, {
+  const response = streamSimple(model, normalizeContext({
     messages: [{ role: "user", content: "Probe", timestamp: 0 }], tools,
-  }, {
+  }), {
     apiKey: "fake-offline-token",
     onPayload(payload) {
       captured = JSON.parse(JSON.stringify(payload));
@@ -36,7 +37,7 @@ it("preserves optional selectors in the actual openai-completions provider paylo
   for (const [index, required, optional] of [[0, "action", ["runIds"]], [1, "topic", ["harness"]]] as const) {
     const fn = payload.tools[index]!.function;
     expect(fn.name).toBe(tools[index]!.name);
-    expect(fn.strict).toBe(false);
+    expect(fn.strict).not.toBe(true); // Unknown compatible providers may omit strict.
     expect(fn.parameters.required).toEqual([required]);
     for (const field of optional) expect(fn.parameters.properties).toHaveProperty(field);
   }
