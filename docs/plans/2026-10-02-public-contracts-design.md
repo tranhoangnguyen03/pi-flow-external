@@ -107,7 +107,7 @@ withContract({ tool, action, redact }, async () =>
   - external_runs and help never redact an already-cut page. Doing so would break `limitBytes` and could miss a secret split across a page boundary.
 - **Rule: every served text is redacted at its source, before it is measured or sliced.**
   - Durable evidence is redacted when it is written (`run-record.ts:90,137-205`) and is served byte-exact.
-  - Memory-sourced text is redacted in full by one helper (`redactedText()`), then measured and sliced. That covers live output and diagnostics pages (`liveAgentOutput`, `external-runs.ts:375-381`, served at :839-849), the legacy wait `result` from `outcome.result`, and live workflow views. None of these is redacted today. Cursor revisions are computed over the redacted text.
+  - Memory-sourced text is redacted in full by one helper (`redactedText()`), then measured and sliced. That covers live output and diagnostics pages (`liveAgentOutput`, `external-runs.ts:375-381`, served at :839-849), the legacy wait `result` from `outcome.result`, and every workflow view. Workflow journals are not redacted at write, so journal-sourced views count as memory-sourced too. None of these is redacted today. Cursor revisions are computed over the redacted text.
   - Every `deliverValue()` call redacts the value it inlines before measuring it. That is where `output_redacted` comes from.
 
   So whether text comes from disk or memory, no surface serves unredacted text.
@@ -222,7 +222,7 @@ Every failure in a resumed run is therefore a fresh run of that child in this at
 
   An agent final value is the canonical result string verbatim. A schema-constrained workflow child stores JSON text there; this is documented.
 - **`complete`** means there is no `nextCursor`. JSON pages may be fragments, so callers must concatenate one cursor sequence before parsing.
-- **B9 (multi-item pages are not lossless), fixed by an explicit change.** Item streams are serialized with each item terminated by `\n`, and cursor offsets count over that terminated text. As a result, the pages of an output or diagnostics stream concatenate losslessly. Tests cover multi-page, multi-item streams and old-offset rejection, where an old cursor fails as `cursor_stale`.
+- **B9 (multi-item pages are not lossless), fixed by an explicit change.** Every message after the first is preceded by one `\n` separator, and cursor offsets count over that separated text. agy/muse streaming deltas with the same id continue their message without a separator, so the cursor also records what preceded its position. As a result, the pages of an output or diagnostics stream concatenate losslessly. Tests cover multi-page, multi-item streams and old-offset rejection, where an old cursor fails as `cursor_stale`.
 - **Unavailable output.** `final` stays an empty page with `finalAvailable:false`. For output and diagnostics, `content` keeps its "No output is available" sentence, but `page.text` is `""`.
 
 **wait**: `data: {mode, completed: PublicRun[], pending: string[]}`.
@@ -511,3 +511,16 @@ Versions: `3.1.1-external.0`, `3.2.0-external.0`, `3.3.0-external.0`, `3.4.0-ext
 | Missing test rows: renderer tolerance for failure `details`; contracts index size | maintainer | §5.2 rows added; §4.1 states the exact bound. |
 | B9 changes the format but sat in a patch PR | maintainer | Moved to PR 1 (minor); PR 0 is pure fixes. |
 | The handled-failure argument did not cover resume | maintainer | §2.2: replay never reuses failed results, so the count is exact and per attempt. |
+
+## Appendix B: implementation notes (PR 1)
+
+| Design text | As built | Why |
+|---|---|---|
+| B9: each item terminated by `\n` | A `\n` separator before each new message; same-id agy/muse deltas join without one; inspection cursors carry the preceding stream state and move to version 2 | Terminators split streamed messages mid-sentence |
+| Memory-sourced redaction | Also covers journal-sourced workflow views | Journals are not redacted at write |
+| §1.1: move the Agent input schema to `src/contract/agent.ts` | Deferred to PR 3, where the help import cycle appears | No PR 1 behaviour depends on it |
+| §4.4: `docs/public-contract.md` replaces `docs/agent-public-contract.md` in PR 3 | Done in PR 1 | PR 1 introduces the contracts the doc describes |
+| Agent declaration unchanged | Its run schema is unchanged; its error-code enum gains the nine new codes (declaration 3130 bytes, well under the 12,000-byte bound) | One shared error vocabulary |
+| Unreadable journals | `WorkflowJournalReadError` is an `ExpectedFlowError` (`run_unavailable`) carrying `integrity` and, when readable, `project`; another project's unreadable journal reads as unknown | Codes at source, no cross-project disclosure |
+| Batch cursor from another session | `cursor_invalid`, "Cursor belongs to a different session or project" | It is a cursor fault; the message reveals nothing about runs |
+| `/external runs` failures | Coded `RunsActionError`; stale recovery by code; other failures notify and keep the navigator open | §2.4 |

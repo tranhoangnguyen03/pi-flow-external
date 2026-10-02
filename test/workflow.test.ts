@@ -1246,7 +1246,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     cwd = state.cwd;
   });
 
-  function makeWorkflowTool(registry = new RunRegistry(), defaultMaxBudgetUsd?: number) {
+  function makeWorkflowTool(registry = new RunRegistry(), defaultMaxBudgetUsd?: number, updateStatus: (ctx: unknown, toolCallId: string, usage: unknown) => void = () => {}) {
     return createWorkflowTool({
       registry,
       getLimiter: () => new ConcurrencyLimiter(2),
@@ -1255,7 +1255,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
       getDefaultMaxBudgetUsd: () => defaultMaxBudgetUsd,
-      updateStatus: () => {},
+      updateStatus,
     });
   }
 
@@ -1590,7 +1590,8 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
   it("keeps a root that handled child failures successful, counting every delivered failure and warning in both channels", async () => {
     const { modelRegistry, registration } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
     registration.setResponses([failOrPass, failOrPass, failOrPass]);
-    const result = await makeWorkflowTool().execute("call-handled", {
+    const usageKeys = new Set<string>();
+    const result = await makeWorkflowTool(undefined, undefined, (_ctx, key) => usageKeys.add(key)).execute("call-handled", {
       script: `export const meta = { apiVersion: 1, name: "handled", description: "handles failures" };
         let caught = 0;
         try { await agent("FAIL_PROBE", { role: "worker", harness: "pi-deepseek" }); } catch { caught++; }
@@ -1607,6 +1608,10 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
         output: { delivery: "inline", value: { caught: 2, ok: "passed" } }, evidence: { integrity: "complete" } } },
     });
     expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("handled 2 failed agent() call(s)") });
+    // Nested usage is counted once: each launched child reports under its own key, replaced rather than summed;
+    // the root never reports, and receipts carry no usage of their own.
+    expect([...usageKeys].sort()).toEqual(["call-handled:agent:1", "call-handled:agent:2"]);
+    expect(JSON.stringify(result.structuredContent)).not.toMatch(/usage|cost/i);
     const journal = await loadWorkflowJournal(dirname(result.details.journalPath!), result.details.runId!);
     expect(journal).toMatchObject({ childFailures: 2, integrity: "complete" });
   });
