@@ -227,12 +227,12 @@ Every failure in a resumed run is therefore a fresh run of that child in this at
 
 **wait**: `data: {mode, completed: PublicRun[], pending: string[]}`.
 - **Preserved:** request order, deduplication, the early return for an unsuccessful workflow, the rule that wait never cancels pending work, and legacy `content` and `details.outcomes`. `renderWaitResult` and `scripts/e2e/external.mjs` read the last two.
-- **One budget, one decision.** `completed[i].output.value` is inline only when all three of these hold:
+- **One budget per channel, both spent in request order.** `completed[i].output.value` is inline only when all three of these hold:
   1. the canonical terminal value is **in memory** (registry `outcome.result`);
   2. that entry's legacy `result` text was **not truncated** by the existing shared budget;
-  3. its redacted JSON is ≤16 KiB.
+  3. its redacted JSON fits both 16 KiB and what remains of the structured channel's own copy of `limitBytes`, which each inlined value spends.
 
-  Otherwise delivery is `reference`, with `refs.final`.
+  Otherwise delivery is `reference`, with `refs.final`. Text and JSON sizes differ (escaping can double a string), so the text decision alone cannot keep #77's "fits the remaining shared budget" promise. This mirrors batch inspect, where each channel stays within `limitBytes`.
 - **No new disk reads.** Durable targets are always delivered by reference, and the no-evidence-read rule after the budget is exhausted is unchanged.
 - The structured value never contains output-view narration. That resolves B5 for machine callers; the legacy text keeps narration, which is useful for failures.
 
@@ -524,3 +524,5 @@ Versions: `3.1.1-external.0`, `3.2.0-external.0`, `3.3.0-external.0`, `3.4.0-ext
 | Unreadable journals | `WorkflowJournalReadError` is an `ExpectedFlowError` (`run_unavailable`) carrying `integrity` and, when readable, `project`; another project's unreadable journal reads as unknown | Codes at source, no cross-project disclosure |
 | Batch cursor from another session | `cursor_invalid`, "Cursor belongs to a different session or project" | It is a cursor fault; the message reveals nothing about runs |
 | `/external runs` failures | Coded `RunsActionError`; stale recovery by code; other failures notify and keep the navigator open | §2.4 |
+| Wait inline rule (review of #82) | The structured channel spends its own copy of `limitBytes` in request order | #77 requires inline values to fit the remaining shared budget; escaped JSON can exceed the text size |
+| Agent final view (review of #82) | A settled successful registry result is served as `final` from memory, redacted before paging | A promised `refs.final` must resolve even when evidence was never persisted |

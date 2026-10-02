@@ -16,7 +16,8 @@ All notable changes to pi-flow external are documented here.
   | `wait` | `{mode, completed, pending}` |
   | `cancel` | `{runId, status}` |
 
-  Every row is one `PublicRun` shape, with evidence integrity and callable `refs`.
+  Every row is one `PublicRun` shape, with evidence integrity and callable `refs`. In `wait`, a structured value is inline only when it is in memory, its text result was delivered whole, and its encoded JSON fits both 16 KiB and what remains of the structured channel's own copy of `limitBytes`, spent in request order. Otherwise it is delivered by reference.
+- An agent's `final` view now serves a settled successful result still held in the registry, so a `refs.final` reference resolves even when the run's evidence was never saved.
 - Workflow receipts. A foreground root that failed, was cancelled or timed out is `ok: false` and keeps its run. A background launch is `ok: true` once accepted. A root that succeeded after catching child failures stays `ok: true`, reports `run.children.failed`, and adds the warning `handled_child_failures` and a sentence in its text result. Failures are counted where the script receives them, including calls that fail before a child is indexed; always-fatal failures are excluded. Journals record the count (`childFailures`) and report integrity: a torn last line is `incomplete`, a bad line mid-file is `damaged`.
 - New error codes: `request_invalid`, `run_unavailable`, `run_not_live`, `cursor_invalid`, `cursor_stale`, `page_too_small`, `session_unavailable`, `script_invalid`, `storage_unavailable`.
 

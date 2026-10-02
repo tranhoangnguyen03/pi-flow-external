@@ -250,6 +250,25 @@ describe("external_runs", () => {
     expect(completed[1].output).not.toHaveProperty("value");
   });
 
+  it("inlines a structured wait value only when its encoded JSON fits what remains of limitBytes, spent in request order", async () => {
+    const { execute, registry } = setup();
+    const results: Record<string, string> = { run_newlines: "\n".repeat(4000), run_escaped: "\n".repeat(1500), run_plain: "b".repeat(2000) };
+    for (const [runId, value] of Object.entries(results)) await registry.start({ runId, kind: "agent", sessionId: "session-a", project: "/project", run: async () => value }).result;
+
+    // 4,000 legacy bytes fit, but the escaped JSON is 8,002 bytes: reference only.
+    const single = await execute({ action: "wait", runIds: ["run_newlines"], limitBytes: 4096 });
+    expect(single.details.outcomes[0]).toMatchObject({ resultTruncated: false });
+    expect(single.structuredContent.data.completed[0].output).toMatchObject({ delivery: "reference" });
+    expect(single.structuredContent.data.completed[0].output).not.toHaveProperty("value");
+
+    // Both legacy results fit (3,500 bytes); the first inline value spends 3,002 structured bytes, leaving too little for the second.
+    const pair = await execute({ action: "wait", runIds: ["run_escaped", "run_plain"], limitBytes: 4096 });
+    expect(pair.details.outcomes.map((outcome: any) => outcome.resultTruncated)).toEqual([false, false]);
+    expect(pair.structuredContent.data.completed.map((run: any) => run.output.delivery)).toEqual(["inline", "reference"]);
+    const inlined = pair.structuredContent.data.completed.filter((run: any) => run.output.delivery === "inline");
+    expect(inlined.reduce((bytes: number, run: any) => bytes + Buffer.byteLength(JSON.stringify(run.output.value)), 0)).toBeLessThanOrEqual(4096);
+  });
+
   it("preserves falsy canonical values, delivers durable and oversized values by reference, and redacts memory values before slicing", async () => {
     const { execute, registry, runsDirectory } = setup();
     const values: unknown[] = [null, false, 0, ""];

@@ -603,9 +603,13 @@ async function collectOutcome(outcome: RegisteredRunOutcome, runsDirectory: stri
   return { entry: { ...base, result: page.text, resultTruncated: page.nextOffset !== undefined }, spent: Buffer.byteLength(page.text) };
 }
 
+function waitBudget(limitBytes: number | undefined): number {
+  return Math.max(4, Math.min(65536, limitBytes ?? DEFAULT_WAIT_RESULT_BUDGET));
+}
+
 /** Spends one shared byte budget across every settled outcome, in the caller's requested order (see `collectOutcome`). */
 async function collectOutcomes(outcomes: RegisteredRunOutcome[], runsDirectory: string, limitBytes: number | undefined): Promise<Record<string, unknown>[]> {
-  let remaining = Math.max(4, Math.min(65536, limitBytes ?? DEFAULT_WAIT_RESULT_BUDGET));
+  let remaining = waitBudget(limitBytes);
   const projected: Record<string, unknown>[] = [];
   for (const outcome of outcomes) {
     const { entry, spent } = await collectOutcome(outcome, runsDirectory, remaining);
@@ -1152,15 +1156,20 @@ export function createExternalRunsTool(
       const projected = await collectOutcomes(settled.map(({ outcome }) => outcome), runsDirectory, params.limitBytes);
       const finalPending = pending.map((target) => target.runId);
       const warnings = new Set<string>();
-      // One budget, one decision: a structured value is inline only when it is
-      // in memory, its legacy text was delivered whole, and it fits the inline
-      // cap; otherwise it is delivered by reference. No extra evidence read.
+      // A structured value is inline only when it is in memory, its legacy
+      // text was delivered whole, and its encoded JSON fits both the inline
+      // cap and what remains of the structured channel's own copy of
+      // limitBytes, spent in the same request order. Otherwise it is
+      // delivered by reference. No extra evidence read.
+      let structuredRemaining = waitBudget(params.limitBytes);
       const completed = settled.map(({ target, outcome }, index) => {
         if (target.durable) return target.durable;
         const legacy = projected[index]!;
-        const inlineBudget = outcome.result !== undefined && legacy.result !== undefined && legacy.resultTruncated !== true ? INLINE_RESULT_BYTES : 0;
+        const eligible = outcome.result !== undefined && legacy.result !== undefined && legacy.resultTruncated !== true;
+        const inlineBudget = eligible ? Math.min(INLINE_RESULT_BYTES, structuredRemaining) : 0;
         const current = options.registry.get(target.runId) ?? { ...target.entry!, state: "terminal" as const, outcome };
         const built = current.kind === "workflow" ? liveWorkflowRun(current, { inlineBudget }) : liveAgentRun(current, { inlineBudget });
+        if (built.run.output.delivery === "inline") structuredRemaining -= Buffer.byteLength(JSON.stringify(built.run.output.value), "utf8");
         if (built.redacted) warnings.add("output_redacted");
         return built.run;
       });
