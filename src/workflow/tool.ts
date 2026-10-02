@@ -18,7 +18,8 @@ import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { createRunRecord } from "../core/run-record.ts";
 import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
-import { RunRegistry } from "../core/run-registry.ts";
+import { RunRegistry, type RegisteredRunHandle } from "../core/run-registry.ts";
+import { ExpectedFlowError } from "../core/errors.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
 import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownExternalProfileMessage } from "../profiles.ts";
 import { resolveExecutionProfile } from '../execution-config.ts';
@@ -585,23 +586,33 @@ export function createWorkflowTool(
       }
       };
 
-      const registered = options.registry.start({
-        runId: identity.runId,
-        kind: "workflow",
-        sessionId,
-        sessionVersion,
-        project,
-        ...(background ? {} : { signal }),
-        run: executeWorkflow,
-        outcome: (result, workflowSignal) => ({
-          status: result.details.status === "completed" ? "done" : result.details.status === "aborted" ? "aborted" : "error",
-          outcome: result.details.outcome ?? (result.details.status === "completed" ? "succeeded" : result.details.status === "aborted" ? "cancelled" : "failed"),
-          ...(result.details.result !== undefined ? { result: result.details.result } : {}),
-          ...(workflowSignal.aborted && workflowSignal.reason !== undefined
-            ? { error: workflowSignal.reason instanceof Error ? workflowSignal.reason.message : String(workflowSignal.reason) }
-            : result.details.error ? { error: result.details.error } : {}),
-        }),
-      });
+      let registered: RegisteredRunHandle<ReturnType<typeof workflowResult>>;
+      try {
+        registered = options.registry.start({
+          runId: identity.runId,
+          kind: "workflow",
+          sessionId,
+          sessionVersion,
+          project,
+          ...(background ? {} : { signal }),
+          run: executeWorkflow,
+          outcome: (result, workflowSignal) => ({
+            status: result.details.status === "completed" ? "done" : result.details.status === "aborted" ? "aborted" : "error",
+            outcome: result.details.outcome ?? (result.details.status === "completed" ? "succeeded" : result.details.status === "aborted" ? "cancelled" : "failed"),
+            ...(result.details.result !== undefined ? { result: result.details.result } : {}),
+            ...(workflowSignal.aborted && workflowSignal.reason !== undefined
+              ? { error: workflowSignal.reason instanceof Error ? workflowSignal.reason.message : String(workflowSignal.reason) }
+              : result.details.error ? { error: result.details.error } : {}),
+          }),
+        });
+      } catch (error) {
+        // The run_start journal line is already written; settle it so the
+        // never-started run does not read as interrupted forever.
+        const message = error instanceof Error ? error.message : String(error);
+        await journalWriter?.fail(message).catch(() => undefined);
+        if (!(error instanceof ExpectedFlowError)) throw error;
+        return workflowError(`Workflow "${metaName}" was not started: ${message}`, { name: metaName, error: message, status: "error", outcome: "failed", runId: identity.runId, journalPath: journalWriter?.path });
+      }
       emit();
       if (!background) return await registered.result;
       return workflowResult(

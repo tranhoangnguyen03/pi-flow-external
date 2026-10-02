@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { SessionManager, Theme, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { captureParentContext } from "../src/core/parent-context.ts";
 import { describe, expect, it, vi } from "vitest";
@@ -1097,7 +1097,7 @@ describe("saved workflow registry", () => {
     }
   });
 
-  it("rejects replay journals from another normalized project", async () => {
+  it("rejects replay journals from another normalized project exactly like an unknown run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
     try {
       const sessionFile = join(dir, "session.jsonl");
@@ -1118,7 +1118,9 @@ describe("saved workflow registry", () => {
       const prepared = await prepareWorkflowToolSource({ scriptPath, resumeFromRunId: identity.runId }, ctx);
 
       expect(prepared.ok).toBe(false);
-      expect(prepared.ok ? "" : prepared.details.error).toMatch(/different project.*no children were launched/i);
+      const unknown = await prepareWorkflowToolSource({ scriptPath, resumeFromRunId: "wf_unknown" }, ctx);
+      expect(prepared.ok ? "" : prepared.details.error).toBe(`Cannot resume workflow: run journal not found for ${identity.runId}.`);
+      expect(unknown.ok ? "" : unknown.details.error).toBe("Cannot resume workflow: run journal not found for wf_unknown.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1322,6 +1324,23 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     expect(childEvidence.applied.tools).toContain("read");
     expect(childEvidence.applied.thinkingApplied).toBeDefined();
     expect(childEvidence.applied.systemPrompt).toContain("You are a custom reviewer.");
+  });
+
+  it("settles the already-written journal and returns an error when the session closed before the workflow could register", async () => {
+    const { modelRegistry } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
+    const registry = new RunRegistry();
+    await registry.shutdownSession("session-closed");
+    const sessionManager = { isPersisted: () => true, getSessionFile: () => join(cwd, "session.jsonl"), getSessionId: () => "session-closed", getBranch: () => [] };
+    const ctx = { cwd, modelRegistry, sessionManager, isProjectTrusted: () => true } as unknown as ExtensionToolContext;
+
+    const result = await makeWorkflowTool(registry).execute("call-closed", {
+      script: `export const meta = { apiVersion: 1, name: "closed", description: "never starts" };\nreturn await agent("task", { role: "worker" });`,
+    }, undefined, undefined, ctx);
+
+    expect(result.details).toMatchObject({ status: "error", outcome: "failed", error: expect.stringMatching(/session .* is closed/i) });
+    const { loadWorkflowJournal } = await import("../src/workflow/journal.ts");
+    const journal = await loadWorkflowJournal(dirname(result.details.journalPath!), result.details.runId!);
+    expect(journal).toMatchObject({ status: "error", outcome: "failed" });
   });
 
   it("keeps a workflow child's queued state and queuedAt visible in the registry before its concurrency slot is granted", async () => {
