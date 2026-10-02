@@ -400,6 +400,36 @@ describe("external_runs", () => {
     await expect(liveWorkflow.result).rejects.toThrow("stopped");
   });
 
+  it("counts live runs with no persisted row against the list limit, paging them before persisted rows", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const handles = ["run_unpersisted_a", "run_unpersisted_b", "wf_unpersisted_a", "wf_unpersisted_b"].map((runId) =>
+      registry.start({ runId, kind: runId.startsWith("wf_") ? "workflow" : "agent", sessionId: "session-a", project: "/project", run: hold }));
+    const durable = await completedRecord(runsDirectory);
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const journal = await createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity("persisted", null), name: "persisted", source: "inline", project: "/project" });
+    await journal.complete("ok");
+
+    const seenRuns: string[] = [];
+    const seenWorkflows: string[] = [];
+    let cursor: string | undefined;
+    let workflowCursor: string | undefined;
+    for (let pages = 0; pages < 3; pages++) {
+      const listed = await execute({ action: "list", limit: 1, ...(cursor ? { cursor } : {}), ...(workflowCursor ? { workflowCursor } : {}) });
+      expect(listed.details.runs.length).toBeLessThanOrEqual(1);
+      expect(listed.details.workflows.length).toBeLessThanOrEqual(1);
+      seenRuns.push(...listed.details.runs.map((run: any) => run.runId));
+      seenWorkflows.push(...listed.details.workflows.map((workflow: any) => workflow.runId));
+      cursor = listed.details.nextCursor;
+      workflowCursor = listed.details.nextWorkflowCursor;
+    }
+    expect(seenRuns).toEqual(["run_unpersisted_a", "run_unpersisted_b", durable.runId]);
+    expect(seenWorkflows).toEqual(["wf_unpersisted_a", "wf_unpersisted_b", journal.runId]);
+
+    for (const runId of ["run_unpersisted_a", "run_unpersisted_b", "wf_unpersisted_a", "wf_unpersisted_b"]) registry.cancel(runId);
+    await Promise.all(handles.map((handle) => expect(handle.result).rejects.toThrow("stopped")));
+  });
+
   it("lists an unreadable workflow journal as one uncertain row instead of failing the whole listing", async () => {
     const { execute, runsDirectory } = setup();
     const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
