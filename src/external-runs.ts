@@ -12,7 +12,7 @@ import { renderOutputText } from "./core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
 import { EXTERNAL_RUNS_PROMPT_SNIPPET } from "./prompts.ts";
 import type { WorkflowToolDetails } from "./types.ts";
-import { getSessionWorkflowDir, listWorkflowJournals, loadWorkflowJournal, type LoadedWorkflowJournal } from "./workflow/journal.ts";
+import { getSessionWorkflowDir, listWorkflowJournals, loadWorkflowJournal, WorkflowJournalReadError, type LoadedWorkflowJournal, type UnreadableWorkflowJournal } from "./workflow/journal.ts";
 
 const RUN_ID = /^(?:run|wf)_[A-Za-z0-9_-]{1,128}$/;
 const WORKFLOW_ID = /^wf_[A-Za-z0-9_-]{1,128}$/;
@@ -217,6 +217,36 @@ function journalSummary(journal: LoadedWorkflowJournal, allChildren = false) {
       status: journal.status === "running" && child.status === "queued" ? "interrupted_or_uncertain" : child.status,
     })),
   };
+}
+
+/** A listed journal that could not be loaded: one uncertain row instead of a failed listing. */
+function unreadableJournalSummary(journal: UnreadableWorkflowJournal) {
+  return {
+    ...projectWorkflowRun({
+      runId: journal.runId,
+      live: false,
+      status: "interrupted_or_uncertain",
+      error: clip(journal.unreadable),
+      resultAvailable: false,
+      finalAvailable: false,
+    }),
+    children: [],
+  };
+}
+
+/** Mirrors the listing's own inclusion rule, so a journal is counted persisted exactly when some page lists it. */
+async function hasWorkflowJournal(dir: string, runId: string, project: string): Promise<boolean> {
+  try {
+    return (await loadWorkflowJournal(dir, runId))?.project === project;
+  } catch (error) {
+    const owner = error instanceof WorkflowJournalReadError ? error.project : undefined;
+    return owner === undefined || owner === project;
+  }
+}
+
+async function filterAsync<T>(items: T[], predicate: (item: T) => Promise<boolean>): Promise<T[]> {
+  const keep = await Promise.all(items.map(predicate));
+  return items.filter((_, index) => keep[index]);
 }
 
 function projectionRevision(text: string): string {
@@ -699,16 +729,35 @@ export function createExternalRunsTool(
         const historical = !params.workflowRunId && workflowDir
           ? await listWorkflowJournals(workflowDir, project, params.limit, params.workflowCursor)
           : { items: [] };
-        const current = params.cursor || params.workflowCursor || params.workflowRunId
-          ? []
-          : options.registry.list(sessionId, project).filter((entry) => entry.kind === "workflow").map((entry) => liveSummary(entry));
-        const currentIds = new Set(current.map((entry) => entry.runId));
-        const workflows = [...current, ...historical.items.filter((journal) => !currentIds.has(journal.runId)).map((journal) => journalSummary(journal))];
-        const liveAgents = params.cursor || params.workflowCursor ? [] : options.registry.list(sessionId, project)
-          .filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId))
-          .map(listedAgent);
-        const liveIds = new Set(liveAgents.map((entry) => entry.runId));
-        const runs = [...liveAgents, ...page.items.filter((entry) => !liveIds.has(entry.runId)).map(historicalAgent)];
+        // Live state overlays its persisted row on whichever page that row
+        // falls, so a live run is never shown as interrupted or listed twice;
+        // the first page additionally lists live runs with no persisted row yet.
+        const registered = new Map(options.registry.list(sessionId, project).map((entry) => [entry.runId, entry]));
+        const liveWorkflows = !params.workflowCursor && !params.workflowRunId ? [...registered.values()].filter((entry) => entry.kind === "workflow") : [];
+        const unpersistedWorkflows = await filterAsync(liveWorkflows, async (entry) => !workflowDir || !await hasWorkflowJournal(workflowDir, entry.runId, project));
+        const workflows = [
+          ...unpersistedWorkflows.map((entry) => liveSummary(entry)),
+          ...historical.items.map((journal) => {
+            const live = registered.get(journal.runId);
+            if (live?.kind === "workflow") return liveSummary(live);
+            return "unreadable" in journal ? unreadableJournalSummary(journal) : journalSummary(journal);
+          }),
+        ];
+        const liveAgents = !params.cursor && !params.workflowCursor
+          ? [...registered.values()].filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId))
+          : [];
+        const unpersistedAgents = await filterAsync(liveAgents, async (entry) => {
+          const persisted = await getRunRecord(runsDirectory, entry.runId);
+          return !persisted || persisted.parentSessionId !== sessionId || persisted.project !== project
+            || (params.workflowRunId !== undefined && persisted.workflowRunId !== params.workflowRunId);
+        });
+        const runs = [
+          ...unpersistedAgents.map(listedAgent),
+          ...page.items.map((item) => {
+            const live = registered.get(item.runId);
+            return live?.kind === "agent" ? listedAgent(live) : historicalAgent(item);
+          }),
+        ];
         const list = { workflows, runs, nextCursor: page.nextCursor, nextWorkflowCursor: historical.nextCursor };
         return result(JSON.stringify(list), list);
       }

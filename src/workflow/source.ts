@@ -6,6 +6,7 @@ import {
   createWorkflowJournalWriter,
   createWorkflowRunIdentity,
   getSessionWorkflowDir,
+  WorkflowJournalReadError,
   loadWorkflowJournal,
   persistWorkflowScript,
   type WorkflowJournalWriter,
@@ -270,33 +271,24 @@ export async function prepareWorkflowToolSource(
     try {
       journal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromRunId);
     } catch (error) {
-      const message = `Cannot resume workflow: ${error instanceof Error ? error.message : String(error)}`;
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
-      });
+      // Another project's unreadable journal is reported exactly like a missing one.
+      if (!(error instanceof WorkflowJournalReadError) || error.project === undefined || error.project === project) {
+        const message = `Cannot resume workflow: ${error instanceof Error ? error.message : String(error)}`;
+        return sourceError(message, {
+          name: metaName,
+          error: message,
+          logs: source.warnings,
+          source: source.source,
+          sourcePath: source.sourcePath,
+          scriptPath,
+          runId: identity.runId,
+          resumeFromRunId,
+        });
+      }
     }
-    if (!journal) {
+    // Another project's run is indistinguishable from an unknown one.
+    if (!journal || journal.project !== project) {
       const message = `Cannot resume workflow: run journal not found for ${resumeFromRunId}.`;
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
-      });
-    }
-    if (journal.project !== project) {
-      const message = `Cannot resume workflow: ${resumeFromRunId} belongs to a different project. No children were launched.`;
       return sourceError(message, {
         name: metaName,
         error: message,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -367,6 +367,55 @@ describe("external_runs", () => {
     registry.cancel("run_workflow_child");
     await expect(live.result).rejects.toThrow("stopped");
     await expect(workflowChild.result).rejects.toThrow("stopped");
+  });
+
+  it("overlays live state onto a persisted row on whichever list page it falls, never repeating it on the first page or reporting it interrupted", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const records = [
+      createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Lost owner" } }),
+      createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Still running" } }),
+    ];
+    for (const record of records) await record.event("queued");
+    // Run IDs list in descending order, so the smaller ID lands on page 2.
+    const [ownerless, liveId] = records.map((record) => record.runId).sort().reverse();
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const liveAgent = registry.start({ runId: liveId!, kind: "agent", sessionId: "session-a", project: "/project", run: hold });
+    registry.update(liveId!, { status: "running", description: "Still running", activity: [], activityCount: 0 });
+
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const journals = await Promise.all(["one", "two"].map((name) => createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity(name, null), name, source: "inline", project: "/project" })));
+    const [ownerlessWorkflow, liveWorkflowId] = journals.map((journal) => journal.runId).sort().reverse();
+    const liveWorkflow = registry.start({ runId: liveWorkflowId!, kind: "workflow", sessionId: "session-a", project: "/project", run: hold });
+
+    const first = await execute({ action: "list", limit: 1 });
+    expect(first.details.runs.map((run: any) => [run.runId, run.status])).toEqual([[ownerless, "interrupted_or_uncertain"]]);
+    expect(first.details.workflows.map((workflow: any) => [workflow.runId, workflow.state.status])).toEqual([[ownerlessWorkflow, "interrupted_or_uncertain"]]);
+    const second = await execute({ action: "list", limit: 1, cursor: first.details.nextCursor, workflowCursor: first.details.nextWorkflowCursor });
+    expect(second.details.runs.map((run: any) => [run.runId, run.status, run.live])).toEqual([[liveId, "running", true]]);
+    expect(second.details.workflows.map((workflow: any) => [workflow.runId, workflow.state.status, workflow.live])).toEqual([[liveWorkflowId, "running", true]]);
+
+    registry.cancel(liveId!);
+    registry.cancel(liveWorkflowId!);
+    await expect(liveAgent.result).rejects.toThrow("stopped");
+    await expect(liveWorkflow.result).rejects.toThrow("stopped");
+  });
+
+  it("lists an unreadable workflow journal as one uncertain row instead of failing the whole listing", async () => {
+    const { execute, runsDirectory } = setup();
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const good = await createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity("good", null), name: "good", source: "inline", project: "/project" });
+    await good.complete("ok");
+    writeFileSync(join(dir, "run-wf_incompatible.jsonl"), `${JSON.stringify({ type: "run_start", version: 99, apiVersion: 1, runId: "wf_incompatible", project: "/project" })}\n`);
+    writeFileSync(join(dir, "run-wf_corrupt.jsonl"), "{not json\n");
+    writeFileSync(join(dir, "run-wf_elsewhere.jsonl"), `${JSON.stringify({ type: "run_start", version: 99, apiVersion: 1, runId: "wf_elsewhere", project: "/other" })}\n`);
+
+    const listed = await execute({ action: "list" });
+    const rows = Object.fromEntries(listed.details.workflows.map((workflow: any) => [workflow.runId, workflow]));
+    expect(Object.keys(rows).sort()).toEqual([good.runId, "wf_corrupt", "wf_incompatible"].sort());
+    expect(rows[good.runId].state.status).toBe("done");
+    for (const runId of ["wf_corrupt", "wf_incompatible"]) {
+      expect(rows[runId]).toMatchObject({ live: false, state: { status: "interrupted_or_uncertain", error: expect.any(String) }, output: { available: false, finalAvailable: false } });
+    }
   });
 
   it("rejects stale live projection cursors after registry eviction", async () => {
