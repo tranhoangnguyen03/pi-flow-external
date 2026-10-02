@@ -1086,7 +1086,14 @@ async function runsText(pi: ExtensionAPI): Promise<string> {
 }
 
 type JsonObject = Record<string, unknown>;
-type ExternalRunsResult = { content: Array<{ type: string; text?: string }>; details: JsonObject };
+type ExternalRunsResult = { content: Array<{ type: string; text?: string }>; details: JsonObject; structuredContent: JsonObject; isError?: boolean };
+
+/** A returned external_runs failure, raised with its code so callers recover by code, never by message. */
+class RunsActionError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
 
 function object(value: unknown): JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -1096,49 +1103,68 @@ function pageText(value: ExternalRunsResult): string {
   return value.content.flatMap((item) => item.type === "text" && typeof item.text === "string" ? [item.text] : []).join("\n");
 }
 
-async function runAction(options: ExternalCommandOptions, params: ExternalRunsParams, ctx: ExtensionCommandContext): Promise<ExternalRunsResult> {
-  return await options.externalRuns.execute("external-command", params, undefined, undefined, ctx) as ExternalRunsResult;
+/** Reads the same public contract a script reads; a returned failure becomes a coded RunsActionError. */
+async function runAction(options: ExternalCommandOptions, params: ExternalRunsParams, ctx: ExtensionCommandContext): Promise<JsonObject> {
+  const result = await options.externalRuns.execute("external-command", params, undefined, undefined, ctx) as ExternalRunsResult;
+  const contract = object(result.structuredContent);
+  if (contract.ok !== true) {
+    const error = object(contract.error);
+    throw new RunsActionError(String(error.code ?? "failed"), String(error.message ?? pageText(result)));
+  }
+  return object(contract.data);
 }
 
-async function readSummary(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<JsonObject> {
+function isStale(error: unknown): boolean {
+  return error instanceof RunsActionError && error.code === "cursor_stale";
+}
+
+/** Concatenates one cursor sequence of summary pages; a stale cursor restarts once from page 1. */
+async function readSummary(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext, restarted = false): Promise<JsonObject> {
   let text = "";
   let cursor: string | undefined;
   const seen = new Set<string>();
-  do {
-    const page = await runAction(options, { action: "inspect", runId, view: "summary", ...(cursor ? { cursor } : {}) }, ctx);
-    text += pageText(page);
-    cursor = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
-    if (cursor && seen.has(cursor)) throw new Error("Run inspection returned a repeated cursor");
-    if (cursor) seen.add(cursor);
-  } while (cursor);
+  try {
+    do {
+      const page = object((await runAction(options, { action: "inspect", runId, view: "summary", ...(cursor ? { cursor } : {}) }, ctx)).page);
+      text += typeof page.text === "string" ? page.text : "";
+      cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
+      if (cursor && seen.has(cursor)) throw new Error("Run inspection returned a repeated cursor");
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+  } catch (error) {
+    if (!restarted && cursor && isStale(error)) return readSummary(options, runId, ctx, true);
+    throw error;
+  }
   return object(JSON.parse(text));
 }
 
 async function showPages(options: ExternalCommandOptions, runId: string, view: "output" | "diagnostics" | "final" | "launch", ctx: ExtensionCommandContext): Promise<void> {
   let cursor: string | undefined;
   do {
-    let page: ExternalRunsResult;
+    let data: JsonObject;
     try {
-      page = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
+      data = await runAction(options, { action: "inspect", runId, view, ...(cursor ? { cursor } : {}) }, ctx);
     } catch (error) {
-      if (!cursor || !(error instanceof Error) || !error.message.includes("Run changed while paging")) throw error;
+      if (!cursor || !isStale(error)) throw error;
       ctx.ui.notify("Run changed while reading. Reopening the latest snapshot from page 1.", "info");
       cursor = undefined;
-      page = await runAction(options, { action: "inspect", runId, view }, ctx);
+      data = await runAction(options, { action: "inspect", runId, view }, ctx);
     }
     // The tool's `final` projection is deliberately a clean, narration-free
     // canonical-answer surface: unavailable is a bounded EMPTY page with
     // finalAvailable:false (true for both an agent run and a workflow — see
-    // src/external-runs.ts), not a synthesized sentence in the response
-    // text. Turning that into a human-readable notice belongs here, at the
-    // UI boundary, for both run kinds alike — otherwise this would open an
+    // src/external-runs.ts), not a synthesized sentence in the page text.
+    // Turning that into a human-readable notice belongs here, at the UI
+    // boundary, for both run kinds alike — otherwise this would open an
     // editor with nothing informative in it.
-    if (view === "final" && page.details.finalAvailable !== true) {
+    if (view === "final" && data.finalAvailable !== true) {
       ctx.ui.notify(`No verified final answer is available yet for ${runId}.`, "info");
       return;
     }
-    await ctx.ui.editor(`${view} ${runId}`, pageText(page));
-    const next = typeof page.details.nextCursor === "string" ? page.details.nextCursor : undefined;
+    const page = object(data.page);
+    const text = typeof page.text === "string" ? page.text : "";
+    await ctx.ui.editor(`${view} ${runId}`, text || `No ${view} is available for ${runId}.`);
+    const next = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
     if (!next || await ctx.ui.select(`${view} ${runId}`, ["Next page", "Back"]) !== "Next page") return;
     cursor = next;
   } while (cursor);
@@ -1163,7 +1189,14 @@ function formatSummaryHeader(summary: JsonObject): string {
 }
 
 async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: ExtensionCommandContext): Promise<void> {
-  const summary = await readSummary(options, runId, ctx);
+  let summary: JsonObject;
+  try {
+    summary = await readSummary(options, runId, ctx);
+  } catch (error) {
+    if (!(error instanceof RunsActionError)) throw error;
+    ctx.ui.notify(`Could not inspect ${runId}: ${error.message}`, "warning");
+    return;
+  }
   const observedAt = new Date().toISOString();
   const children = Array.isArray(summary.children) ? summary.children.map(object).filter((child) => typeof child.runId === "string") : [];
   const state = object(summary.state);
@@ -1174,11 +1207,22 @@ async function navigateRun(options: ExternalCommandOptions, runId: string, ctx: 
     if (!choice || choice === "Back") return;
     if (choice === "Refresh") return navigateRun(options, runId, ctx);
     if (choice === "Summary") await ctx.ui.editor(`summary ${runId}`, `Snapshot ${observedAt} · Refresh for current state\n${formatSummaryHeader(summary)}\n\n${JSON.stringify(summary, null, 2)}`);
-    else if (choice === "Launch" || choice === "Output" || choice === "Final" || choice === "Diagnostics") await showPages(options, runId, choice.toLowerCase() as "output" | "final" | "diagnostics" | "launch", ctx);
-    else if (choice === "Cancel run") {
+    else if (choice === "Launch" || choice === "Output" || choice === "Final" || choice === "Diagnostics") {
+      try {
+        await showPages(options, runId, choice.toLowerCase() as "output" | "final" | "diagnostics" | "launch", ctx);
+      } catch (error) {
+        if (!(error instanceof RunsActionError)) throw error;
+        ctx.ui.notify(`Could not read ${choice.toLowerCase()} for ${runId}: ${error.message}`, "warning");
+      }
+    } else if (choice === "Cancel run") {
       if (await ctx.ui.confirm("Cancel external run?", `${runId}\n\nStopping execution does not roll back side effects.`)) {
-        const result = await runAction(options, { action: "cancel", runId, reason: "cancelled from /external runs" }, ctx);
-        ctx.ui.notify(pageText(result), "info");
+        try {
+          const result = await runAction(options, { action: "cancel", runId, reason: "cancelled from /external runs" }, ctx);
+          ctx.ui.notify(result.status === "requested" ? `Cancellation requested for ${runId}.` : `${runId} is already terminal.`, "info");
+        } catch (error) {
+          if (!(error instanceof RunsActionError)) throw error;
+          ctx.ui.notify(`Could not cancel ${runId}: ${error.message}`, "warning");
+        }
       }
       return;
     } else {
@@ -1195,13 +1239,12 @@ async function navigateRuns(options: ExternalCommandOptions, ctx: ExtensionComma
   let nextRunCursor: string | undefined;
   let nextWorkflowCursor: string | undefined;
   while (true) {
-    const page = await runAction(options, {
+    const details = await runAction(options, {
       action: "list",
       limit: 50,
       ...(pageKind === "runs" && cursor ? { cursor } : {}),
       ...(pageKind === "workflows" && workflowCursor ? { workflowCursor } : {}),
     }, ctx);
-    const details = object(page.details);
     const entries = [
       ...(pageKind !== "runs" && Array.isArray(details.workflows) ? details.workflows.map((item: unknown) => ({ kind: "Workflow" as const, item: object(item) })) : []),
       ...(pageKind !== "workflows" && Array.isArray(details.runs) ? details.runs.map((item: unknown) => ({ kind: "Run" as const, item: object(item) })) : []),

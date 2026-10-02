@@ -6,7 +6,19 @@ import * as runInspection from "../src/core/run-inspection.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
+import { externalRunsOutputSchema } from "../src/contract/runs.ts";
+import { Value } from "typebox/value";
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, getSessionWorkflowDir } from "../src/workflow/journal.ts";
+
+/** An expected failure is returned, not thrown: typed code, readable message, and a schema-valid envelope. */
+async function expectFailure(pending: Promise<any>, code: string, message: RegExp): Promise<void> {
+  const failure = await pending;
+  expect(failure.isError).toBe(true);
+  expect(Value.Check(externalRunsOutputSchema, failure.structuredContent)).toBe(true);
+  expect(failure.structuredContent).toMatchObject({ ok: false, data: null, error: { code } });
+  expect(failure.structuredContent.error.message).toMatch(message);
+  expect(failure.content[0].text).toMatch(message);
+}
 
 describe("external_runs", () => {
   const directories: string[] = [];
@@ -47,7 +59,7 @@ describe("external_runs", () => {
     const inspected = await execute({ action: "inspect", runId: owned.runId, view: "output", limitBytes: 4 });
     expect(inspected.content[0].text).toContain("answ");
     expect(inspected.details).toMatchObject({ runId: owned.runId, view: "output", nextCursor: expect.any(String) });
-    await expect(execute({ action: "inspect", runId: "../summary.json", view: "summary" })).rejects.toThrow(/run id/i);
+    await expectFailure(execute({ action: "inspect", runId: "../summary.json", view: "summary" }), "request_invalid", /run id/i);
 
     const finalView = await execute({ action: "inspect", runId: owned.runId, view: "final" });
     expect(finalView.details).toMatchObject({ finalAvailable: true, items: [{ text: "answer" }] });
@@ -85,17 +97,17 @@ describe("external_runs", () => {
     expect(batch.details.nextCursor).toBeUndefined();
 
     // A genuinely non-empty runId AND runIds together is a real conflict.
-    await expect(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] })).rejects.toThrow(/either runId or runIds/i);
+    await expectFailure(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] }), "request_invalid", /either runId or runIds/i);
     // Single-entry runIds inspect supports output/diagnostics/final views without forcing the caller to switch to runId.
     const singleOutput = await execute({ action: "inspect", runIds: [first.runId], view: "output" });
     expect(singleOutput.content[0].text).toBe("answer");
     expect(singleOutput.details).toMatchObject({ runId: first.runId, view: "output" });
     // Multi-entry batch inspect stays summary-only.
-    await expect(execute({ action: "inspect", runIds: [first.runId, second.runId], view: "output" })).rejects.toThrow(/summary/i);
+    await expectFailure(execute({ action: "inspect", runIds: [first.runId, second.runId], view: "output" }), "request_invalid", /summary/i);
     // Ownership is validated for every target before any page returns.
-    await expect(execute({ action: "inspect", runIds: [first.runId, "run_unowned"] })).rejects.toThrow(/unknown|unavailable/i);
-    await expect(execute({ action: "inspect", runIds: [] })).rejects.toThrow(/1-20/);
-    await expect(execute({ action: "inspect", runIds: Array.from({ length: 21 }, (_, index) => `run_${index}`) })).rejects.toThrow(/1-20/);
+    await expectFailure(execute({ action: "inspect", runIds: [first.runId, "run_unowned"] }), "run_unavailable", /unknown|unavailable/i);
+    await expectFailure(execute({ action: "inspect", runIds: [] }), "request_invalid", /1-20/);
+    await expectFailure(execute({ action: "inspect", runIds: Array.from({ length: 21 }, (_, index) => `run_${index}`) }), "request_invalid", /1-20/);
 
     finishThird("done");
   });
@@ -121,15 +133,15 @@ describe("external_runs", () => {
     expect(emptyRunIds.details).toMatchObject({ runId: owned.runId, view: "output" });
 
     // Never guess a cancellation target when both selectors are supplied.
-    await expect(execute({ action: "cancel", runId: owned.runId, runIds: [owned.runId] })).rejects.toThrow(/either runId or runIds/);
+    await expectFailure(execute({ action: "cancel", runId: owned.runId, runIds: [owned.runId] }), "request_invalid", /either runId or runIds/);
 
     // cancel accepts the unified runIds list selector (singleton) and rejects multi-target cancel.
     await expect(execute({ action: "cancel", runIds: [owned.runId] })).resolves.toMatchObject({ details: { status: "terminal" } });
-    await expect(execute({ action: "cancel", runIds: [owned.runId, "run_extra"] })).rejects.toThrow(/one run at a time/i);
+    await expectFailure(execute({ action: "cancel", runIds: [owned.runId, "run_extra"] }), "request_invalid", /one run at a time/i);
 
     // Both blank at once still surfaces the batch-empty error, since no
     // target was actually provided either way.
-    await expect(execute({ action: "inspect", runId: "", runIds: [] })).rejects.toThrow(/1-20/);
+    await expectFailure(execute({ action: "inspect", runId: "", runIds: [] }), "request_invalid", /1-20/);
   });
 
   it("paginates a small batch limitBytes one target at a time without dropping any target, bounding the FULL returned text (entries wrapper and nextCursor, not just entry sizes) including under multi-byte UTF-8, and fails actionably rather than overflowing or returning a non-advancing empty page when even one entry cannot fit", async () => {
@@ -168,8 +180,7 @@ describe("external_runs", () => {
     // Below the boundary: no entry fits even with the envelope. Must fail
     // actionably (naming the run and how to proceed) rather than silently
     // omitting the target or returning a zero-entry, non-advancing page.
-    await expect(execute({ action: "inspect", runIds, limitBytes: limitBytes - 1 }))
-      .rejects.toThrow(new RegExp(`${first.runId}.*limitBytes.*envelope.*increase limitBytes or inspect`, "i"));
+    await expectFailure(execute({ action: "inspect", runIds, limitBytes: limitBytes - 1 }), "page_too_small", new RegExp(`${first.runId}.*limitBytes.*envelope.*increase limitBytes or inspect`, "i"));
 
     // At and above the boundary: normal one-entry-per-page pagination, and
     // the ACTUAL serialized response text — not merely the entries array —
@@ -192,8 +203,7 @@ describe("external_runs", () => {
 
     // A cursor for a different target set is rejected rather than silently reused.
     const firstPage = await execute({ action: "inspect", runIds, limitBytes });
-    await expect(execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes, cursor: firstPage.details.nextCursor }))
-      .rejects.toThrow(/does not match the requested run ids/i);
+    await expectFailure(execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes, cursor: firstPage.details.nextCursor }), "cursor_invalid", /does not match the requested run ids/i);
   });
 
   it("waits for one/any/all outcomes, returns workflow failure early, and repeats terminal waits immediately", async () => {
@@ -233,6 +243,74 @@ describe("external_runs", () => {
       outputRef: { runId: "run_second", view: "output" },
       diagnosticsRef: { runId: "run_second", view: "diagnostics" },
     });
+    // The same single budget decides structured delivery: whole legacy text inlines, truncated text is reference-only.
+    const completed = (waited as any).structuredContent.data.completed;
+    expect(completed[0]).toMatchObject({ runId: "run_first", output: { delivery: "inline", value: "A".repeat(50) } });
+    expect(completed[1]).toMatchObject({ runId: "run_second", output: { delivery: "reference" }, refs: { final: { runIds: ["run_second"], view: "final" } } });
+    expect(completed[1].output).not.toHaveProperty("value");
+  });
+
+  it("inlines a structured wait value only when its encoded JSON fits what remains of limitBytes, spent in request order", async () => {
+    const { execute, registry } = setup();
+    const results: Record<string, string> = { run_newlines: "\n".repeat(4000), run_escaped: "\n".repeat(1500), run_plain: "b".repeat(2000) };
+    for (const [runId, value] of Object.entries(results)) await registry.start({ runId, kind: "agent", sessionId: "session-a", project: "/project", run: async () => value }).result;
+
+    // 4,000 legacy bytes fit, but the escaped JSON is 8,002 bytes: reference only.
+    const single = await execute({ action: "wait", runIds: ["run_newlines"], limitBytes: 4096 });
+    expect(single.details.outcomes[0]).toMatchObject({ resultTruncated: false });
+    expect(single.structuredContent.data.completed[0].output).toMatchObject({ delivery: "reference" });
+    expect(single.structuredContent.data.completed[0].output).not.toHaveProperty("value");
+
+    // Both legacy results fit (3,500 bytes); the first inline value spends 3,002 structured bytes, leaving too little for the second.
+    const pair = await execute({ action: "wait", runIds: ["run_escaped", "run_plain"], limitBytes: 4096 });
+    expect(pair.details.outcomes.map((outcome: any) => outcome.resultTruncated)).toEqual([false, false]);
+    expect(pair.structuredContent.data.completed.map((run: any) => run.output.delivery)).toEqual(["inline", "reference"]);
+    const inlined = pair.structuredContent.data.completed.filter((run: any) => run.output.delivery === "inline");
+    expect(inlined.reduce((bytes: number, run: any) => bytes + Buffer.byteLength(JSON.stringify(run.output.value)), 0)).toBeLessThanOrEqual(4096);
+  });
+
+  it("preserves falsy canonical values, delivers durable and oversized values by reference, and redacts memory values before slicing", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const values: unknown[] = [null, false, 0, ""];
+    for (const [index, value] of values.entries()) await registry.start({ runId: `run_falsy_${index}`, kind: "agent", sessionId: "session-a", project: "/project", run: async () => value }).result;
+    await registry.start({ runId: "run_big", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "x".repeat(20_000) }).result;
+    await registry.start({ runId: "run_secret", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "token Bearer abcdefghijklmnop end" }).result;
+    const durable = await completedRecord(runsDirectory);
+    const ids = [...values.map((_, index) => `run_falsy_${index}`), "run_big", "run_secret", durable.runId];
+
+    const waited = await execute({ action: "wait", runIds: ids, limitBytes: 65536 });
+    expect(Value.Check(externalRunsOutputSchema, waited.structuredContent)).toBe(true);
+    const completed = waited.structuredContent.data.completed;
+    expect(completed.map((run: any) => run.runId)).toEqual(ids);
+    for (const [index, value] of values.entries()) expect(completed[index].output).toEqual({ available: true, finalAvailable: true, delivery: "inline", value });
+    expect(completed[4].output.delivery).toBe("reference");
+    // The reference is followable from memory: this registry-only run never persisted evidence.
+    const { tool: _tool, ...finalRef } = completed[4].refs.final;
+    let final = "";
+    let finalCursor: string | undefined;
+    do {
+      const page = await execute({ ...finalRef, limitBytes: 8192, ...(finalCursor ? { cursor: finalCursor } : {}) });
+      expect(page.structuredContent.data).toMatchObject({ finalAvailable: true, outputStatus: "final" });
+      final += page.structuredContent.data.page.text;
+      finalCursor = page.structuredContent.data.page.nextCursor;
+    } while (finalCursor);
+    expect(final).toBe("x".repeat(20_000));
+    expect(completed[5].output.value).toBe("token Bearer [REDACTED] end");
+    expect(waited.structuredContent.warnings).toContain("output_redacted");
+    expect(completed[6]).toMatchObject({ runId: durable.runId, live: false, output: { delivery: "reference" }, evidence: { integrity: "complete" } });
+    expect(waited.content[0].text).not.toContain("abcdefghijklmnop");
+
+    // A secret split across a live page boundary is still redacted, and every page stays within limitBytes.
+    let paged = "";
+    let cursor: string | undefined;
+    do {
+      const page = await execute({ action: "inspect", runId: "run_secret", view: "output", limitBytes: 8, ...(cursor ? { cursor } : {}) });
+      expect(Buffer.byteLength(page.structuredContent.data.page.text)).toBeLessThanOrEqual(8);
+      expect(page.structuredContent.data.page).toMatchObject({ encoding: "text", text: page.content[0].text });
+      paged += page.structuredContent.data.page.text;
+      cursor = page.structuredContent.data.page.nextCursor;
+    } while (cursor);
+    expect(paged).toBe("token Bearer [REDACTED] end");
   });
 
   it("never reads a target's evidence from disk once the shared wait budget is already exhausted", async () => {
@@ -323,7 +401,7 @@ describe("external_runs", () => {
     controller.abort();
     await expect(waiting).rejects.toThrow(/wait aborted/i);
     expect(registry.get("run_live")?.state).toBe("running");
-    await expect(execute({ action: "wait", runIds: ["run_live", "run_unknown"], mode: "all" })).rejects.toThrow(/unknown|unavailable/i);
+    await expectFailure(execute({ action: "wait", runIds: ["run_live", "run_unknown"], mode: "all" }), "run_unavailable", /unknown|unavailable/i);
     expect(registry.get("run_live")?.state).toBe("running");
     finish("done");
     await running.result;
@@ -452,7 +530,7 @@ describe("external_runs", () => {
     expect(agentPage.details.runs.map((run: any) => run.runId)).toEqual(["run_bookmark_a"]);
     registry.cancel("run_bookmark_a");
     await expect(agents[0]!.result).rejects.toThrow("stopped");
-    await expect(execute({ action: "list", limit: 1, cursor: agentPage.details.nextCursor })).rejects.toThrow(/run list changed while paging/i);
+    await expectFailure(execute({ action: "list", limit: 1, cursor: agentPage.details.nextCursor }), "cursor_stale", /run list changed while paging/i);
 
     for (const runId of [first!.runId, second!.runId, "run_bookmark_b"]) registry.cancel(runId);
     await Promise.all([...handles, agents[1]!].map((handle) => expect(handle.result).rejects.toThrow("stopped")));
@@ -491,8 +569,7 @@ describe("external_runs", () => {
     await registry.start({ runId: "run_evictor", kind: "agent", sessionId: "session-a", project: "/project", run: async () => "done" }).result;
     expect(registry.get(record.runId)).toBeUndefined();
 
-    await expect(execute({ action: "inspect", runId: record.runId, view: "summary", limitBytes: 32, cursor: first.details.nextCursor }))
-      .rejects.toThrow(/run changed.*restart inspection/i);
+    await expectFailure(execute({ action: "inspect", runId: record.runId, view: "summary", limitBytes: 32, cursor: first.details.nextCursor }), "cursor_stale", /run changed.*restart inspection/i);
   });
 
   it("cancels only current-session live targets and reports already-terminal work accurately", async () => {
@@ -511,7 +588,7 @@ describe("external_runs", () => {
     await expect(live.result).rejects.toThrow("stopped");
     await expect(execute({ action: "wait", runIds: ["run_cancel"] })).resolves.toMatchObject({ details: { outcomes: [{ outcome: "cancelled", error: "stop now" }] } });
     await expect(execute({ action: "cancel", runId: terminal.runId })).resolves.toMatchObject({ details: { status: "terminal" } });
-    await expect(execute({ action: "cancel", runId: "run_other" })).rejects.toThrow(/unknown|unavailable/i);
+    await expectFailure(execute({ action: "cancel", runId: "run_other" }), "run_unavailable", /unknown|unavailable/i);
   });
 
   it("keeps completed workflow IDs inspectable and waitable from their session journal", async () => {
@@ -548,7 +625,7 @@ describe("external_runs", () => {
     const output = await execute({ action: "inspect", runId: identity.runId, view: "output" });
     expect(output.content[0].text).toContain('"answer":42');
     const partial = await execute({ action: "inspect", runId: identity.runId, view: "output", limitBytes: 4 });
-    await expect(execute({ action: "inspect", runId: identity.runId, view: "summary", cursor: partial.details.nextCursor })).rejects.toThrow(/cursor/i);
+    await expectFailure(execute({ action: "inspect", runId: identity.runId, view: "summary", cursor: partial.details.nextCursor }), "cursor_invalid", /cursor/i);
     await expect(execute({ action: "wait", runIds: [identity.runId] })).resolves.toMatchObject({ details: { outcomes: [{ runId: identity.runId, status: "done", outcome: "succeeded" }] } });
 
     const failedIdentity = createWorkflowRunIdentity("failed script", null);
@@ -587,7 +664,7 @@ describe("external_runs", () => {
         { runId: "run_cleaned", status: "aborted" },
       ],
     });
-    await expect(execute({ action: "cancel", runId: incompleteIdentity.runId })).rejects.toThrow(/no longer live/i);
+    await expectFailure(execute({ action: "cancel", runId: incompleteIdentity.runId }), "run_not_live", /no longer live/i);
   });
 
   it("projects a workflow's verified final result via view: final, including a legitimate JSON null result, without falling into the diagnostics shape", async () => {
@@ -682,10 +759,10 @@ describe("external_runs", () => {
   it("rejects an unresolvable wf_... ID as unknown/unavailable rather than falling through to the agent-only durable reader", async () => {
     const { execute } = setup();
     const unknownWorkflowId = "wf_doesnotexist00000000000000000000";
-    await expect(execute({ action: "inspect", runId: unknownWorkflowId, view: "summary" })).rejects.toThrow(/unknown or unavailable/i);
-    await expect(execute({ action: "cancel", runId: unknownWorkflowId })).rejects.toThrow(/unknown or unavailable/i);
-    await expect(execute({ action: "wait", runIds: [unknownWorkflowId] })).rejects.toThrow(/unknown or unavailable/i);
-    await expect(execute({ action: "inspect", runIds: [unknownWorkflowId] })).rejects.toThrow(/unknown or unavailable/i);
+    await expectFailure(execute({ action: "inspect", runId: unknownWorkflowId, view: "summary" }), "run_unavailable", /unknown or unavailable/i);
+    await expectFailure(execute({ action: "cancel", runId: unknownWorkflowId }), "run_unavailable", /unknown or unavailable/i);
+    await expectFailure(execute({ action: "wait", runIds: [unknownWorkflowId] }), "run_unavailable", /unknown or unavailable/i);
+    await expectFailure(execute({ action: "inspect", runIds: [unknownWorkflowId] }), "run_unavailable", /unknown or unavailable/i);
   });
 
   it("prioritizes the registry's settled outcome status over a stale observation.status", async () => {
@@ -716,17 +793,20 @@ describe("external_runs", () => {
     const { execute, runsDirectory } = setup();
     const first = await completedRecord(runsDirectory, { description: "First" });
     const second = await completedRecord(runsDirectory, { description: "Second" });
-    const page = await execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes: 900 });
-    expect(page.details.nextCursor).toEqual(expect.any(String));
+    const page = await execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes: 1300 });
+    // Both entries fit the legacy text (about 1.2 KB) but not the structured envelope, so both channels carry one entry and one cursor.
+    expect(page.details.entries).toHaveLength(1);
+    expect(page.structuredContent.data.entries).toHaveLength(1);
+    expect(page.structuredContent.data.nextCursor).toBe(page.details.nextCursor);
 
     const otherTool = createExternalRunsTool({ registry: new RunRegistry(), runsDirectory: () => runsDirectory }) as any;
     const otherCtx = { cwd: "/project", sessionManager: { isPersisted: () => true, getSessionDir: () => runsDirectory, getSessionId: () => "session-other" } };
-    await expect(otherTool.execute(
+    await expectFailure(otherTool.execute(
       "x",
-      { action: "inspect", runIds: [first.runId, second.runId], limitBytes: 900, cursor: page.details.nextCursor },
+      { action: "inspect", runIds: [first.runId, second.runId], limitBytes: 1300, cursor: page.details.nextCursor },
       undefined,
       undefined,
       otherCtx,
-    )).rejects.toThrow(/unknown or unavailable/i);
+    ), "cursor_invalid", /different session or project/i);
   });
 });

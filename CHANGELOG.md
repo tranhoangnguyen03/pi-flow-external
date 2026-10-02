@@ -2,6 +2,45 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [3.2.0-external.0] - 2026-10-02
+
+### Added
+- Versioned public contracts for `workflow` and every `external_runs` action (issue #77), sharing the `Agent` envelope from 3.1.0: `outputSchema`, matching `structuredContent`, and `isError === !ok`. `ok` describes the operation, so inspecting or waiting on a failed run is `ok: true`. See [docs/public-contract.md](docs/public-contract.md), which replaces `docs/agent-public-contract.md`.
+- `external_runs` payloads:
+
+  | Action | `data` |
+  |---|---|
+  | `list` | `{runs, workflows, nextCursor?, nextWorkflowCursor?}` |
+  | batch `inspect` | `{mode: "batch", entries, nextCursor?}` |
+  | single `inspect` | `{mode: "single", runId, view, page: {text, encoding, complete, nextCursor?}, finalAvailable?, outputStatus?}` |
+  | `wait` | `{mode, completed, pending}` |
+  | `cancel` | `{runId, status}` |
+
+  Every row is one `PublicRun` shape, with evidence integrity and callable `refs`. In `wait`, a structured value is inline only when it is in memory, its text result was delivered whole, and its encoded JSON fits both 16 KiB and what remains of the structured channel's own copy of `limitBytes`, spent in request order. Otherwise it is delivered by reference.
+- An agent's `final` view now serves a settled successful result still held in the registry, so a `refs.final` reference resolves even when the run's evidence was never saved.
+- Workflow receipts. A foreground root that failed, was cancelled or timed out is `ok: false` and keeps its run. A background launch is `ok: true` once accepted. A root that succeeded after catching child failures stays `ok: true`, reports `run.children.failed`, and adds the warning `handled_child_failures` and a sentence in its text result. Failures are counted where the script receives them, including calls that fail before a child is indexed; always-fatal failures are excluded. Journals record the count (`childFailures`) and report integrity: a torn last line is `incomplete`, a bad line mid-file is `damaged`.
+- New error codes: `request_invalid`, `run_unavailable`, `run_not_live`, `cursor_invalid`, `cursor_stale`, `page_too_small`, `session_unavailable`, `script_invalid`, `storage_unavailable`.
+
+### Changed (compatibility)
+- **Expected `external_runs` and `workflow` failures are returned, not thrown.** Messages are unchanged except where noted. Direct callers and scripts that relied on a rejection must check `ok` or `isError`. Interrupted waits, unexpected exceptions, schema validation and `tool_call` blocks still throw.
+
+  | Previously thrown message | Now returned with code |
+  |---|---|
+  | "Invalid run ID"; "Invalid workflow run ID"; "inspect accepts either runId or runIds, not both"; "cancel accepts either runId or runIds, not both"; "cancel targets one run at a time"; "inspect runIds requires 1-20 run IDs"; "wait requires 1-100 run IDs"; 'Batch inspect (runIds) only supports view: "summary"'; "limitBytes must be finite" | `request_invalid` |
+  | "Run is unknown or unavailable in this session" | `run_unavailable` |
+  | "Run is no longer live in this session; cancellation cannot be confirmed"; "Run … is unavailable for live waiting" | `run_not_live` |
+  | "Invalid cursor"; "Cursor belongs to a different run/view/list scope"; "Batch cursor does not match the requested run IDs…"; a batch cursor from another session (message is now "Cursor belongs to a different session or project") | `cursor_invalid` |
+  | "Run changed while paging; restart inspection without a cursor"; "Cursor points past available evidence"/"outside available workflow content" (message is now the "Run changed while paging" text) | `cursor_stale` |
+  | "Batch summary for … does not fit within limitBytes…" | `page_too_small` |
+  | "external_runs requires a persisted originating session" | `session_unavailable` |
+
+- Failed workflow rows now set `isError`, so they render red like failed `Agent` calls.
+- **Output and diagnostics pages concatenate losslessly.** Each new message after the first carries a leading `\n` separator inside the page text and items; agy/muse streaming deltas still join into one message. Previously, two messages split across a page boundary ran together. Byte offsets shift, so inspection cursors issued by earlier versions fail with `cursor_stale`; restart without a cursor.
+- Batch `inspect` serves an entry only when it fits `limitBytes` in both the text and the structured result, so text pages may hold fewer entries than before.
+- Live output pages, in-memory wait results and workflow views (from memory or the journal) are now redacted in full before they are measured or sliced. Previously they were served unredacted.
+- `/external runs` reads the structured contract. Stale cursors restart from page 1 by code, now including paged summaries. Other failures show a notice and keep the navigator open instead of closing it.
+- An unreadable workflow journal in this project is reported as `run_unavailable` with its read error; another project's journal is reported like an unknown run.
+
 ## [3.1.1-external.0] - 2026-10-02
 
 ### Fixed

@@ -13,6 +13,7 @@ import {
   type WorkflowRunIdentity,
 } from "./journal.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
+import type { FlowErrorCode } from "../core/errors.ts";
 import { redactSecrets } from "../core/run-record.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedAgentResult, WorkflowMetaPhase } from "./types.ts";
@@ -75,7 +76,7 @@ type PrepareErrorDetails = Partial<WorkflowToolDetails> & { name: string; error:
 
 export type PrepareWorkflowToolSourceResult =
   | { ok: true; value: PreparedWorkflowToolSource }
-  | { ok: false; text: string; details: PrepareErrorDetails };
+  | { ok: false; code: FlowErrorCode; text: string; details: PrepareErrorDetails };
 
 type WorkflowSource =
   | {
@@ -86,7 +87,7 @@ type WorkflowSource =
       requestedName?: string;
       warnings: string[];
     }
-  | { ok: false; message: string; warnings: string[] };
+  | { ok: false; code: FlowErrorCode; message: string; warnings: string[] };
 
 function isProjectTrusted(ctx: ExtensionContext): boolean {
   try {
@@ -107,8 +108,8 @@ function formatWarnings(warnings: string[]): string {
   return `\n\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
 }
 
-function sourceError(text: string, details: PrepareErrorDetails): PrepareWorkflowToolSourceResult {
-  return { ok: false, text, details };
+function sourceError(code: FlowErrorCode, text: string, details: PrepareErrorDetails): PrepareWorkflowToolSourceResult {
+  return { ok: false, code, text, details };
 }
 
 function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext): WorkflowSource {
@@ -119,6 +120,7 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
   if (sourceCount !== 1) {
     return {
       ok: false,
+      code: "request_invalid",
       message:
         "Workflow requires exactly one non-empty source: `script` for an ad-hoc workflow, `name` for a saved workflow, or `scriptPath` for a persisted script.",
       warnings: [],
@@ -138,7 +140,7 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
       sessionWorkflowDir,
     });
     if (!result.ok) {
-      return { ok: false, message: result.message, warnings: result.warnings };
+      return { ok: false, code: result.code, message: result.message, warnings: result.warnings };
     }
     return {
       ok: true,
@@ -159,6 +161,7 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
   if (!workflow) {
     return {
       ok: false,
+      code: "selection_invalid",
       message: `Unknown saved workflow "${savedName}". Available workflows: ${formatAvailableWorkflowNames([
         ...registry.workflows.keys(),
       ].sort())}.`,
@@ -191,7 +194,7 @@ export async function prepareWorkflowToolSource(
   const project = resolve(ctx.cwd);
   const source = resolveWorkflowSource(params, ctx);
   if (!source.ok) {
-    return sourceError(`${source.message}${formatWarnings(source.warnings)}`, {
+    return sourceError(source.code, `${source.message}${formatWarnings(source.warnings)}`, {
       name: "workflow",
       error: source.message,
       logs: source.warnings,
@@ -207,7 +210,7 @@ export async function prepareWorkflowToolSource(
     plannedPhases = parsed.meta.phases?.map((phase) => ({ ...phase }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return sourceError(`Workflow script is invalid: ${message}`, {
+    return sourceError("script_invalid", `Workflow script is invalid: ${message}`, {
       name: metaName,
       error: message,
       logs: source.warnings,
@@ -222,7 +225,7 @@ export async function prepareWorkflowToolSource(
     : undefined;
   if (resumeFromRunId && source.source !== "path") {
     const message = "Cannot resume workflow: resumeFromRunId can only be used with scriptPath.";
-    return sourceError(message, {
+    return sourceError("request_invalid", message, {
       name: metaName,
       error: message,
       logs: source.warnings,
@@ -241,7 +244,7 @@ export async function prepareWorkflowToolSource(
       scriptPath = await persistWorkflowScript({ dir: sessionWorkflowDir, metaName, scriptHash: identity.scriptHash, script });
     } catch (error) {
       const message = `Workflow persistence failed: ${error instanceof Error ? error.message : String(error)}`;
-      return sourceError(message, {
+      return sourceError("storage_unavailable", message, {
         name: metaName,
         error: message,
         logs: source.warnings,
@@ -256,7 +259,7 @@ export async function prepareWorkflowToolSource(
   if (resumeFromRunId) {
     if (!sessionWorkflowDir) {
       const message = "Cannot resume workflow: current session has no persisted workflow state.";
-      return sourceError(message, {
+      return sourceError("session_unavailable", message, {
         name: metaName,
         error: message,
         logs: source.warnings,
@@ -274,7 +277,7 @@ export async function prepareWorkflowToolSource(
       // Another project's unreadable journal is reported exactly like a missing one.
       if (!(error instanceof WorkflowJournalReadError) || error.project === undefined || error.project === project) {
         const message = `Cannot resume workflow: ${error instanceof Error ? error.message : String(error)}`;
-        return sourceError(message, {
+        return sourceError("run_unavailable", message, {
           name: metaName,
           error: message,
           logs: source.warnings,
@@ -289,7 +292,7 @@ export async function prepareWorkflowToolSource(
     // Another project's run is indistinguishable from an unknown one.
     if (!journal || journal.project !== project) {
       const message = `Cannot resume workflow: run journal not found for ${resumeFromRunId}.`;
-      return sourceError(message, {
+      return sourceError("run_unavailable", message, {
         name: metaName,
         error: message,
         logs: source.warnings,
@@ -324,7 +327,7 @@ export async function prepareWorkflowToolSource(
       });
     } catch (error) {
       const message = `Workflow journal setup failed: ${error instanceof Error ? error.message : String(error)}`;
-      return sourceError(message, {
+      return sourceError("storage_unavailable", message, {
         name: metaName,
         error: message,
         logs: source.warnings,

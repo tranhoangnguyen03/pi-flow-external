@@ -18,6 +18,8 @@ import {
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
 import { createWorkflowTool, toWorkflowSubagentDescriptor } from "../src/workflow/tool.ts";
+import { workflowOutputSchema } from "../src/contract/workflow.ts";
+import { Value } from "typebox/value";
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { prepareWorkflowToolSource } from "../src/workflow/source.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
@@ -1092,6 +1094,15 @@ describe("saved workflow registry", () => {
       const journal = await loadWorkflowJournal(dir, runId);
 
       expect(journal?.agentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
+      // A bad line with records after it is damage, not an unfinished write.
+      expect(journal?.integrity).toBe("damaged");
+
+      const tornId = "wf_torn_test";
+      writeFileSync(join(dir, `run-${tornId}.jsonl`), `${JSON.stringify({ type: "run_start", version: 1, apiVersion: 1, runId: tornId })}\n{"type":"agent_res`);
+      expect((await loadWorkflowJournal(dir, tornId))?.integrity).toBe("incomplete");
+      const completeId = "wf_complete_test";
+      writeFileSync(join(dir, `run-${completeId}.jsonl`), [{ type: "run_start", version: 1, apiVersion: 1, runId: completeId }, { type: "run_complete", result: null, childFailures: 0 }].map((line) => JSON.stringify(line)).join("\n") + "\n");
+      expect(await loadWorkflowJournal(dir, completeId)).toMatchObject({ integrity: "complete", childFailures: 0, status: "done", result: null });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1235,7 +1246,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
     cwd = state.cwd;
   });
 
-  function makeWorkflowTool(registry = new RunRegistry(), defaultMaxBudgetUsd?: number) {
+  function makeWorkflowTool(registry = new RunRegistry(), defaultMaxBudgetUsd?: number, updateStatus: (ctx: unknown, toolCallId: string, usage: unknown) => void = () => {}) {
     return createWorkflowTool({
       registry,
       getLimiter: () => new ConcurrencyLimiter(2),
@@ -1244,7 +1255,7 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
       getDefaultPermission: () => "edit",
       getDefaultHarness: () => "pi-deepseek",
       getDefaultMaxBudgetUsd: () => defaultMaxBudgetUsd,
-      updateStatus: () => {},
+      updateStatus,
     });
   }
 
@@ -1565,6 +1576,89 @@ describe("createWorkflowTool integration with pi custom profiles", () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.error).toMatch(/instruction metadata supports description only/);
+  });
+
+  function persistedCtx(modelRegistry: unknown, sessionId: string) {
+    const sessionManager = { isPersisted: () => true, getSessionFile: () => join(cwd, `${sessionId}.jsonl`), getSessionId: () => sessionId, getBranch: () => [] };
+    return { cwd, modelRegistry, sessionManager, isProjectTrusted: () => true } as unknown as ExtensionToolContext;
+  }
+
+  const failOrPass = (context: { messages: unknown[] }) => JSON.stringify(context.messages).includes("FAIL_PROBE")
+    ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "probe failure" })
+    : fauxAssistantMessage("passed");
+
+  it("keeps a root that handled child failures successful, counting every delivered failure and warning in both channels", async () => {
+    const { modelRegistry, registration } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
+    registration.setResponses([failOrPass, failOrPass, failOrPass]);
+    const usageKeys = new Set<string>();
+    const result = await makeWorkflowTool(undefined, undefined, (_ctx, key) => usageKeys.add(key)).execute("call-handled", {
+      script: `export const meta = { apiVersion: 1, name: "handled", description: "handles failures" };
+        let caught = 0;
+        try { await agent("FAIL_PROBE", { role: "worker", harness: "pi-deepseek" }); } catch { caught++; }
+        // Fails before the child is indexed, through the same catchable delivery.
+        try { await agent(42, { role: "worker", harness: "pi-deepseek" }); } catch { caught++; }
+        return { caught, ok: await agent("PASS_PROBE", { role: "worker", harness: "pi-deepseek" }) };`,
+    }, undefined, undefined, persistedCtx(modelRegistry, "session-handled"));
+
+    expect(result.isError).toBe(false);
+    expect(Value.Check(workflowOutputSchema, result.structuredContent)).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: true, tool: "workflow", action: "run", warnings: ["handled_child_failures"],
+      data: { run: { kind: "workflow", live: false, state: { status: "done", outcome: "succeeded" }, children: { count: 2, failed: 2 },
+        output: { delivery: "inline", value: { caught: 2, ok: "passed" } }, evidence: { integrity: "complete" } } },
+    });
+    expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("handled 2 failed agent() call(s)") });
+    // Nested usage is counted once: each launched child reports under its own key, replaced rather than summed;
+    // the root never reports, and receipts carry no usage of their own.
+    expect([...usageKeys].sort()).toEqual(["call-handled:agent:1", "call-handled:agent:2"]);
+    expect(JSON.stringify(result.structuredContent)).not.toMatch(/usage|cost/i);
+    const journal = await loadWorkflowJournal(dirname(result.details.journalPath!), result.details.runId!);
+    expect(journal).toMatchObject({ childFailures: 2, integrity: "complete" });
+  });
+
+  it.each([
+    ["an unhandled child failure", `await agent("FAIL_PROBE", { role: "worker", harness: "pi-deepseek" });`, 1],
+    ["a fatal unknown role", `await agent("PASS_PROBE", { role: "nonexistent", harness: "pi-deepseek" });`, 0],
+  ])("fails the root on %s, keeping the run and excluding fatal replies from the count", async (_label, body, failed) => {
+    const { modelRegistry, registration } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
+    registration.setResponses([failOrPass]);
+    const result = await makeWorkflowTool().execute("call-unhandled", {
+      script: `export const meta = { apiVersion: 1, name: "unhandled", description: "fails" };\n${body}\nreturn "unreachable";`,
+    }, undefined, undefined, persistedCtx(modelRegistry, `session-${failed}`));
+
+    expect(result.isError).toBe(true);
+    expect(Value.Check(workflowOutputSchema, result.structuredContent)).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: false, error: { code: "failed" },
+      data: { run: { state: { status: "error", outcome: "failed" }, children: { failed }, output: { delivery: "none" }, evidence: { integrity: "complete" } } },
+    });
+  });
+
+  it("accepts a background run as ok without claiming completion", async () => {
+    const { modelRegistry, registration } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
+    registration.setResponses([failOrPass]);
+    const registry = new RunRegistry();
+    const result = await makeWorkflowTool(registry).execute("call-background", {
+      script: `export const meta = { apiVersion: 1, name: "background", description: "runs later" };\nreturn await agent("PASS_PROBE", { role: "worker", harness: "pi-deepseek" });`,
+      background: true,
+    }, undefined, undefined, persistedCtx(modelRegistry, "session-background"));
+
+    expect(result.structuredContent).toMatchObject({ ok: true, data: { run: { live: true, state: { status: "running" }, output: { finalAvailable: false, delivery: "none" }, evidence: { integrity: "incomplete" } } } });
+    expect(Value.Check(workflowOutputSchema, result.structuredContent)).toBe(true);
+    await expect(registry.wait([result.details.runId!], "all")).resolves.toMatchObject({ terminal: [{ status: "done" }] });
+  });
+
+  it.each([
+    ["two sources", { script: "x", name: "y" }, "request_invalid"],
+    ["an unknown saved workflow", { name: "missing-workflow" }, "selection_invalid"],
+    ["an invalid script", { script: "export const meta = {};" }, "script_invalid"],
+    ["resume without scriptPath", { script: `export const meta = { apiVersion: 1, name: "r", description: "d" };\nreturn await agent("x");`, resumeFromRunId: "wf_x" }, "request_invalid"],
+  ])("returns a typed pre-registration failure for %s", async (_label, params, code) => {
+    const { modelRegistry } = await createSession({ piHarnesses: { "pi-deepseek": { modelId: "faux-thinker", thinking: "high" } } });
+    const result = await makeWorkflowTool().execute("call-prelaunch", params as never, undefined, undefined, persistedCtx(modelRegistry, "session-prelaunch"));
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ ok: false, data: { run: null }, error: { code } });
+    expect(Value.Check(workflowOutputSchema, result.structuredContent)).toBe(true);
   });
 
   it("exposes interrupted child output in the terminal workflow receipt when a child fails", async () => {

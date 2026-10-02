@@ -7,7 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { ConcurrencyLimiter } from "../core/concurrency.ts";
 import { isActiveSubagentStatus, isCompletedSubagentStatus, renderOutputText, renderSubagentNode } from "../core/subagent-render.ts";
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
@@ -19,7 +19,10 @@ import { createRunRecord } from "../core/run-record.ts";
 import { runRecordsDirectory } from "../core/retention.ts";
 import { captureParentContext } from "../core/parent-context.ts";
 import { RunRegistry, type RegisteredRunHandle } from "../core/run-registry.ts";
-import { ExpectedFlowError } from "../core/errors.ts";
+import { ExpectedFlowError, type FlowErrorCode } from "../core/errors.ts";
+import { withContract } from "../contract/envelope.ts";
+import { workflowOutputSchema, workflowReceipt } from "../contract/workflow.ts";
+import { loadWorkflowJournal } from "./journal.ts";
 import { OUTPUT_PREVIEW_CHARS } from "../core/progress.ts";
 import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownExternalProfileMessage } from "../profiles.ts";
 import { resolveExecutionProfile } from '../execution-config.ts';
@@ -75,6 +78,11 @@ function workflowResult(text: string, details: WorkflowToolDetails) {
 }
 
 /** Build an early-return error result, filling the fixed error-snapshot fields. */
+/** A failure before registration: no run exists, so the receipt carries `run: null`. */
+function prelaunchFailure(code: FlowErrorCode, text: string, details: Partial<WorkflowToolDetails> & { name: string; error: string }) {
+  return { ...workflowError(text, details), data: { run: null }, error: { code, message: details.error } };
+}
+
 function workflowError(
   text: string,
   details: Partial<WorkflowToolDetails> & { name: string; error: string },
@@ -132,7 +140,9 @@ export function createWorkflowTool(
     description: "Run a saved, persisted, or ad-hoc trusted JavaScript workflow that orchestrates external roles.",
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
+    outputSchema: workflowOutputSchema,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return await withContract<WorkflowToolDetails>({ tool: "workflow", action: "run", failureData: { run: null }, redact: true }, async () => {
       const parentMessages = captureParentContext(ctx.sessionManager);
       const sessionId = ctx.sessionManager?.getSessionId?.() ?? `unpersisted:${toolCallId}`;
       const sessionVersion = options.registry.sessionVersion(sessionId);
@@ -142,7 +152,7 @@ export function createWorkflowTool(
       // same already-populated instance used to resolve models below.
       const executionContext = { cwd: project, modelRegistry: ctx.modelRegistry } as ExtensionContext;
       const catalog = loadExternalCatalog(getAgentDir());
-      if (catalog.blocked) return workflowError(catalog.diagnostics.join(" "), { name: "workflow", error: catalog.diagnostics.join(" "), status: "error" });
+      if (catalog.blocked) return prelaunchFailure("configuration_invalid", catalog.diagnostics.join(" "), { name: "workflow", error: catalog.diagnostics.join(" "), status: "error" });
       const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
       // Freeze one resolved roster snapshot for the whole run: real on-disk
@@ -168,7 +178,7 @@ export function createWorkflowTool(
       const background = params.background === true;
       const prepared = await prepareWorkflowToolSource(params, ctx);
       if (!prepared.ok) {
-        return workflowError(prepared.text, prepared.details);
+        return prelaunchFailure(prepared.code, prepared.text, prepared.details);
       }
 
       const {
@@ -201,6 +211,7 @@ export function createWorkflowTool(
         journalPath: journalWriter?.path,
         resumeFromRunId,
         cachedAgentCount: 0,
+        childFailures: 0,
       };
       const emit = () => {
         options.registry.update(identity.runId, cloneSnapshot(snapshot));
@@ -350,6 +361,10 @@ export function createWorkflowTool(
 
       try {
         const runResult = await runWorkflow(script, {
+          onChildFailureDelivered: () => {
+            snapshot.childFailures = (snapshot.childFailures ?? 0) + 1;
+            emit();
+          },
           args: params.args,
           parentMessages,
           parentToolCallId: toolCallId,
@@ -544,16 +559,20 @@ export function createWorkflowTool(
         snapshot.agentCount = runResult.agentCount;
         snapshot.result = runResult.result;
         try {
-          await journalWriter?.complete(runResult.result);
+          await journalWriter?.complete(runResult.result, snapshot.childFailures);
         } catch (error) {
           snapshot.logs.push(`workflow journal completion failed: ${error instanceof Error ? error.message : String(error)}`);
         }
+        // The registry's last observation is what receipts and external_runs project.
+        emit();
         const resultText = JSON.stringify(runResult.result, null, 2);
         const cachedText = snapshot.cachedAgentCount ? ` (${snapshot.cachedAgentCount} cached)` : "";
+        // The model reads only content, so a handled failure is stated here as well as in the receipt.
+        const handledText = snapshot.childFailures ? ` The script handled ${snapshot.childFailures} failed agent() call(s); check its result before relying on it.` : "";
         const scriptPathText = snapshot.scriptPath ? `\nscriptPath: ${snapshot.scriptPath}` : "";
         const runIdText = snapshot.runId ? `\nrunId: ${snapshot.runId}` : "";
         return workflowResult(
-          `Workflow "${runResult.meta.name}" completed with ${runResult.agentCount} agent(s)${cachedText}.${scriptPathText}${runIdText}${formatWarnings(warnings)}${formatRecentLogs(snapshot.logs)}\n\nResult:\n${resultText}`,
+          `Workflow "${runResult.meta.name}" completed with ${runResult.agentCount} agent(s)${cachedText}.${handledText}${scriptPathText}${runIdText}${formatWarnings(warnings)}${formatRecentLogs(snapshot.logs)}\n\nResult:\n${resultText}`,
           cloneSnapshot(snapshot),
         );
       } catch (error) {
@@ -564,7 +583,7 @@ export function createWorkflowTool(
         snapshot.outcome = outcome;
         snapshot.error = message;
         try {
-          await journalWriter?.fail(message, outcome);
+          await journalWriter?.fail(message, outcome, snapshot.childFailures);
         } catch {
           // Preserve the original workflow failure; journal write failure is secondary.
         }
@@ -574,6 +593,7 @@ export function createWorkflowTool(
             agent.endedAt = Date.now();
           }
         }
+        emit();
         const partial = error instanceof ChildRunError && error.partialOutput
           ? `\n\nInterrupted child output (${error.runId}):\n${error.partialOutput.slice(-OUTPUT_PREVIEW_CHARS)}`
           : "";
@@ -611,14 +631,29 @@ export function createWorkflowTool(
         const message = error instanceof Error ? error.message : String(error);
         await journalWriter?.fail(message).catch(() => undefined);
         if (!(error instanceof ExpectedFlowError)) throw error;
-        return workflowError(`Workflow "${metaName}" was not started: ${message}`, { name: metaName, error: message, status: "error", outcome: "failed", runId: identity.runId, journalPath: journalWriter?.path });
+        return prelaunchFailure(error.code, `Workflow "${metaName}" was not started: ${message}`, { name: metaName, error: message, status: "error", outcome: "failed", runId: identity.runId, journalPath: journalWriter?.path });
       }
       emit();
-      if (!background) return await registered.result;
-      return workflowResult(
-        `Workflow "${metaName}" queued as ${identity.runId}. Use external_runs to inspect, wait, or cancel it.`,
-        { ...cloneSnapshot(snapshot), backgroundReceipt: true },
-      );
+      if (!background) {
+        const settled = await registered.result;
+        const outcome = await registered.terminal;
+        // Evidence I/O may outlast settlement: observe the registry only after it.
+        const journal = journalWriter ? await loadWorkflowJournal(dirname(journalWriter.path), identity.runId).catch(() => undefined) : undefined;
+        const entry = options.registry.get(identity.runId);
+        const receipt = workflowReceipt(entry ?? { runId: identity.runId, kind: "workflow", sessionId, project, state: "terminal", observation: settled.details, outcome }, {
+          integrity: journal?.integrity ?? "unknown",
+          inspectable: Boolean(entry || journal),
+        });
+        return { ...settled, ...receipt };
+      }
+      return {
+        ...workflowResult(
+          `Workflow "${metaName}" queued as ${identity.runId}. Use external_runs to inspect, wait, or cancel it.`,
+          { ...cloneSnapshot(snapshot), backgroundReceipt: true },
+        ),
+        ...workflowReceipt(options.registry.get(identity.runId)!, { inspectable: true }),
+      };
+      });
     },
     renderCall(args, theme, context) {
       let name = args.name || (args.scriptPath ? basename(args.scriptPath) : "Preparing workflow");

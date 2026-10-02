@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RunRegistry } from "../src/core/run-registry.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
+import { externalRunsOutputSchema } from "../src/contract/runs.ts";
+import { createRunRecord } from "../src/core/run-record.ts";
+import { Value } from "typebox/value";
 
 /**
  * The authoritative cross-surface contract check for issue #52: the SAME
@@ -171,5 +174,31 @@ describe("cross-surface run contract", () => {
       expect(projection.state.status).toBe("done");
       expect(projection.output.finalAvailable).toBe(true);
     }
+  });
+  it("returns a schema-valid structured envelope for every action and inspect view, with page text separate from human fallback text", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const record = createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Quiet" } });
+    await record.finish({ status: "error", error: "no output" });
+    await registry.start({ runId: "run_contract_done", kind: "agent", sessionId: "session-a", project: "/project", run: async () => ({ answer: 1 }) }).result;
+    const calls: Record<string, unknown>[] = [
+      { action: "list" },
+      { action: "inspect", runIds: [record.runId, "run_contract_done"] },
+      ...["summary", "output", "diagnostics", "final", "launch"].map((view) => ({ action: "inspect", runId: record.runId, view })),
+      { action: "inspect", runId: "run_contract_done", view: "output" },
+      { action: "wait", runIds: ["run_contract_done", record.runId] },
+      { action: "cancel", runId: "run_contract_done" },
+    ];
+    for (const call of calls) {
+      const result = await execute(call);
+      expect(result.isError, JSON.stringify(call)).toBe(false);
+      expect(Value.Check(externalRunsOutputSchema, result.structuredContent), JSON.stringify(call)).toBe(true);
+      expect(result.structuredContent).toMatchObject({ contractVersion: 1, tool: "external_runs", action: call.action, ok: true });
+    }
+    const unavailable = await execute({ action: "inspect", runId: record.runId, view: "output" });
+    expect(unavailable.content[0].text).toMatch(/no output is available/i);
+    expect(unavailable.structuredContent.data.page).toEqual({ text: "", encoding: "text", complete: true });
+    const final = await execute({ action: "inspect", runId: record.runId, view: "final" });
+    expect(final.structuredContent.data).toMatchObject({ finalAvailable: false, page: { text: "" } });
+    expect((await execute({ action: "inspect", runId: record.runId, view: "summary" })).structuredContent.data.page.encoding).toBe("json");
   });
 });
