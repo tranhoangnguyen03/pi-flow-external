@@ -248,12 +248,14 @@ function listScope(stream: "runs" | "workflows", sessionId: string, project: str
   return JSON.stringify({ stream, sessionId, project, workflowRunId });
 }
 
-function encodeUnpersistedCursor(scope: string, offset: number): string {
-  return Buffer.from(JSON.stringify({ v: 1, kind: "unpersisted-list", scope, offset })).toString("base64url");
+type UnpersistedBookmark = { after: string } | { persisted: true };
+
+function encodeUnpersistedCursor(scope: string, bookmark: UnpersistedBookmark): string {
+  return Buffer.from(JSON.stringify({ v: 1, kind: "unpersisted-list", scope, ...bookmark })).toString("base64url");
 }
 
-/** The offset of an unpersisted-stage cursor, or undefined for any other cursor (passed on to the persisted listing). */
-function decodeUnpersistedCursor(value: string, scope: string): number | undefined {
+/** The bookmark of an unpersisted-stage cursor, or undefined for any other cursor (passed on to the persisted listing). */
+function decodeUnpersistedCursor(value: string, scope: string): UnpersistedBookmark | undefined {
   let parsed: Record<string, unknown> | undefined;
   try {
     parsed = record(JSON.parse(Buffer.from(value, "base64url").toString("utf8")));
@@ -261,38 +263,51 @@ function decodeUnpersistedCursor(value: string, scope: string): number | undefin
     return undefined;
   }
   if (parsed?.kind !== "unpersisted-list") return undefined;
-  if (Object.keys(parsed).sort().join(",") !== "kind,offset,scope,v" || parsed.v !== 1 || !Number.isSafeInteger(parsed.offset) || (parsed.offset as number) < 0) throw new Error("Invalid list cursor");
+  const keys = Object.keys(parsed).sort().join(",");
+  const valid = parsed.v === 1 && ((keys === "after,kind,scope,v" && typeof parsed.after === "string" && RUN_ID.test(parsed.after)) || (keys === "kind,persisted,scope,v" && parsed.persisted === true));
+  if (!valid) throw new Error("Invalid list cursor");
   if (parsed.scope !== scope) throw new Error("Cursor belongs to a different list scope");
-  return parsed.offset as number;
+  return typeof parsed.after === "string" ? { after: parsed.after } : { persisted: true };
 }
 
 /**
  * One bounded list page: live runs with no persisted row first, then
- * persisted rows, all within `pageSize`. While unpersisted runs remain, the
- * cursor pages through them; after them it starts the persisted listing.
- * The unpersisted set is recomputed per page, so a run persisted between
- * pages may appear once in each stage.
+ * persisted rows, all within `pageSize`. The unpersisted stage bookmarks the
+ * last run it served, in registry order. Persisting a run never removes it
+ * from the registry, so a later page always resumes after the same run and
+ * none is skipped. If the bookmarked run has left the registry, continuation
+ * fails as stale rather than guessing. A run persisted between pages may
+ * appear in both stages; a run registered after the listing reached its
+ * persisted stage appears in the next fresh listing.
  */
-async function pageUnpersistedFirst<L, D>(
+async function pageUnpersistedFirst<L extends { runId: string }, D>(
   scope: string,
   cursor: string | undefined,
   pageSize: number,
-  unpersisted: () => Promise<L[]>,
+  candidates: L[],
+  isUnpersisted: (candidate: L) => Promise<boolean>,
   persisted: (limit: number, cursor: string | undefined) => Promise<{ items: D[]; nextCursor?: string }>,
 ): Promise<{ live: L[]; items: D[]; nextCursor?: string }> {
-  const offset = cursor === undefined ? 0 : decodeUnpersistedCursor(cursor, scope);
-  if (offset === undefined) return { live: [], ...await persisted(pageSize, cursor) };
-  const pending = await unpersisted();
-  const live = pending.slice(offset, offset + pageSize);
-  if (offset + pageSize < pending.length || live.length === pageSize) {
-    return { live, items: [], nextCursor: encodeUnpersistedCursor(scope, offset + live.length) };
+  const bookmark = cursor === undefined ? undefined : decodeUnpersistedCursor(cursor, scope);
+  if (cursor !== undefined && bookmark === undefined) return { live: [], ...await persisted(pageSize, cursor) };
+  if (bookmark && "persisted" in bookmark) return { live: [], ...await persisted(pageSize, undefined) };
+  let start = 0;
+  if (bookmark) {
+    const index = candidates.findIndex((candidate) => candidate.runId === bookmark.after);
+    if (index < 0) throw new Error("Run list changed while paging; restart the listing without a cursor");
+    start = index + 1;
   }
+  // Find one more than fits, to know whether the unpersisted stage continues.
+  const live: L[] = [];
+  for (let index = start; index < candidates.length && live.length <= pageSize; index++) {
+    if (await isUnpersisted(candidates[index]!)) live.push(candidates[index]!);
+  }
+  if (live.length > pageSize) {
+    const served = live.slice(0, pageSize);
+    return { live: served, items: [], nextCursor: encodeUnpersistedCursor(scope, { after: served.at(-1)!.runId }) };
+  }
+  if (live.length === pageSize) return { live, items: [], nextCursor: encodeUnpersistedCursor(scope, { persisted: true }) };
   return { live, ...await persisted(pageSize - live.length, undefined) };
-}
-
-async function filterAsync<T>(items: T[], predicate: (item: T) => Promise<boolean>): Promise<T[]> {
-  const keep = await Promise.all(items.map(predicate));
-  return items.filter((_, index) => keep[index]);
 }
 
 function projectionRevision(text: string): string {
@@ -771,22 +786,18 @@ export function createExternalRunsTool(
         const page = params.workflowCursor && !params.cursor
           ? { live: [], items: [] }
           : await pageUnpersistedFirst(runScope, params.cursor, Math.max(1, Math.min(100, Math.floor(params.limit ?? 50))),
-            () => filterAsync(
-              [...registered.values()].filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId)),
-              async (entry) => {
-                const persisted = await getRunRecord(runsDirectory, entry.runId);
-                return !persisted || persisted.parentSessionId !== sessionId || persisted.project !== project
-                  || (params.workflowRunId !== undefined && persisted.workflowRunId !== params.workflowRunId);
-              },
-            ),
+            [...registered.values()].filter((entry) => entry.kind === "agent" && (params.workflowRunId === undefined || entry.workflowRunId === params.workflowRunId)),
+            async (entry) => {
+              const persisted = await getRunRecord(runsDirectory, entry.runId);
+              return !persisted || persisted.parentSessionId !== sessionId || persisted.project !== project
+                || (params.workflowRunId !== undefined && persisted.workflowRunId !== params.workflowRunId);
+            },
             (limit, cursor) => listRunRecords({ runsDirectory, sessionId, project, workflowRunId: params.workflowRunId, limit, cursor }));
         const historical = params.workflowRunId
           ? { live: [], items: [] }
           : await pageUnpersistedFirst(listScope("workflows", sessionId, project), params.workflowCursor, Math.max(1, Math.min(100, Math.floor(params.limit ?? 100))),
-            () => filterAsync(
-              [...registered.values()].filter((entry) => entry.kind === "workflow"),
-              async (entry) => !workflowDir || !await hasWorkflowJournal(workflowDir, entry.runId, project),
-            ),
+            [...registered.values()].filter((entry) => entry.kind === "workflow"),
+            async (entry) => !workflowDir || !await hasWorkflowJournal(workflowDir, entry.runId, project),
             async (limit, cursor) => workflowDir ? listWorkflowJournals(workflowDir, project, limit, cursor) : { items: [] });
         const workflows = [
           ...historical.live.map((entry) => liveSummary(entry)),

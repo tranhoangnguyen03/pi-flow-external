@@ -430,6 +430,34 @@ describe("external_runs", () => {
     await Promise.all(handles.map((handle) => expect(handle.result).rejects.toThrow("stopped")));
   });
 
+  it("resumes the unpersisted stage after its bookmarked run even when an earlier run is persisted between pages", async () => {
+    const { execute, registry, runsDirectory } = setup(0);
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const [first, second] = ["a", "b"].map((name) => createWorkflowRunIdentity(name, null));
+    const handles = [first!, second!].map((identity) => registry.start({ runId: identity.runId, kind: "workflow", sessionId: "session-a", project: "/project", run: hold }));
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+
+    const page1 = await execute({ action: "list", limit: 1 });
+    expect(page1.details.workflows.map((workflow: any) => workflow.runId)).toEqual([first!.runId]);
+    // A is persisted before page 2: B must still follow, and A then appears with its persisted row.
+    await createWorkflowJournalWriter({ dir, identity: first!, name: "a", source: "inline", project: "/project" });
+    const page2 = await execute({ action: "list", limit: 1, workflowCursor: page1.details.nextWorkflowCursor });
+    expect(page2.details.workflows.map((workflow: any) => workflow.runId)).toEqual([second!.runId]);
+    const page3 = await execute({ action: "list", limit: 1, workflowCursor: page2.details.nextWorkflowCursor });
+    expect(page3.details.workflows.map((workflow: any) => workflow.runId)).toEqual([first!.runId]);
+
+    // A bookmark whose run has left the registry cannot be located: continuation fails explicitly.
+    const agents = ["run_bookmark_a", "run_bookmark_b"].map((runId) => registry.start({ runId, kind: "agent", sessionId: "session-a", project: "/project", run: hold }));
+    const agentPage = await execute({ action: "list", limit: 1 });
+    expect(agentPage.details.runs.map((run: any) => run.runId)).toEqual(["run_bookmark_a"]);
+    registry.cancel("run_bookmark_a");
+    await expect(agents[0]!.result).rejects.toThrow("stopped");
+    await expect(execute({ action: "list", limit: 1, cursor: agentPage.details.nextCursor })).rejects.toThrow(/run list changed while paging/i);
+
+    for (const runId of [first!.runId, second!.runId, "run_bookmark_b"]) registry.cancel(runId);
+    await Promise.all([...handles, agents[1]!].map((handle) => expect(handle.result).rejects.toThrow("stopped")));
+  });
+
   it("lists an unreadable workflow journal as one uncertain row instead of failing the whole listing", async () => {
     const { execute, runsDirectory } = setup();
     const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
