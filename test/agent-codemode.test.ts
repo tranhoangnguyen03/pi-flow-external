@@ -3,7 +3,7 @@ import * as evidence from "../src/core/run-inspection.ts";
 import { Value } from "typebox/value";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
-import { agentOutputSchema } from "../src/public-contract.ts";
+import { agentOutputSchema } from "../src/contract/agent.ts";
 
 afterEach(() => vi.restoreAllMocks());
 const { createSession } = setupPiSubagentTestHarness();

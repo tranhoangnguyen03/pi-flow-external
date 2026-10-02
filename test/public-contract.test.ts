@@ -1,7 +1,7 @@
 import { ExpectedFlowError } from "../src/core/errors.ts";
 import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
-import { agentOutputSchema, agentReceipt } from "../src/public-contract.ts";
+import { agentOutputSchema, agentReceipt } from "../src/contract/agent.ts";
 import { RunRegistry } from "../src/core/run-registry.ts";
 
 describe("Agent public receipt", () => {

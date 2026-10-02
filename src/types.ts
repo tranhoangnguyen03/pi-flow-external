@@ -173,6 +173,8 @@ export interface WorkflowToolDetails {
   journalPath?: string;
   resumeFromRunId?: string;
   cachedAgentCount?: number;
+  /** Failed agent() calls delivered to the script (handled or not); never derived from snapshot rows. */
+  childFailures?: number;
   result?: unknown;
   error?: string;
   /** Monotonic spinner frame, advanced by the runtime heartbeat while agents run. */
