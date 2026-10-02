@@ -65,6 +65,8 @@ export function prepareParentContext(
   const transcript: unknown[] = [];
   let sharedTurns = 0;
   for (const message of selected) {
+    // SDK transcripts include system messages; sharing excludes their content.
+    if (message.role === "system") continue;
     if (message.role === "bashExecution") {
       if (!message.excludeFromContext) transcript.push({ role: message.role, command: message.command, output: message.output, exitCode: message.exitCode, truncated: message.truncated });
       continue;

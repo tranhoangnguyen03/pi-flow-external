@@ -1,9 +1,36 @@
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { captureParentContext, prepareParentContext, parseParentContext } from "../src/core/parent-context.ts";
 
 const user = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
 const assistant = (content: unknown[]) => ({ role: "assistant", content, timestamp: 0 }) as any;
+
+describe("SDK parent context transfer", () => {
+  const { createSession } = setupPiSubagentTestHarness();
+
+  it("shares a real SDK conversation while excluding initial and later system instructions", async () => {
+    const marker = "SYSTEM_ONLY_CONTEXT_REGRESSION_91";
+    const { session, registration } = await createSession({ extensions: [pi => {
+      pi.on("before_agent_start", event => ({ systemPrompt: `${event.systemPrompt}\n${marker}` }));
+    }] });
+    registration.setResponses([() => fauxAssistantMessage("Public assistant answer")]);
+    await session.prompt("Public user request");
+    session.sessionManager.appendMessage({ role: "system", content: `${marker}_LATER`, timestamp: Date.now() });
+    const snapshot = captureParentContext(session.sessionManager)!;
+    expect(snapshot.some(message => message.role === "system" && JSON.stringify(message).includes(marker))).toBe(true);
+    expect(snapshot.at(-1)?.role).toBe("system");
+    for (const selection of [{ mode: "full" }, { mode: "recent", turns: 1 }] as const) {
+      const shared = prepareParentContext("Current task", selection, snapshot);
+      expect(shared.prompt).toContain("Public user request");
+      expect(shared.prompt).toContain("Public assistant answer");
+      expect(shared.prompt).not.toContain(marker);
+      expect(shared.prompt).not.toContain('"role":"system"');
+      expect(shared.context).toMatchObject({ sharedTurns: 1, messages: 2 });
+    }
+  });
+});
 
 describe("parent context transfer", () => {
   it("shares recent user turns with complete tool exchanges, excluding thinking and metadata", () => {
