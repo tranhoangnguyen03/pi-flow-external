@@ -192,6 +192,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+/** Expected failures are returned, not thrown: require a successful public contract and return its data. */
+function contractData(result, label) {
+  const contract = result?.structuredContent;
+  assert(contract?.contractVersion === 1 && contract.ok === true && result.isError !== true, `${label} failed: ${JSON.stringify(contract?.error ?? result?.content)}`);
+  return contract.data;
+}
+
 /** Bound on how long withWatchdog waits for aborted work to actually settle before giving up on draining it. */
 const WATCHDOG_DRAIN_GRACE_MS = 15_000;
 
@@ -595,6 +602,7 @@ async function runDirect({ agentTool, ctx }, { role, harnessName, permission, ch
   assert(result.details?.status === "done", `Agent call did not complete: ${JSON.stringify(result.details)}`);
   const actual = typeof result.details.result === "string" ? result.details.result.trim() : undefined;
   assert(actual === expectedResult, `Expected exact result ${JSON.stringify(expectedResult)}, got ${JSON.stringify(result.details.result)}`);
+  assert(contractData(result, "Agent").run?.state?.outcome === "succeeded", "Agent receipt did not report a succeeded run");
   const summaries = walk(evidenceDir).filter((file) => file.endsWith("summary.json"));
   assert(summaries.length === 1, `Expected 1 receipt, found ${summaries.length}`);
   const summary = JSON.parse(readFileSync(summaries[0], "utf8")).summary;
@@ -614,6 +622,8 @@ async function runWorkflowMode({ workflowTool, ctx }, { role, harnessName, permi
     Array.isArray(returned) && returned.length === 2 && returned.every((value) => typeof value === "string" && value.trim() === expectedResult),
     `Workflow result did not exactly match expected ${JSON.stringify(expectedResult)}: ${JSON.stringify(returned)}`,
   );
+  const run = contractData(result, "workflow").run;
+  assert(run?.state?.outcome === "succeeded" && run.children?.count === 2 && run.children?.failed === 0, `Workflow receipt did not match its children: ${JSON.stringify(run)}`);
   const summaries = walk(evidenceDir).filter((file) => file.endsWith("summary.json"));
   assert(summaries.length === 2, `Expected 2 receipts, found ${summaries.length}`);
   const receipts = summaries.map((file) => JSON.parse(readFileSync(file, "utf8")).summary);
@@ -634,7 +644,7 @@ async function waitForActivityOrTerminal(runsTool, ctx, runId, timeoutMs, signal
   let lastStatus;
   while (Date.now() < deadline) {
     const inspected = await runsTool.execute("e2e-poll-activity", { action: "inspect", runId, view: "summary" }, signal, undefined, ctx);
-    const projection = JSON.parse(inspected.content[0].text);
+    const projection = JSON.parse(contractData(inspected, "inspect summary").page.text);
     lastStatus = projection.state?.status;
     if (projection.state?.firstActivityAt) return projection;
     if (lastStatus && lastStatus !== "queued" && lastStatus !== "running") return projection;
@@ -656,7 +666,7 @@ async function drainInspectPages(runsTool, ctx, runId, view, signal) {
       undefined,
       ctx,
     );
-    cursor = inspected.details?.nextCursor;
+    cursor = contractData(inspected, `inspect ${view}`).page?.nextCursor;
     pages += 1;
     assert(pages <= MAX_PAGES, `${view} inspection did not exhaust its nextCursor within ${MAX_PAGES} pages`);
   } while (cursor);
@@ -681,10 +691,12 @@ async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, p
     `Run ${runId} reached terminal status ${JSON.stringify(activityProjection.state?.status)} without ever reporting activity`,
   );
 
-  await runsTool.execute("e2e-cancel", { action: "cancel", runId, reason: "E2E requested cancellation" }, signal, undefined, ctx);
+  const cancelled = contractData(await runsTool.execute("e2e-cancel", { action: "cancel", runId, reason: "E2E requested cancellation" }, signal, undefined, ctx), "cancel");
+  assert(cancelled.status === "requested" || cancelled.status === "terminal", `Unexpected cancel status: ${JSON.stringify(cancelled)}`);
   const waited = await runsTool.execute("e2e-wait", { action: "wait", runIds: [runId] }, signal, undefined, ctx);
   const outcome = waited.details?.outcomes?.[0];
   assert(outcome?.outcome === "cancelled" && outcome?.error === "E2E requested cancellation", `Cancellation outcome or reason was not preserved: ${JSON.stringify(outcome)}`);
+  assert(contractData(waited, "wait").completed?.[0]?.state?.outcome === "cancelled", "Wait contract did not report the cancelled run");
 
   await drainInspectPages(runsTool, ctx, runId, "diagnostics", signal);
   await drainInspectPages(runsTool, ctx, runId, "output", signal);

@@ -1,5 +1,6 @@
 import { ExpectedFlowError } from "./core/errors.ts";
-import { agentOutputSchema, agentReceipt, type PublicError } from "./public-contract.ts";
+import { agentOutputSchema, agentReceipt } from "./contract/agent.ts";
+import type { PublicError } from "./contract/envelope.ts";
 import { getRunRecord } from "./core/run-inspection.ts";
 import { redactSecrets } from "./core/run-record.ts";
 import {

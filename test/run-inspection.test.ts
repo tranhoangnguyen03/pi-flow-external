@@ -94,10 +94,11 @@ describe("run evidence inspection", () => {
 
     const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output", limitBytes: 1_000 });
     expect(page.outputStatus).toBe("final");
+    // Every message after the first carries its "\n" separator, so pages concatenate losslessly.
     expect(page.items).toEqual([
       { id: "m1", text: "first finding" },
-      { id: "m2", text: "draft answer" },
-      { text: "canonical answer" },
+      { id: "m2", text: "\ndraft answer" },
+      { text: "\ncanonical answer" },
     ]);
     expect(page.nextCursor).toBeUndefined();
     expect(page.integrity).toBe("complete");
@@ -111,7 +112,7 @@ describe("run evidence inspection", () => {
       statuses.push(portion.outputStatus);
       cursor = portion.nextCursor;
     } while (cursor);
-    expect(paged).toBe("first findingdraft answercanonical answer");
+    expect(paged).toBe("first finding\ndraft answer\ncanonical answer");
     expect(statuses.every((status) => status === "final")).toBe(true);
 
     const repeated = createRunRecord({ directory: root });
@@ -256,6 +257,30 @@ describe("run evidence inspection", () => {
     expect(page.items).toEqual([{ id: "resp_pi", text: "streamed pi response" }]);
   });
 
+  it("pages a multi-message output stream losslessly at every page size, keeping streaming deltas inside one message", async () => {
+    const root = await temporaryRoot();
+    const record = createRunRecord({ directory: root });
+    const codex = (text: string) => ({ backend: "codex", event: { type: "item.completed", item: { type: "agent_message", text } } });
+    const agy = (text: string) => ({ backend: "agy", event: { event: "step_update", step_update: { step_type: "agent_response", step_id: "s1", text_delta: text } } });
+    for (const data of [codex("alpha"), codex("界beta"), agy("gam"), agy("ma"), codex("delta")]) await record.event("backend_event", data);
+    const expected = "alpha\n界beta\ngamma\ndelta";
+
+    const whole = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output", limitBytes: 1_000 });
+    expect(whole.items.map((item) => item.text).join("")).toBe(expected);
+    for (let limitBytes = 4; limitBytes <= 12; limitBytes++) {
+      let paged = "";
+      let cursor: string | undefined;
+      // A record without a summary is still running: its last cursor polls for more, so stop on an empty page.
+      for (;;) {
+        const page = await inspectRun({ runsDirectory: root, runId: record.runId, view: "output", limitBytes, cursor });
+        if (page.items.length === 0) break;
+        paged += page.items.map((item) => item.text).join("");
+        cursor = page.nextCursor;
+      }
+      expect(paged, `limitBytes ${limitBytes}`).toBe(expected);
+    }
+  });
+
   it("rejects malformed and cross-target cursors", async () => {
     const root = await temporaryRoot();
     const first = createRunRecord({ directory: root });
@@ -274,14 +299,21 @@ describe("run evidence inspection", () => {
       runsDirectory: root,
       runId: first.runId,
       view: "diagnostics",
-      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: 1, textOffset: 0 }),
-    })).rejects.toThrow(/cursor.*record boundary/i);
+      cursor: cursor({ v: 2, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: 1, textOffset: 0, prev: null }),
+    })).rejects.toMatchObject({ code: "cursor_invalid", message: expect.stringMatching(/cursor.*record boundary/i) });
     await expect(inspectRun({
       runsDirectory: root,
       runId: first.runId,
       view: "diagnostics",
-      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: Number.MAX_SAFE_INTEGER, textOffset: 0 }),
-    })).rejects.toThrow(/cursor.*evidence/i);
+      cursor: cursor({ v: 2, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: Number.MAX_SAFE_INTEGER, textOffset: 0, prev: null }),
+    })).rejects.toMatchObject({ code: "cursor_stale" });
+    // A cursor from the previous page format counted different offsets: stale, not silently misread.
+    await expect(inspectRun({
+      runsDirectory: root,
+      runId: first.runId,
+      view: "diagnostics",
+      cursor: cursor({ v: 1, kind: "inspect", runId: first.runId, view: "diagnostics", source: "events", position: 0, textOffset: 0 }),
+    })).rejects.toMatchObject({ code: "cursor_stale" });
     const decoded = JSON.parse(Buffer.from(page.nextCursor!, "base64url").toString("utf8"));
     await expect(inspectRun({ runsDirectory: root, runId: first.runId, view: "output", cursor: cursor({ ...decoded, textOffset: 99_999 }) })).rejects.toThrow(/cursor.*text offset/i);
     await expect(inspectRun({ runsDirectory: root, runId: first.runId, view: "output", cursor: "x".repeat(4_097) })).rejects.toThrow(/invalid.*cursor/i);

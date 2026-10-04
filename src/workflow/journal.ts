@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
+import { ExpectedFlowError } from "../core/errors.ts";
 import { hashStableValue } from "./replay-cache.ts";
 import { WORKFLOW_API_VERSION, type ChildRunOutcome, type WorkflowAgentQueuedEvent, type WorkflowAgentResultEvent, type WorkflowCachedAgentResult } from "./types.ts";
 
@@ -38,13 +39,17 @@ export interface LoadedWorkflowJournal {
   outcome?: "succeeded" | ChildRunOutcome;
   result?: unknown;
   error?: string;
+  /** complete: start and terminal lines with no bad line; incomplete: no terminal line or only a torn final line; damaged: a bad line mid-file. */
+  integrity: "complete" | "incomplete" | "damaged";
+  /** Failed agent() calls delivered to the script, when the terminal line recorded it; absent means unknown. */
+  childFailures?: number;
   children: Array<{ index: number; runId?: string; label?: string; status: "queued" | "done" | "error" | "aborted"; outcome?: ChildRunOutcome; error?: unknown }>;
 }
 
 /** A journal that exists but cannot be loaded; `project` is set when its own run_start line names one. */
-export class WorkflowJournalReadError extends Error {
-  constructor(message: string, readonly project?: string) {
-    super(message);
+export class WorkflowJournalReadError extends ExpectedFlowError {
+  constructor(message: string, readonly project: string | undefined, readonly integrity: "damaged" | "unknown") {
+    super("run_unavailable", message);
     this.name = "WorkflowJournalReadError";
   }
 }
@@ -54,8 +59,8 @@ export interface WorkflowJournalWriter {
   path: string;
   appendAgentQueued(event: WorkflowAgentQueuedEvent): Promise<void>;
   appendAgentResult(event: WorkflowAgentResultEvent): Promise<void>;
-  complete(result: unknown): Promise<void>;
-  fail(error: string, outcome?: ChildRunOutcome): Promise<void>;
+  complete(result: unknown, childFailures?: number): Promise<void>;
+  fail(error: string, outcome?: ChildRunOutcome, childFailures?: number): Promise<void>;
 }
 
 export function getSessionWorkflowDir(ctx: WorkflowSessionContextLike): string | undefined {
@@ -100,7 +105,7 @@ export async function persistWorkflowScript(params: {
 
 export async function loadWorkflowJournal(dir: string, runId: string): Promise<LoadedWorkflowJournal | undefined> {
   if (!SAFE_ID.test(runId)) {
-    throw new Error(`Invalid workflow run id: ${runId}`);
+    throw new ExpectedFlowError("request_invalid", `Invalid workflow run id: ${runId}`);
   }
   const path = workflowJournalPath(dir, runId);
   let text: string;
@@ -110,7 +115,7 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     if (isNotFound(error)) {
       return undefined;
     }
-    throw error;
+    throw new WorkflowJournalReadError(`Workflow journal ${path} could not be read: ${error instanceof Error ? error.message : String(error)}`, undefined, "unknown");
   }
 
   const agentResults: WorkflowCachedAgentResult[] = [];
@@ -124,7 +129,11 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   let outcome: LoadedWorkflowJournal["outcome"];
   let result: unknown;
   let terminalError: string | undefined;
-  for (const line of text.split(/\r?\n/)) {
+  let terminalSeen = false;
+  let childFailures: number | undefined;
+  let badLine: "none" | "tail" | "mid" = "none";
+  const lines = text.split(/\r?\n/);
+  for (const [lineIndex, line] of lines.entries()) {
     if (!line.trim()) {
       continue;
     }
@@ -132,6 +141,8 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     try {
       entry = JSON.parse(line) as Record<string, unknown>;
     } catch {
+      // Replay never reads past a bad line. A torn final line is an unfinished write; anything later means damage.
+      badLine = !terminalSeen && lines.slice(lineIndex + 1).every((rest) => !rest.trim()) ? "tail" : "mid";
       break;
     }
     if (entry.type === "run_start") {
@@ -139,6 +150,7 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
         throw new WorkflowJournalReadError(
           `Workflow journal ${path} uses an incompatible API contract; recompose with meta.apiVersion: ${WORKFLOW_API_VERSION}. No children were launched`,
           typeof entry.project === "string" ? entry.project : undefined,
+          "unknown",
         );
       }
       seenRunStart = entry.runId === runId;
@@ -152,9 +164,13 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
       status = "done";
       outcome = "succeeded";
       result = entry.result;
+      terminalSeen = true;
+      childFailures = Number.isSafeInteger(entry.childFailures) ? entry.childFailures as number : undefined;
       continue;
     }
     if (entry.type === "run_error") {
+      terminalSeen = true;
+      childFailures = Number.isSafeInteger(entry.childFailures) ? entry.childFailures as number : undefined;
       status = "error";
       outcome = entry.outcome === "cancelled" || entry.outcome === "timed_out" ? entry.outcome : "failed";
       terminalError = typeof entry.error === "string" ? entry.error : "workflow failed";
@@ -199,15 +215,21 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   }
 
   if (!seenRunStart) {
-    throw new WorkflowJournalReadError(`Workflow journal ${path} does not match run id ${runId}`, project);
+    throw new WorkflowJournalReadError(`Workflow journal ${path} does not match run id ${runId}`, project, "damaged");
   }
-  return { launch, runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children: children.filter(Boolean) };
+  const integrity = badLine === "mid" ? "damaged" : badLine === "tail" || !terminalSeen ? "incomplete" : "complete";
+  return {
+    launch, runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, integrity,
+    ...(childFailures !== undefined ? { childFailures } : {}),
+    children: children.filter(Boolean),
+  };
 }
 
 /** A listed journal that failed to load: shown as its own row instead of failing the whole listing. */
 export interface UnreadableWorkflowJournal {
   runId: string;
   unreadable: string;
+  integrity: "damaged" | "unknown";
 }
 
 export interface WorkflowJournalPage {
@@ -221,7 +243,7 @@ function workflowListCursor(name: string): string {
 
 function workflowListStart(names: string[], cursor?: string): number {
   if (!cursor) return 0;
-  if (cursor.length > 4_096) throw new Error("Invalid workflow list cursor");
+  if (cursor.length > 4_096) throw new ExpectedFlowError("cursor_invalid", "Invalid workflow list cursor");
   try {
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
     if (Object.keys(parsed).sort().join(",") !== "kind,name,v" || parsed.v !== 1 || parsed.kind !== "workflow-list" || typeof parsed.name !== "string") throw new Error();
@@ -229,7 +251,7 @@ function workflowListStart(names: string[], cursor?: string): number {
     if (index < 0) throw new Error();
     return index + 1;
   } catch {
-    throw new Error("Invalid workflow list cursor");
+    throw new ExpectedFlowError("cursor_invalid", "Invalid workflow list cursor");
   }
 }
 
@@ -254,7 +276,8 @@ export async function listWorkflowJournals(dir: string, project: string, limit =
     } catch (error) {
       // The directory is this session's own; a journal whose project cannot be read is still listed so it is never silently dropped.
       const owner = error instanceof WorkflowJournalReadError ? error.project : undefined;
-      if (owner === undefined || owner === project) journals.push({ runId, unreadable: error instanceof Error ? error.message : String(error) });
+      const integrity = error instanceof WorkflowJournalReadError ? error.integrity : "unknown";
+      if (owner === undefined || owner === project) journals.push({ runId, unreadable: error instanceof Error ? error.message : String(error), integrity });
     }
     if (journals.length >= pageLimit) {
       index++;
@@ -336,11 +359,11 @@ export async function createWorkflowJournalWriter(params: {
         result: event.result,
       });
     },
-    complete: async (result) => {
-      await enqueueAppend({ type: "run_complete", result });
+    complete: async (result, childFailures) => {
+      await enqueueAppend({ type: "run_complete", result, ...(childFailures !== undefined ? { childFailures } : {}) });
     },
-    fail: async (error, outcome = "failed") => {
-      await enqueueAppend({ type: "run_error", error, outcome });
+    fail: async (error, outcome = "failed", childFailures) => {
+      await enqueueAppend({ type: "run_error", error, outcome, ...(childFailures !== undefined ? { childFailures } : {}) });
     },
   };
 }

@@ -146,4 +146,13 @@ describe("external_runs rendering", () => {
     expect(text).toContain("Inspecting run_a");
     expect(text).toContain("The review found no issues.");
   });
+  it("renders a returned failure as its message, not as an empty list, page or wait card", () => {
+    const externalRuns = findTool("external_runs");
+    const theme = makeMockTheme() as never;
+    const message = "Run is unknown or unavailable in this session";
+    // The failure details shape for paths that used to throw to the host.
+    const text = renderToText(externalRuns.renderResult!({ content: [{ type: "text", text: message }], details: { error: message, code: "run_unavailable" } }, { expanded: false, isPartial: false }, theme, { cwd }) as never);
+    expect(text).toContain(message);
+    expect(text).not.toMatch(/Wait complete|External runs ·|Inspecting/);
+  });
 });
