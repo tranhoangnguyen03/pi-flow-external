@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -367,6 +367,113 @@ describe("external_runs", () => {
     registry.cancel("run_workflow_child");
     await expect(live.result).rejects.toThrow("stopped");
     await expect(workflowChild.result).rejects.toThrow("stopped");
+  });
+
+  it("overlays live state onto a persisted row on whichever list page it falls, never repeating it on the first page or reporting it interrupted", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const records = [
+      createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Lost owner" } }),
+      createRunRecord({ directory: runsDirectory, metadata: { parentSessionId: "session-a", project: "/project", description: "Still running" } }),
+    ];
+    for (const record of records) await record.event("queued");
+    // Run IDs list in descending order, so the smaller ID lands on page 2.
+    const [ownerless, liveId] = records.map((record) => record.runId).sort().reverse();
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const liveAgent = registry.start({ runId: liveId!, kind: "agent", sessionId: "session-a", project: "/project", run: hold });
+    registry.update(liveId!, { status: "running", description: "Still running", activity: [], activityCount: 0 });
+
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const journals = await Promise.all(["one", "two"].map((name) => createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity(name, null), name, source: "inline", project: "/project" })));
+    const [ownerlessWorkflow, liveWorkflowId] = journals.map((journal) => journal.runId).sort().reverse();
+    const liveWorkflow = registry.start({ runId: liveWorkflowId!, kind: "workflow", sessionId: "session-a", project: "/project", run: hold });
+
+    const first = await execute({ action: "list", limit: 1 });
+    expect(first.details.runs.map((run: any) => [run.runId, run.status])).toEqual([[ownerless, "interrupted_or_uncertain"]]);
+    expect(first.details.workflows.map((workflow: any) => [workflow.runId, workflow.state.status])).toEqual([[ownerlessWorkflow, "interrupted_or_uncertain"]]);
+    const second = await execute({ action: "list", limit: 1, cursor: first.details.nextCursor, workflowCursor: first.details.nextWorkflowCursor });
+    expect(second.details.runs.map((run: any) => [run.runId, run.status, run.live])).toEqual([[liveId, "running", true]]);
+    expect(second.details.workflows.map((workflow: any) => [workflow.runId, workflow.state.status, workflow.live])).toEqual([[liveWorkflowId, "running", true]]);
+
+    registry.cancel(liveId!);
+    registry.cancel(liveWorkflowId!);
+    await expect(liveAgent.result).rejects.toThrow("stopped");
+    await expect(liveWorkflow.result).rejects.toThrow("stopped");
+  });
+
+  it("counts live runs with no persisted row against the list limit, paging them before persisted rows", async () => {
+    const { execute, registry, runsDirectory } = setup();
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const handles = ["run_unpersisted_a", "run_unpersisted_b", "wf_unpersisted_a", "wf_unpersisted_b"].map((runId) =>
+      registry.start({ runId, kind: runId.startsWith("wf_") ? "workflow" : "agent", sessionId: "session-a", project: "/project", run: hold }));
+    const durable = await completedRecord(runsDirectory);
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const journal = await createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity("persisted", null), name: "persisted", source: "inline", project: "/project" });
+    await journal.complete("ok");
+
+    const seenRuns: string[] = [];
+    const seenWorkflows: string[] = [];
+    let cursor: string | undefined;
+    let workflowCursor: string | undefined;
+    for (let pages = 0; pages < 3; pages++) {
+      const listed = await execute({ action: "list", limit: 1, ...(cursor ? { cursor } : {}), ...(workflowCursor ? { workflowCursor } : {}) });
+      expect(listed.details.runs.length).toBeLessThanOrEqual(1);
+      expect(listed.details.workflows.length).toBeLessThanOrEqual(1);
+      seenRuns.push(...listed.details.runs.map((run: any) => run.runId));
+      seenWorkflows.push(...listed.details.workflows.map((workflow: any) => workflow.runId));
+      cursor = listed.details.nextCursor;
+      workflowCursor = listed.details.nextWorkflowCursor;
+    }
+    expect(seenRuns).toEqual(["run_unpersisted_a", "run_unpersisted_b", durable.runId]);
+    expect(seenWorkflows).toEqual(["wf_unpersisted_a", "wf_unpersisted_b", journal.runId]);
+
+    for (const runId of ["run_unpersisted_a", "run_unpersisted_b", "wf_unpersisted_a", "wf_unpersisted_b"]) registry.cancel(runId);
+    await Promise.all(handles.map((handle) => expect(handle.result).rejects.toThrow("stopped")));
+  });
+
+  it("resumes the unpersisted stage after its bookmarked run even when an earlier run is persisted between pages", async () => {
+    const { execute, registry, runsDirectory } = setup(0);
+    const hold = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    const [first, second] = ["a", "b"].map((name) => createWorkflowRunIdentity(name, null));
+    const handles = [first!, second!].map((identity) => registry.start({ runId: identity.runId, kind: "workflow", sessionId: "session-a", project: "/project", run: hold }));
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+
+    const page1 = await execute({ action: "list", limit: 1 });
+    expect(page1.details.workflows.map((workflow: any) => workflow.runId)).toEqual([first!.runId]);
+    // A is persisted before page 2: B must still follow, and A then appears with its persisted row.
+    await createWorkflowJournalWriter({ dir, identity: first!, name: "a", source: "inline", project: "/project" });
+    const page2 = await execute({ action: "list", limit: 1, workflowCursor: page1.details.nextWorkflowCursor });
+    expect(page2.details.workflows.map((workflow: any) => workflow.runId)).toEqual([second!.runId]);
+    const page3 = await execute({ action: "list", limit: 1, workflowCursor: page2.details.nextWorkflowCursor });
+    expect(page3.details.workflows.map((workflow: any) => workflow.runId)).toEqual([first!.runId]);
+
+    // A bookmark whose run has left the registry cannot be located: continuation fails explicitly.
+    const agents = ["run_bookmark_a", "run_bookmark_b"].map((runId) => registry.start({ runId, kind: "agent", sessionId: "session-a", project: "/project", run: hold }));
+    const agentPage = await execute({ action: "list", limit: 1 });
+    expect(agentPage.details.runs.map((run: any) => run.runId)).toEqual(["run_bookmark_a"]);
+    registry.cancel("run_bookmark_a");
+    await expect(agents[0]!.result).rejects.toThrow("stopped");
+    await expect(execute({ action: "list", limit: 1, cursor: agentPage.details.nextCursor })).rejects.toThrow(/run list changed while paging/i);
+
+    for (const runId of [first!.runId, second!.runId, "run_bookmark_b"]) registry.cancel(runId);
+    await Promise.all([...handles, agents[1]!].map((handle) => expect(handle.result).rejects.toThrow("stopped")));
+  });
+
+  it("lists an unreadable workflow journal as one uncertain row instead of failing the whole listing", async () => {
+    const { execute, runsDirectory } = setup();
+    const dir = getSessionWorkflowDir({ sessionManager: { getSessionDir: () => runsDirectory, getSessionId: () => "session-a" } })!;
+    const good = await createWorkflowJournalWriter({ dir, identity: createWorkflowRunIdentity("good", null), name: "good", source: "inline", project: "/project" });
+    await good.complete("ok");
+    writeFileSync(join(dir, "run-wf_incompatible.jsonl"), `${JSON.stringify({ type: "run_start", version: 99, apiVersion: 1, runId: "wf_incompatible", project: "/project" })}\n`);
+    writeFileSync(join(dir, "run-wf_corrupt.jsonl"), "{not json\n");
+    writeFileSync(join(dir, "run-wf_elsewhere.jsonl"), `${JSON.stringify({ type: "run_start", version: 99, apiVersion: 1, runId: "wf_elsewhere", project: "/other" })}\n`);
+
+    const listed = await execute({ action: "list" });
+    const rows = Object.fromEntries(listed.details.workflows.map((workflow: any) => [workflow.runId, workflow]));
+    expect(Object.keys(rows).sort()).toEqual([good.runId, "wf_corrupt", "wf_incompatible"].sort());
+    expect(rows[good.runId].state.status).toBe("done");
+    for (const runId of ["wf_corrupt", "wf_incompatible"]) {
+      expect(rows[runId]).toMatchObject({ live: false, state: { status: "interrupted_or_uncertain", error: expect.any(String) }, output: { available: false, finalAvailable: false } });
+    }
   });
 
   it("rejects stale live projection cursors after registry eviction", async () => {

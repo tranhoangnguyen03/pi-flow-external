@@ -41,6 +41,14 @@ export interface LoadedWorkflowJournal {
   children: Array<{ index: number; runId?: string; label?: string; status: "queued" | "done" | "error" | "aborted"; outcome?: ChildRunOutcome; error?: unknown }>;
 }
 
+/** A journal that exists but cannot be loaded; `project` is set when its own run_start line names one. */
+export class WorkflowJournalReadError extends Error {
+  constructor(message: string, readonly project?: string) {
+    super(message);
+    this.name = "WorkflowJournalReadError";
+  }
+}
+
 export interface WorkflowJournalWriter {
   runId: string;
   path: string;
@@ -128,8 +136,9 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     }
     if (entry.type === "run_start") {
       if (entry.version !== JOURNAL_VERSION || entry.apiVersion !== WORKFLOW_API_VERSION) {
-        throw new Error(
+        throw new WorkflowJournalReadError(
           `Workflow journal ${path} uses an incompatible API contract; recompose with meta.apiVersion: ${WORKFLOW_API_VERSION}. No children were launched`,
+          typeof entry.project === "string" ? entry.project : undefined,
         );
       }
       seenRunStart = entry.runId === runId;
@@ -190,13 +199,19 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   }
 
   if (!seenRunStart) {
-    throw new Error(`Workflow journal ${path} does not match run id ${runId}`);
+    throw new WorkflowJournalReadError(`Workflow journal ${path} does not match run id ${runId}`, project);
   }
   return { launch, runId, path, agentResults, name, source, project, status, outcome, result, error: terminalError, children: children.filter(Boolean) };
 }
 
+/** A listed journal that failed to load: shown as its own row instead of failing the whole listing. */
+export interface UnreadableWorkflowJournal {
+  runId: string;
+  unreadable: string;
+}
+
 export interface WorkflowJournalPage {
-  items: LoadedWorkflowJournal[];
+  items: Array<LoadedWorkflowJournal | UnreadableWorkflowJournal>;
   nextCursor?: string;
 }
 
@@ -228,12 +243,19 @@ export async function listWorkflowJournals(dir: string, project: string, limit =
   }
   const start = workflowListStart(names, cursor);
   const pageLimit = Math.max(1, Math.min(100, limit));
-  const journals: LoadedWorkflowJournal[] = [];
+  const journals: WorkflowJournalPage["items"] = [];
   let index = start;
   for (; index < names.length && index < start + 200; index++) {
     const name = names[index]!;
-    const journal = await loadWorkflowJournal(dir, name.slice(4, -6));
-    if (journal?.project === project) journals.push(journal);
+    const runId = name.slice(4, -6);
+    try {
+      const journal = await loadWorkflowJournal(dir, runId);
+      if (journal?.project === project) journals.push(journal);
+    } catch (error) {
+      // The directory is this session's own; a journal whose project cannot be read is still listed so it is never silently dropped.
+      const owner = error instanceof WorkflowJournalReadError ? error.project : undefined;
+      if (owner === undefined || owner === project) journals.push({ runId, unreadable: error instanceof Error ? error.message : String(error) });
+    }
     if (journals.length >= pageLimit) {
       index++;
       break;
