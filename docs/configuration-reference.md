@@ -127,7 +127,7 @@ $PI_CODING_AGENT_DIR/pi-flow-external/
 
 When setting configuration via the CLI, flags map to settings schema attributes as follows:
 - `--effort <level>` sets `"thinking": "<level>"` (values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `parent`).
-- `--budget <usd>` sets `"budgetUsd": <number>` on role bindings.
+- `--budget <usd>` sets `"max_budget_usd": <number>` on role bindings.
 - `--tools <list>` sets `"tools": ["..."]` (enforced on named Pi harnesses only).
 
 ---

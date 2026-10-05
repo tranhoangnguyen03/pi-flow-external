@@ -76,7 +76,8 @@ Pi recognizes the request and delegates:
 *(Programmatic / Codemode equivalent):*
 
 ```ts
-const receipt = await Agent({
+const receipt = await tools.Agent({
+  description: "Map repository architecture",
   role: "explorer",
   harness: "claude",
   permission: "readonly",
@@ -129,7 +130,8 @@ Pi automatically packages recent conversation turns into the briefing:
 *(Codemode):*
 
 ```ts
-await Agent({
+await tools.Agent({
+  description: "Review refactoring plan",
   role: "reviewer",
   harness: "codex",
   permission: "readonly",
@@ -152,7 +154,8 @@ Pi launches the run in the background, gives you a run ID, and keeps your chat s
 *(Codemode):*
 
 ```ts
-const receipt = await Agent({
+const receipt = await tools.Agent({
+  description: "Audit security-sensitive endpoints",
   role: "reviewer",
   harness: "claude",
   permission: "readonly",
@@ -162,7 +165,7 @@ const receipt = await Agent({
 
 if (receipt.ok) {
   const runId = receipt.data.run.runId;
-  await external_runs({ action: "wait", runIds: [runId], mode: "all" });
+  await tools.external_runs({ action: "wait", runIds: [runId], mode: "all" });
 }
 ```
 

@@ -29,26 +29,26 @@ Specifications for programmatic subagent delegation and tool outputs:
 
 ---
 
-### 🛠️ For Maintainers & Contributors
+### 🛠️ For Maintainers & Contributors *(Repository only — excluded from the npm package)*
 Internal system architecture, testing procedures, and release processes:
 
 | Document | Status | Purpose |
 |---|---|---|
-| **[Architecture Spec](maintainer/architecture.md)** | `Current Spec` | Component mapping, settings resolution order, and execution boundary invariants. |
-| **[Field Testing](maintainer/field-testing.md)** | `Maintainer Runbook` | Offline check suite, fake-backend smokes, and real-provider E2E test execution lanes. |
-| **[Releasing](maintainer/releasing.md)** | `Maintainer Runbook` | Automated release pipeline, versioning labels, OIDC trusted publishing, and npm checks. |
-| **[Tool Schema Compatibility](maintainer/tool-schema-compatibility.md)** | `Investigation` | Downstream client schema compatibility notes (#62). |
-| **[Maintainer Index](maintainer/README.md)** | `Overview` | Maintainer documentation suite index and active RFCs. |
+| **[Architecture Spec](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/architecture.md)** | `Current Spec` | Component mapping, settings resolution order, and execution boundary invariants. |
+| **[Field Testing](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/field-testing.md)** | `Maintainer Runbook` | Offline check suite, fake-backend smokes, and real-provider E2E test execution lanes. |
+| **[Releasing](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/releasing.md)** | `Maintainer Runbook` | Automated release pipeline, versioning labels, OIDC trusted publishing, and npm checks. |
+| **[Tool Schema Compatibility](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/tool-schema-compatibility.md)** | `Investigation` | Downstream client schema compatibility notes (#62). |
+| **[Maintainer Index](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/README.md)** | `Overview` | Maintainer documentation suite index and active RFCs. |
 
 ---
 
-### 🏛️ Historical Archives & RFCs
+### 🏛️ Historical Archives & RFCs *(Repository only — excluded from the npm package)*
 Non-normative proposals, design investigations, and dated implementation records:
 
 | Directory | Status | Notes |
 |---|---|---|
-| **[Active RFCs](maintainer/rfcs/)** | `Design Direction` | Product vision (`delegation-experience-north-star.md`) and terminal visual styling guidelines. |
-| **[Historical Archive](archive/README.md)** | `Historical Archive` | 38 dated milestone plans (`archive/plans/`) and codemode handoff bundle. |
+| **[Active RFCs](https://github.com/tranhoangnguyen03/pi-flow-external/tree/main/docs/maintainer/rfcs)** | `Design Direction` | Product vision (`delegation-experience-north-star.md`) and terminal visual styling guidelines. |
+| **[Historical Archive](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/archive/README.md)** | `Historical Archive` | 38 dated milestone plans (`archive/plans/`) and codemode handoff bundle. |
 
 ---
 

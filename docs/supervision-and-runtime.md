@@ -38,7 +38,8 @@ By default, calls to `Agent` and `workflow` are blocking: the caller waits until
 Setting `background: true` queues and starts the work asynchronously while returning an immediate receipt containing a stable handle:
 
 ```ts
-const receipt = await Agent({
+const receipt = await tools.Agent({
+  description: "Audit security-sensitive endpoints",
   role: "reviewer",
   harness: "claude",
   permission: "readonly",
