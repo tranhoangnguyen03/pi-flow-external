@@ -1,6 +1,6 @@
 {
   "name": "@tranhoangnguyen0310/pi-flow-external",
-  "version": "3.2.0-external.0",
+  "version": "3.2.1-external.0",
   "description": "External Claude Code, Codex CLI, Antigravity, Grok Build CLI, Muse Code, and OpenCode delegation for pi.",
   "type": "module",
   "main": "./index.ts",
@@ -9,14 +9,18 @@
     "index.ts",
     "src",
     "scripts/field-report.mjs",
-    "docs/*.md",
-    "AGENTS.md",
-    "CONTEXT.md",
-    "CLAUDE.md",
-    "CHANGELOG.md",
+    "assets",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
-    "assets"
+    "docs/README.md",
+    "docs/harness-reference.md",
+    "docs/configuration-reference.md",
+    "docs/supervision-and-runtime.md",
+    "docs/workflows.md",
+    "docs/troubleshooting.md",
+    "docs/migration-v4-to-v5.md",
+    "docs/public-contract.md"
   ],
   "keywords": [
     "pi-package",

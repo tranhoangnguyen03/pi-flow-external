@@ -37,7 +37,7 @@ Start with `/external` or `/external config`: a single guided overlay in TUI, st
 
 The secondary command interface is symmetric under `/external config harness` and `/external config role`: list, inspect, create, edit, set, reset, enable, disable, delete. Harness adds default/test/assist; role adds assist. Settings edits and conversion remain under config. Runtime requires v5; v4 conversion is explicit and preserves originals. CLI defaults are native on fresh installations, parent effort is an explicit policy preserved by migration. Enablement is the conjunction of harness/role/binding gates. Reset never enables. Destructive previews revalidate owned files/settings and partial deletion remains blocked. Existing runs, workflows, doctor and optional legacy purge remain. Real user settings are never automatically migrated.
 
-> Next agent: full implementation map is `docs/ARCHITECTURE_SNAPSHOT.md` (current v5 configuration and runtime map). Keep this file and `AGENTS.md` as the persistent breadcrumbs. Files under `docs/plans/` are dated records. They are not rewritten, and they are not a second runtime contract. Where a plan disagrees with `AGENTS.md`, this file, `README.md`, or the architecture snapshot, those current docs win.
+> Next agent: full implementation map is `docs/maintainer/architecture.md` (current v5 configuration and runtime map). Keep this file and `AGENTS.md` as the persistent breadcrumbs. Files under `docs/archive/plans/` are dated records. They are not rewritten, and they are not a second runtime contract. Where an archived plan disagrees with `AGENTS.md`, this file, `README.md`, or the architecture spec, those current docs win.
 
 ## Design stance
 

@@ -1,0 +1,1721 @@
+[
+  {
+    "name": "agent-success-text",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "agent-background-queued",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_queued",
+          "kind": "agent",
+          "live": true,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "queued"
+          },
+          "timing": {},
+          "output": {
+            "available": false,
+            "finalAvailable": false,
+            "delivery": "none"
+          },
+          "evidence": {
+            "integrity": "unknown",
+            "refs": [
+              {
+                "runId": "run_demo_queued",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_queued",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_queued",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "agent-failure-with-evidence",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": false,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_failed",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "error",
+            "outcome": "failed",
+            "error": "Synthetic child failure"
+          },
+          "timing": {},
+          "output": {
+            "available": false,
+            "finalAvailable": false,
+            "delivery": "none"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_failed",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_failed",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_failed",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": [],
+      "error": {
+        "code": "RUN_FAILED",
+        "message": "Synthetic child failure",
+        "runId": "run_demo_failed"
+      }
+    },
+    "hostIsError": true
+  },
+  {
+    "name": "agent-prelaunch-unsupported",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": false,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": null
+      },
+      "warnings": [],
+      "error": {
+        "code": "CAPABILITY_UNSUPPORTED",
+        "message": "Synthetic requested capability is unsupported"
+      }
+    },
+    "hostIsError": true
+  },
+  {
+    "name": "workflow-success-null",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_null",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": null
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_null",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_null",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_null",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "workflow-success-false",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_false",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": false
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_false",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_false",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_false",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "workflow-success-zero",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_zero",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": 0
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_zero",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_zero",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_zero",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "workflow-success-empty",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_empty",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": ""
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_empty",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_empty",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_empty",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "workflow-handled-failure",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_handled",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": {
+              "acceptedFindings": []
+            }
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_handled",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_handled",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_handled",
+                "view": "diagnostics"
+              }
+            ]
+          },
+          "handledFailures": 1
+        }
+      },
+      "warnings": [
+        {
+          "code": "HANDLED_CHILD_FAILURES",
+          "message": "One child failed and was explicitly handled"
+        }
+      ]
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "workflow-large-result-ref",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "workflow",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "wf_demo_large",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "reference"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "wf_demo_large",
+                "view": "summary"
+              },
+              {
+                "runId": "wf_demo_large",
+                "view": "final"
+              },
+              {
+                "runId": "wf_demo_large",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-failed-target-is-success",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "batch",
+        "entries": [
+          {
+            "runId": "run_demo_failed",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "error",
+              "outcome": "failed",
+              "error": "Synthetic child failure"
+            },
+            "timing": {},
+            "output": {
+              "available": false,
+              "finalAvailable": false,
+              "delivery": "none"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_failed",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-batch-continuation",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "batch",
+        "entries": [
+          {
+            "runId": "run_demo_success",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_success",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "nextCursor": "opaque_fixture_cursor"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-final-unavailable",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "single",
+        "runId": "run_demo_queued",
+        "view": "final",
+        "page": {
+          "text": "",
+          "encoding": "text",
+          "complete": true
+        },
+        "finalAvailable": false
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-final-json-null",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "single",
+        "runId": "wf_demo_null",
+        "view": "final",
+        "page": {
+          "text": "{\"runId\":\"wf_demo_null\",\"result\":null,\"finalAvailable\":true}",
+          "encoding": "json",
+          "complete": true
+        },
+        "finalAvailable": true
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-json-fragment",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "single",
+        "runId": "wf_demo_null",
+        "view": "final",
+        "page": {
+          "text": "{\"runId\":\"wf_demo_",
+          "encoding": "json",
+          "complete": false,
+          "nextCursor": "opaque_fixture_next"
+        },
+        "finalAvailable": true
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "inspect-preliminary-output",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "single",
+        "runId": "run_demo_queued",
+        "view": "output",
+        "page": {
+          "text": "Synthetic work in progress",
+          "encoding": "text",
+          "complete": true
+        },
+        "outputStatus": "preliminary"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "wait-mixed-with-pending",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "wait",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "any",
+        "completed": [
+          {
+            "runId": "run_demo_success",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_success",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          },
+          {
+            "runId": "run_demo_failed",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "error",
+              "outcome": "failed",
+              "error": "Synthetic child failure"
+            },
+            "timing": {},
+            "output": {
+              "available": false,
+              "finalAvailable": false,
+              "delivery": "none"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_failed",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "pending": [
+          "run_demo_pending"
+        ]
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "wait-all-completed",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "wait",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "all",
+        "completed": [
+          {
+            "runId": "run_demo_success",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_success",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "pending": []
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "list-two-cursors",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "list",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "runs": [
+          {
+            "runId": "run_demo_success",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_success",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "workflows": [
+          {
+            "runId": "wf_demo_list",
+            "kind": "workflow",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "wf_demo_list",
+                  "view": "summary"
+                },
+                {
+                  "runId": "wf_demo_list",
+                  "view": "final"
+                },
+                {
+                  "runId": "wf_demo_list",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "nextCursor": "opaque_agent_cursor",
+        "nextWorkflowCursor": "opaque_workflow_cursor"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "cancel-requested",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "cancel",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "runId": "run_demo_success",
+        "status": "requested"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "cancel-terminal",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "cancel",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "runId": "run_demo_success",
+        "status": "terminal"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "cancel-uncertain-error",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "cancel",
+      "ok": false,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": null,
+      "warnings": [],
+      "error": {
+        "code": "CANCELLATION_UNCONFIRMED",
+        "message": "Live ownership is unavailable"
+      }
+    },
+    "hostIsError": true
+  },
+  {
+    "name": "inspect-unavailable-scope-safe",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": false,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": null,
+      "warnings": [],
+      "error": {
+        "code": "RUN_UNAVAILABLE",
+        "message": "Run is unknown or unavailable in this session"
+      }
+    },
+    "hostIsError": true
+  },
+  {
+    "name": "help-contract-index",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_help",
+      "action": "help",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "kind": "index",
+        "topic": "contracts",
+        "tools": [
+          {
+            "name": "Agent",
+            "purpose": "Delegate one task"
+          }
+        ]
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "help-contract-detail-synthetic",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_help",
+      "action": "help",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "kind": "contract",
+        "topic": "contracts",
+        "tool": "Agent",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "signatures": [
+          "Agent(args)"
+        ],
+        "semantics": [
+          "Check ok before using the result."
+        ],
+        "examples": []
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "help-capability-no-probe",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_help",
+      "action": "help",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "kind": "capabilities",
+        "topic": "capabilities",
+        "harnesses": [
+          {
+            "harness": "pi-fixture",
+            "configured": true,
+            "enabled": true,
+            "readiness": "not_probed",
+            "structuredOutput": "supported",
+            "resume": "unsupported",
+            "budgetEnforcement": "not_enforced",
+            "costReporting": "unknown",
+            "permissionTiers": [
+              "readonly",
+              "edit",
+              "danger"
+            ],
+            "enforcement": "Curated tools; not an OS sandbox",
+            "contextModes": [
+              "none",
+              "recent",
+              "full"
+            ],
+            "conditions": [
+              "Synthetic fixture, not a live capability report."
+            ]
+          }
+        ]
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "help-legacy-topic",
+    "valid": true,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_help",
+      "action": "help",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "kind": "legacy",
+        "topic": "usage",
+        "text": "Synthetic help text"
+      },
+      "warnings": []
+    },
+    "hostIsError": false
+  },
+  {
+    "name": "reject-failed-without-error",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": false,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": true,
+    "reason": "Failed envelope must carry an error"
+  },
+  {
+    "name": "reject-success-with-error",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": [],
+      "error": {
+        "code": "RUN_FAILED",
+        "message": "Oops"
+      }
+    },
+    "hostIsError": false,
+    "reason": "Successful envelope must not carry error"
+  },
+  {
+    "name": "reject-unknown-version",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 2,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Unsupported contract version"
+  },
+  {
+    "name": "reject-inline-without-value",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Inline result requires value"
+  },
+  {
+    "name": "reject-reference-with-value",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "reference",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Reference-only result must not carry partial value"
+  },
+  {
+    "name": "reject-queued-final",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_queued",
+          "kind": "agent",
+          "live": true,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "queued"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "reference"
+          },
+          "evidence": {
+            "integrity": "unknown",
+            "refs": [
+              {
+                "runId": "run_demo_queued",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_queued",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_queued",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Queued is not final"
+  },
+  {
+    "name": "reject-kind-id-mismatch",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "workflow",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Workflow IDs use wf_ prefix"
+  },
+  {
+    "name": "reject-host-error-mismatch",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "Synthetic canonical answer"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": true,
+    "reason": "Host error flag must agree with ok"
+  },
+  {
+    "name": "reject-inline-over-cap",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "Agent",
+      "action": "run",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "run": {
+          "runId": "run_demo_success",
+          "kind": "agent",
+          "live": false,
+          "task": {
+            "description": "Synthetic fixture"
+          },
+          "state": {
+            "status": "done",
+            "outcome": "succeeded"
+          },
+          "timing": {},
+          "output": {
+            "available": true,
+            "finalAvailable": true,
+            "delivery": "inline",
+            "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          "evidence": {
+            "integrity": "complete",
+            "refs": [
+              {
+                "runId": "run_demo_success",
+                "view": "summary"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "final"
+              },
+              {
+                "runId": "run_demo_success",
+                "view": "diagnostics"
+              }
+            ]
+          }
+        }
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Inline cap is 16 KiB"
+  },
+  {
+    "name": "reject-nonadvancing-page",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "single",
+        "runId": "wf_demo_null",
+        "view": "final",
+        "page": {
+          "text": "{\"runId\":\"wf_demo_",
+          "encoding": "json",
+          "complete": false
+        },
+        "finalAvailable": true
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Incomplete page requires a cursor"
+  },
+  {
+    "name": "reject-completed-also-pending",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "wait",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": {
+        "mode": "any",
+        "completed": [
+          {
+            "runId": "run_demo_success",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "done",
+              "outcome": "succeeded"
+            },
+            "timing": {},
+            "output": {
+              "available": true,
+              "finalAvailable": true,
+              "delivery": "reference"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_success",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_success",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          },
+          {
+            "runId": "run_demo_failed",
+            "kind": "agent",
+            "live": false,
+            "task": {
+              "description": "Synthetic fixture"
+            },
+            "state": {
+              "status": "error",
+              "outcome": "failed",
+              "error": "Synthetic child failure"
+            },
+            "timing": {},
+            "output": {
+              "available": false,
+              "finalAvailable": false,
+              "delivery": "none"
+            },
+            "evidence": {
+              "integrity": "complete",
+              "refs": [
+                {
+                  "runId": "run_demo_failed",
+                  "view": "summary"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "final"
+                },
+                {
+                  "runId": "run_demo_failed",
+                  "view": "diagnostics"
+                }
+              ]
+            }
+          }
+        ],
+        "pending": [
+          "run_demo_pending",
+          "run_demo_success"
+        ]
+      },
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Completed and pending must be disjoint"
+  },
+  {
+    "name": "reject-success-null-data",
+    "valid": false,
+    "receipt": {
+      "contractVersion": 1,
+      "tool": "external_runs",
+      "action": "inspect",
+      "ok": true,
+      "observedAt": "2026-10-01T05:00:00Z",
+      "data": null,
+      "warnings": []
+    },
+    "hostIsError": false,
+    "reason": "Success requires a tool-specific payload"
+  }
+]

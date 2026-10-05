@@ -678,7 +678,7 @@ function textFromToolResult(toolResult: { content: Array<{ type: string; text?: 
 
 /**
  * `external_runs`'s own call/result renderer — this tool previously had none
- * (see docs/plans/2026-09-21-unified-run-experience-design.md), so a host
+ * (see docs/archive/plans/2026-09-21-unified-run-experience-design.md), so a host
  * that globally restyles unrendered tool output (e.g. installed ccstyle)
  * had nothing to preserve. Registering these hooks is necessary but not
  * sufficient by itself: a host with such an override must also be told to

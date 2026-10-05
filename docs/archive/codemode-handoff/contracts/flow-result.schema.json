@@ -1,0 +1,1098 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-flow-external:handoff:flow-result:v1",
+  "title": "Proposed Flow public tool result v1",
+  "type": "object",
+  "properties": {
+    "contractVersion": {
+      "const": 1
+    },
+    "tool": {
+      "enum": [
+        "Agent",
+        "workflow",
+        "external_runs",
+        "external_help"
+      ]
+    },
+    "action": {
+      "enum": [
+        "run",
+        "list",
+        "inspect",
+        "wait",
+        "cancel",
+        "help"
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/warning"
+      }
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "required": [
+    "contractVersion",
+    "tool",
+    "action",
+    "ok",
+    "observedAt",
+    "data",
+    "warnings"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "warning": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "INVALID_REQUEST",
+            "CONFIG_INVALID",
+            "SELECTION_UNAVAILABLE",
+            "CAPABILITY_UNSUPPORTED",
+            "RUN_UNAVAILABLE",
+            "CURSOR_INVALID",
+            "PAGE_TOO_SMALL",
+            "CONTEXT_UNAVAILABLE",
+            "CONTEXT_TOO_LARGE",
+            "RUN_FAILED",
+            "RUN_CANCELLED",
+            "RUN_TIMED_OUT",
+            "CANCELLATION_UNCONFIRMED"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "ref": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+        },
+        "view": {
+          "enum": [
+            "summary",
+            "output",
+            "diagnostics",
+            "final",
+            "launch"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "view"
+      ],
+      "additionalProperties": false
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "done",
+            "error",
+            "aborted",
+            "interrupted_or_uncertain"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out"
+          ]
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "finalAvailable": {
+          "type": "boolean"
+        },
+        "delivery": {
+          "enum": [
+            "none",
+            "inline",
+            "reference"
+          ]
+        },
+        "value": {}
+      },
+      "required": [
+        "available",
+        "finalAvailable",
+        "delivery"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "inline"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "available": {
+                "const": true
+              },
+              "finalAvailable": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "finalAvailable": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "reference"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "available": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "workflow"
+          ]
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "task": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "backend": {
+              "type": "string"
+            },
+            "harness": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "workflowRunId": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "timing": {
+          "type": "object",
+          "properties": {
+            "queueDelayMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "elapsedMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "activityAgeMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "processDurationMs": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "output": {
+          "$ref": "#/$defs/output"
+        },
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "integrity": {
+              "enum": [
+                "complete",
+                "incomplete",
+                "unknown"
+              ]
+            },
+            "refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          },
+          "required": [
+            "integrity",
+            "refs"
+          ],
+          "additionalProperties": false
+        },
+        "handledFailures": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "runId",
+        "kind",
+        "live",
+        "task",
+        "state",
+        "timing",
+        "output",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "runData": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/run"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "listData": {
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "workflows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "nextCursor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nextWorkflowCursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "runs",
+        "workflows"
+      ],
+      "additionalProperties": false
+    },
+    "batchInspect": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "const": "batch"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "nextCursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "mode",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "encoding": {
+          "enum": [
+            "text",
+            "json",
+            "ndjson"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "text",
+        "encoding",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "singleInspect": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "const": "single"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+        },
+        "view": {
+          "enum": [
+            "summary",
+            "output",
+            "diagnostics",
+            "final",
+            "launch"
+          ]
+        },
+        "page": {
+          "$ref": "#/$defs/page"
+        },
+        "finalAvailable": {
+          "type": "boolean"
+        },
+        "outputStatus": {
+          "enum": [
+            "preliminary",
+            "final",
+            "interrupted"
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "runId",
+        "view",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "inspectData": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/batchInspect"
+        },
+        {
+          "$ref": "#/$defs/singleInspect"
+        }
+      ]
+    },
+    "waitData": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "any",
+            "all"
+          ]
+        },
+        "completed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "completed",
+        "pending"
+      ],
+      "additionalProperties": false
+    },
+    "cancelData": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^(run|wf)_[A-Za-z0-9_-]{1,128}$"
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "terminal"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "properties": {
+        "harness": {
+          "type": "string",
+          "minLength": 1
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "readiness": {
+          "const": "not_probed"
+        },
+        "structuredOutput": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "unknown"
+          ]
+        },
+        "resume": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "unknown"
+          ]
+        },
+        "budgetEnforcement": {
+          "enum": [
+            "enforced",
+            "not_enforced",
+            "unknown"
+          ]
+        },
+        "costReporting": {
+          "enum": [
+            "native",
+            "estimated",
+            "partial",
+            "unavailable",
+            "unknown"
+          ]
+        },
+        "permissionTiers": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "readonly",
+              "edit",
+              "danger"
+            ]
+          }
+        },
+        "enforcement": {
+          "type": "string"
+        },
+        "contextModes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "none",
+              "recent",
+              "full"
+            ]
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "harness",
+        "configured",
+        "enabled",
+        "readiness",
+        "structuredOutput",
+        "resume",
+        "budgetEnforcement",
+        "costReporting",
+        "permissionTiers",
+        "enforcement",
+        "contextModes",
+        "conditions"
+      ],
+      "additionalProperties": false
+    },
+    "helpIndex": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "index"
+        },
+        "topic": {
+          "const": "contracts"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "purpose"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "topic",
+        "tools"
+      ],
+      "additionalProperties": false
+    },
+    "helpContract": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "contract"
+        },
+        "topic": {
+          "const": "contracts"
+        },
+        "tool": {
+          "enum": [
+            "Agent",
+            "workflow",
+            "external_runs",
+            "external_help"
+          ]
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "semantics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "topic",
+        "tool",
+        "inputSchema",
+        "outputSchema",
+        "signatures",
+        "semantics",
+        "examples"
+      ],
+      "additionalProperties": false
+    },
+    "helpCapabilities": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "capabilities"
+        },
+        "topic": {
+          "const": "capabilities"
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "topic",
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
+    "helpLegacy": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "legacy"
+        },
+        "topic": {
+          "enum": [
+            "usage",
+            "roles",
+            "permissions",
+            "workflow"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "topic",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "helpData": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/helpIndex"
+        },
+        {
+          "$ref": "#/$defs/helpContract"
+        },
+        {
+          "$ref": "#/$defs/helpCapabilities"
+        },
+        {
+          "$ref": "#/$defs/helpLegacy"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "error"
+          ]
+        },
+        "properties": {
+          "data": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "Agent"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "enum": [
+              "run"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "Agent"
+          },
+          "action": {
+            "const": "run"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/runData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "workflow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "enum": [
+              "run"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "workflow"
+          },
+          "action": {
+            "const": "run"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/runData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_runs"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "enum": [
+              "list",
+              "inspect",
+              "wait",
+              "cancel"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_runs"
+          },
+          "action": {
+            "const": "list"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/listData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_runs"
+          },
+          "action": {
+            "const": "inspect"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/inspectData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_runs"
+          },
+          "action": {
+            "const": "wait"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/waitData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_runs"
+          },
+          "action": {
+            "const": "cancel"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/cancelData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_help"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "enum": [
+              "help"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "const": "external_help"
+          },
+          "action": {
+            "const": "help"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/helpData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

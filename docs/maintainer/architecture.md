@@ -1,8 +1,8 @@
 # pi-flow-external — Architecture Snapshot
 
-This is the current implementation map for settings v5 and the guided configuration window. Read [CONTEXT.md](../CONTEXT.md) for vocabulary and [AGENTS.md](../AGENTS.md) for contributor invariants. [README.md](../README.md) owns user journeys and command syntax.
+This is the current implementation map for settings v5 and the guided configuration window. Read [CONTEXT.md](../../CONTEXT.md) for vocabulary and [AGENTS.md](../../AGENTS.md) for contributor invariants. [README.md](../../README.md) owns user journeys and command syntax.
 
-Dated files under `docs/plans/` and released changelog sections are historical evidence, not competing runtime contracts. Offline checks do not reverify past live-provider receipts. Current verification procedures are in [field-testing.md](field-testing.md); publication procedures are in [releasing.md](releasing.md).
+Dated files under `docs/archive/plans/` and released changelog sections are historical evidence, not competing runtime contracts. Offline checks do not reverify past live-provider receipts. Current verification procedures are in [field-testing.md](field-testing.md); publication procedures are in [releasing.md](releasing.md).
 
 ## 1. Entry points and execution environments
 

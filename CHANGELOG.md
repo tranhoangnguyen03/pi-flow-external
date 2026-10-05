@@ -2,6 +2,13 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [3.2.1-external.0] - 2026-10-05
+
+### Changed
+- Reorganized documentation suite: user guides remain in `docs/`, maintainer specifications and runbooks moved to `docs/maintainer/`, and historical planning documents moved to `docs/archive/`.
+- Published package no longer includes internal agent instructions (`AGENTS.md`, `CONTEXT.md`, `CLAUDE.md`), maintainer runbooks, or historical plans.
+- Explicit file listing in `package.json` replaces globs to ensure strict CI release check tracking.
+
 ## [3.2.0-external.0] - 2026-10-02
 
 ### Added

@@ -1,0 +1,62 @@
+{
+  "handoffVersion": "1.0.0",
+  "preparedDate": "2026-10-01",
+  "title": "Flow External programmable public contracts",
+  "entrypoint": "00_START_HERE.md",
+  "implementerBrief": "07_IMPLEMENTER_BRIEF.md",
+  "scope": [
+    "structured public results and errors",
+    "coordinated machine/status/evidence views",
+    "concise contract and capability discovery",
+    "existing-context compatibility tests and explicit handoff documentation"
+  ],
+  "explicitExclusions": [
+    "runtime replacement or QuickJS migration",
+    "new context mode or blackboard",
+    "automatic context expansion",
+    "Bro implementation changes",
+    "new retry/permission/lifecycle architecture"
+  ],
+  "followUpOnly": "active multi-stage context-handoff experiment described in 05_CONTEXT_HANDOFF_INTERPLAY.md",
+  "sourcePins": {
+    "tranhoangnguyen03/pi-flow-external": "ae04c8883470dcc16995f75ea2a39b5b32e729db",
+    "earendil-works/pi": "8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d"
+  },
+  "flowManifestVersion": "2.10.0-external.0",
+  "targetPiVersion": "0.99.2",
+  "sourceCheckoutIncluded": false,
+  "featureImplemented": false,
+  "repositoryTestsRun": false,
+  "realPiIntegrationRun": false,
+  "githubIssueCreated": false,
+  "externalProviderInvoked": false,
+  "packageChecks": {
+    "contractFixtures": 39,
+    "acceptedValid": 27,
+    "rejectedInvalid": 12,
+    "mockExampleChecks": 11
+  },
+  "files": [
+    "00_START_HERE.md",
+    "01_ISSUE.md",
+    "02_DESIGN.md",
+    "03_IMPLEMENTATION_PLAN.md",
+    "04_TESTS_AND_ACCEPTANCE.md",
+    "05_CONTEXT_HANDOFF_INTERPLAY.md",
+    "06_SOURCE_MAP.md",
+    "07_IMPLEMENTER_BRIEF.md",
+    "08_VALIDATION.md",
+    "MANIFEST.json",
+    "SHA256SUMS.txt",
+    "contracts/README.md",
+    "contracts/fixtures.json",
+    "contracts/flow-result.schema.json",
+    "examples/01_inspect_batch.js",
+    "examples/02_explicit_handoff.js",
+    "examples/README.md",
+    "scripts/preflight.mjs",
+    "scripts/test_examples.mjs",
+    "scripts/validate_contracts.py",
+    "scripts/verify_package.py"
+  ]
+}

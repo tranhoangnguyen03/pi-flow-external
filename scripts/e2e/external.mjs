@@ -92,7 +92,7 @@ function parseArgs(argv) {
   // so isolation is safe and desirable. This default is unconditional — an
   // inherited PI_CODING_AGENT_DIR from the caller's shell is deliberately
   // ignored unless --agent-dir was passed explicitly, otherwise a real
-  // agent dir left set in the environment (as docs/field-testing.md itself
+  // agent dir left set in the environment (as docs/maintainer/field-testing.md itself
   // tells callers to export) would silently defeat isolation. A named pi
   // harness is the opposite case — it is never written by this script, only
   // read — so it must default to the caller's REAL Pi agent directory
