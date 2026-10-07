@@ -29,27 +29,26 @@ Specifications for programmatic subagent delegation and tool outputs:
 
 ---
 
-### 🛠️ For Maintainers & Contributors
+### 🛠️ For Maintainers & Contributors *(Repository only — excluded from the npm package)*
 Internal system architecture, testing procedures, and release processes:
 
 | Document | Status | Purpose |
 |---|---|---|
-| **[Architecture Snapshot](ARCHITECTURE_SNAPSHOT.md)** | `Current Spec` | Component mapping, settings resolution order, and execution boundary invariants. |
-| **[Field Testing](field-testing.md)** | `Maintainer Runbook` | Offline check suite, fake-backend smokes, and real-provider E2E test execution lanes. |
-| **[Releasing](releasing.md)** | `Maintainer Runbook` | Automated release pipeline, versioning labels, OIDC trusted publishing, and npm checks. |
+| **[Architecture Spec](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/architecture.md)** | `Current Spec` | Component mapping, settings resolution order, and execution boundary invariants. |
+| **[Field Testing](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/field-testing.md)** | `Maintainer Runbook` | Offline check suite, fake-backend smokes, and real-provider E2E test execution lanes. |
+| **[Releasing](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/releasing.md)** | `Maintainer Runbook` | Automated release pipeline, versioning labels, OIDC trusted publishing, and npm checks. |
+| **[Tool Schema Compatibility](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/tool-schema-compatibility.md)** | `Investigation` | Downstream client schema compatibility notes (#62). |
+| **[Maintainer Index](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/maintainer/README.md)** | `Overview` | Maintainer documentation suite index and active RFCs. |
 
 ---
 
-### 🎨 Design RFCs & Historical Archives
+### 🏛️ Historical Archives & RFCs *(Repository only — excluded from the npm package)*
 Non-normative proposals, design investigations, and dated implementation records:
 
-| Document / Directory | Status | Notes |
+| Directory | Status | Notes |
 |---|---|---|
-| **[Delegation North Star](delegation-experience-north-star.md)** | `Design Direction` | Product vision for supervisor UX and assignment tracking (non-normative). |
-| **[Visual Guidelines](delegation-visual-guidelines.md)** | `Design Direction` | Terminal card palette, semantic coloring, and contrast rules. |
-| **[Tool Schema Compatibility](tool-schema-compatibility.md)** | `Historical Record` | Investigation notes for downstream client schema compatibility (#62). |
-| **`plans/`** | `Historical Archive` | 38 dated design specifications and implementation plans from prior development milestones. |
-| **`pi-flow-external-codemode-handoff/`** | `Historical Archive` | Checksummed handoff bundle for the codemode contract implementation. |
+| **[Active RFCs](https://github.com/tranhoangnguyen03/pi-flow-external/tree/main/docs/maintainer/rfcs)** | `Design Direction` | Product vision (`delegation-experience-north-star.md`) and terminal visual styling guidelines. |
+| **[Historical Archive](https://github.com/tranhoangnguyen03/pi-flow-external/blob/main/docs/archive/README.md)** | `Historical Archive` | 38 dated milestone plans (`archive/plans/`) and codemode handoff bundle. |
 
 ---
 

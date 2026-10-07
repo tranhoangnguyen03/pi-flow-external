@@ -66,7 +66,7 @@ export function compact<T extends Record<string, unknown>>(value: T): Partial<T>
  * spread alongside for compatibility — see CHANGELOG) `list`'s `runs` rows.
  * Building this once here, instead of independently in each call site,
  * removes the shape drift a durable agent row previously had relative to a
- * live one (see docs/plans/2026-09-21-unified-run-experience-design.md).
+ * live one (see docs/archive/plans/2026-09-21-unified-run-experience-design.md).
  */
 export function projectDurableAgent(durable: RunRecordListItem): AgentRunProjection {
   return {

@@ -41,6 +41,11 @@ const fail = (msg) => {
 const readVersion = (rev) => JSON.parse(run("git", ["show", `${rev}:package.json`])).version;
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+for (const entry of pkg.files ?? []) {
+	if (/[*?\[\]]/.test(entry)) {
+		fail(`package.json files array must use exact paths, not globs: "${entry}"`);
+	}
+}
 // Entries whose change means the published tarball changed.
 const shippedEntries = [...(pkg.files ?? []), "package.json", "package-lock.json"].map((f) =>
 	f.replace(/\/+$/, ""),
@@ -77,10 +82,10 @@ if (mode === "selftest") {
 		[bump("1.9.0-external.0", "1.10.0-external.1"), null],
 		[
 			matchShipped(
-				["src/a.ts", "docs/field-testing.md", "test/a.test.ts", "docs/design.md", "README.md"],
-				["src", "docs/field-testing.md", "README.md"],
+				["src/a.ts", "docs/workflows.md", "test/a.test.ts", "docs/maintainer/field-testing.md", "README.md"],
+				["src", "docs/workflows.md", "README.md"],
 			).join(","),
-			"src/a.ts,docs/field-testing.md,README.md",
+			"src/a.ts,docs/workflows.md,README.md",
 		],
 	];
 	for (const [got, want] of cases) {

@@ -41,7 +41,7 @@ Solutions to common issues, authentication questions, and environment quirks whe
 ### 8. Child Missing Earlier Conversation Context
 - **Fix:** Explicitly pass conversation turns using `context`:
   ```ts
-  Agent({ role: "reviewer", context: { mode: "recent", turns: 5 }, prompt: "..." })
+  Agent({ description: "Follow-up review", role: "reviewer", context: { mode: "recent", turns: 5 }, prompt: "..." })
   ```
 
 ### 9. Workflow Rejected Before Launch

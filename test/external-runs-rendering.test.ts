@@ -19,7 +19,7 @@ type RenderableTool = {
 /**
  * Mirrors `preservesOriginalRenderer` from the installed ccstyle host
  * (pi-cc-extensions' extensions/renderer/default-mode.ts, cited in
- * docs/plans/2026-09-21-unified-run-experience-design.md): a tool keeps its
+ * docs/archive/plans/2026-09-21-unified-run-experience-design.md): a tool keeps its
  * own rendering under ccstyle only when its name is in the host's configured
  * `excludeRenderers` AND it actually defines its own renderCall/renderResult
  * (or renderShell:"self"). Reimplemented here (not imported — pi-cc-extensions
