@@ -1,0 +1,6 @@
+{
+  "description": "One readonly Codex worker under Claude Mod supervision",
+  "modules": [
+    "./register.js"
+  ]
+}
