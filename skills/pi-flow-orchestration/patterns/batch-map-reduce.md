@@ -31,6 +31,27 @@ Defaults are examples, not an optimal setting for every model. The map phase nee
 
 The script packs by supplied size, with a per-batch item cap, and maintains a small local worker pool. That pool sits below Flow's shared concurrency limit. It does not launch one permanent worker agent: each batch is a fresh `agent()` assignment. Estimates are character counts, **not token or context-window guarantees**; include room for prompts and outputs. Split an oversized transcript into stable chunk IDs before launch, and regroup chunks when analyzing whole transcripts. The sample limits a run to 500 items; larger corpora use explicit subsets.
 
+## Adapting extraction for theme counts
+
+Codex's strict output schema supports a subset of JSON Schema: **do not add `uniqueItems`** to a theme array. It rejects that keyword before the child reads a source. Keep the schema simple and count each summarized source once per theme in JavaScript; repeated labels in one record must not inflate frequencies. A schema's acceptance still depends on the selected provider; Flow forwards it rather than rewriting it.
+
+For a `themes` property on each per-source record, use this schema and counting function. Keep the recipe's ID/status/evidence validation and missing-source accounting when adapting it. This is an adaptation fragment, not a standalone workflow:
+
+```js
+const themeSchema = {
+  type: "array",
+  items: { type: "string", enum: ["BILLING", "LOGIN", "SUPPORT"] },
+};
+function countThemes(records) {
+  return Object.fromEntries(["BILLING", "LOGIN", "SUPPORT"].map((theme) => [
+    theme,
+    records.filter((record) => record.status === "summarized" && record.themes.includes(theme)).length,
+  ]));
+}
+```
+
+This counts sources mentioning each theme, not repeated mentions. A source can contribute to multiple themes, so totals may exceed the number of sources. A provider schema rejection is a failed child run: retain the error and obtain authorization before rerunning; do not fan out the same rejected schema again automatically.
+
 ## Preserve the deliverable, not just a final paragraph
 
 Each map call must return exactly one record per requested ID: `summarized` with summary/evidence, or `unreadable` with a reason. A failed call or malformed ID set marks that batch as failed instead of silently dropping items. The workflow restores original input order and returns **all per-item records**, plus total/summarized/unreadable/failed counts and a missing-ID list.

@@ -20,10 +20,11 @@
       "mechanical": [
         {"file":"test/orchestration-patterns.test.ts","test":"maps 240 uneven items with bounded concurrency","coverage":"direct"},
         {"file":"test/orchestration-patterns.test.ts","test":"keeps unreadable items and failed batches","coverage":"direct"},
-        {"file":"test/orchestration-pattern-edges.test.ts","test":"rejects map output with $name","coverage":"direct"}
+        {"file":"test/orchestration-pattern-edges.test.ts","test":"rejects map output with $name","coverage":"direct"},
+        {"file":"test/orchestration-pattern-edges.test.ts","test":"counts each summarized source once per theme","coverage":"direct"}
       ],
       "behavioral": ["batch-corpus"], "behavioralStatus": "not_run",
-      "limits": "Direct map/reduce control-flow and record-validation coverage; source interpretation and synthesis fidelity need live review."
+      "limits": "Direct map/reduce control-flow, record validation and duplicate-label counting coverage. The theme-schema fragment avoids the observed Codex uniqueItems rejection; provider acceptance and parent adaptation still need live review. Source interpretation and synthesis fidelity need live review."
     },
     {
       "id": "pattern-pipeline", "kind": "pattern",

@@ -44,6 +44,29 @@ describe("advertised pattern edge cases", () => {
     expect(output.reduction.status).toBe("no_material");
   });
 
+  it("counts each summarized source once per theme without Codex's rejected uniqueItems keyword", async () => {
+    const guide = readFileSync(skill + "patterns/batch-map-reduce.md", "utf8");
+    const fragment = guide.match(/```js\n([\s\S]*?)\n```/)![1]!;
+    const records = [
+      { status: "summarized", themes: ["BILLING", "BILLING", "LOGIN"] },
+      { status: "summarized", themes: ["LOGIN"] },
+      { status: "summarized", themes: [] },
+      { status: "unreadable", themes: ["SUPPORT"] },
+      { status: "failed", themes: ["BILLING"] },
+    ];
+    const result = await runWorkflow(
+      'export const meta = { apiVersion: 1, name: "theme-counts", description: "Check guide adaptation" };\n' +
+      fragment + '\nawait agent("Extract themes", { role: "worker", harness: "codex", schema: { type: "object", additionalProperties: false, required: ["themes"], properties: { themes: themeSchema } } });\nreturn countThemes(args.records);',
+      options({ records }, async (call) => {
+        expect((call.schema as any).properties.themes).toEqual({
+          type: "array", items: { type: "string", enum: ["BILLING", "LOGIN", "SUPPORT"] },
+        });
+        return { themes: [] };
+      }),
+    );
+    expect(result.result).toEqual({ BILLING: 1, LOGIN: 2, SUPPORT: 0 });
+  });
+
   it("returns oversized pipeline evidence intact without launching the dependent stage", async () => {
     const evidence = "source text ".repeat(3000);
     let calls = 0;

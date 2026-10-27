@@ -2,6 +2,15 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [5.5.0-external.2] - 2026-10-27
+
+### Fixed
+- Document Codex's rejection of `uniqueItems` in strict output schemas and provide a theme-counting adaptation that counts each summarized source once per theme without that keyword.
+- Link the schema compatibility guidance from the orchestration runtime notes and test the documented fragment through Flow's workflow runtime, including repeated labels and failed/unreadable sources.
+
+### Verification limits
+- No execution-engine, permission, public API, or automatic-retry changes. The offline regression checks the example's schema shape and counting behavior; a fresh live parent-agent adaptation trial has not been run for this patch.
+
 ## [5.5.0-external.1] - 2026-10-26
 
 ### Changed

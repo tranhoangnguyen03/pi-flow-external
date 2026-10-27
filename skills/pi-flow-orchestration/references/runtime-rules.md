@@ -11,6 +11,7 @@ Use the installed version's external_help({topic:"workflow"}) and external_help(
 - agent() failures throw ChildRunError. A caught failure keeps siblings running and appears as a handled-child-failure warning; an uncaught failure ends the root and cancels siblings. If you catch a failure, include its outcome and affected scope in the returned JSON and don't claim full success.
 - Scripts must return JSON-serializable values, await every child, and call agent() at least once. There is no import, filesystem, network, Date, timers, or Math.random support in the worker. Prompts/args may carry data but not trusted code execution.
 - Prefer structured schema output when a later step branches on a result. Without schema, outputs are usually text; don't access imaginary parsed properties. A schema-conformant check is still not proof the facts are right.
+- Schemas must fit the selected provider's supported subset. Codex strict output rejects `uniqueItems`; enforce per-source uniqueness in JavaScript instead. See the [theme-counting example](../patterns/batch-map-reduce.md#adapting-extraction-for-theme-counts). Flow forwards schemas, not a portability guarantee.
 
 ## Permissions and authority
 
