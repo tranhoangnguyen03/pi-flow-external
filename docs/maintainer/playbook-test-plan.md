@@ -2,17 +2,13 @@
 
 **Scope:** PR #103. Nine live runs were reported, but runner defects, mixed child harnesses and a model-facing pagination problem prevent release qualification. See [the reported results and narrow correction plan](playbook-live-trial-followup.md). The corrected runner has mechanical regression coverage; no new live result or efficiency improvement is claimed. Keep the draft/release hold.
 
-## Read the matrix honestly
+## Evidence instead of coverage bookkeeping
 
-[playbook-coverage.json](playbook-coverage.json) inventories 22 declared recommendations: seven patterns and fifteen shared journey decisions. Each mechanical reference says **direct** or **supporting**, with an explicit limit:
+The [playbook coverage matrix](playbook-coverage.json) records the PR #103 review and is retained as historical evidence. It is no longer an update obligation or test gate. Linking a recommendation to a test name never established that the test proved the recommendation.
 
-- **Direct:** the named assertion exercises the stated mechanical slice. It does not prove model judgment or the entire recommendation.
-- **Supporting:** related infrastructure, not direct proof. Examples: a tool exists, a guide is reachable, or phase metadata parses.
-- **Behavioral scenario defined / not run:** a task and review criteria exist, but no qualifying result for the corrected candidate has been recorded. This is not a pass. Earlier reviewer-reported executions are documented separately in the live follow-up, not erased or upgraded into qualification.
+Check a changed runnable recipe with its direct mechanical regression tests. Review guidance-only edits for accuracy and practical value. Use a small, matched live-agent comparison before claiming better delegation decisions or task outcomes. Keep the existing behavior-trial runner and its evidence integrity checks for claims that need them.
 
-[test/playbook-coverage.test.mjs](../../test/playbook-coverage.test.mjs) checks mapping consistency, references, fixture provenance and package resources. It **cannot determine semantic adequacy** from the presence of a test name. Maintainers must review new recommendations and classify the actual assertions; do not preserve prompt sentences merely to fill a matrix cell.
-
-In particular, read-only concurrency does not prove worktree isolation. Flow has no built-in worktree isolation or merge arbitration. The live overlapping-edit planning case assesses the parent's decision, not a nonexistent runtime guarantee. Likewise, parser tests support phase display but do not prove the human received a proper briefing. Applicable live cases explicitly rate that briefing.
+Read-only concurrency cannot prove worktree isolation: Flow has no built-in worktree isolation or merge arbitration. Parser tests cannot prove a human received a good briefing. These require appropriate behavioral evidence.
 
 ## Mechanical regression coverage
 
