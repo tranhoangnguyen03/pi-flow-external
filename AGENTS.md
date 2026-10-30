@@ -8,7 +8,7 @@ For changes to the delegation experience, read [Agent-first development principl
 
 The detailed implementation contract below remains in force; the agent-first direction complements it rather than overriding mechanics, configuration, backends or safety guarantees. For exact behavior consult current source and tests. Verify work with `npm run check`; use [maintainer field testing](docs/maintainer/field-testing.md) for live routing checks.
 
-When adding or changing advertised playbook recommendations, update the [playbook coverage matrix](docs/maintainer/playbook-coverage.json), corresponding mechanical tests, and real-agent behavioral cases. Passing stubbed execution is not evidence of model-choice or task-quality behavior; follow [playbook verification](docs/maintainer/playbook-test-plan.md) before claiming behavioral qualification.
+When changing a runnable playbook recipe, update the authoritative recipe test for the behavior that changed. Guidance-only changes need an accuracy review, not automatic new tests or scenario paperwork. Use matched real-agent trials only when claiming better model choice, task quality, or efficiency; stubbed execution cannot prove these outcomes. The old [coverage matrix](docs/maintainer/playbook-coverage.json) is a historical snapshot, not a maintained gate. See [playbook verification](docs/maintainer/playbook-test-plan.md).
 
 ## pi-flow external contract
 
@@ -77,7 +77,9 @@ Use workflows for requested fan-out or multi-agent orchestration across agy, Cla
 - Keep one authoritative automated test per behavior at the lowest useful layer.
 - Test public contracts, trust/security boundaries, process lifecycle, cancellation/timeouts, harness-registration rollback, the zero-generated-file catalog, one-time settings conversion, the purge inventory, workflow execution/resume, and receipt integrity.
 - Do not test cosmetic rendering variations, prompt prose fragments, trivial accessors, or a model's interpretation of instructions.
-- Do not repeat the same behavior at unit, integration, and E2E levels. A regression test must replace or extend overlapping coverage.
+- Do not repeat the same behavior at unit, integration, and E2E levels. Preserve distinct failure boundaries; a new regression should replace or extend overlapping coverage.
+- A new test should name the defect or user-visible failure it catches. First inspect existing tests. Prefer a small direct check over a new Pi session, subprocess, or helper framework; delete tests when their behavior is removed.
+- Keep agent-facing evaluation paperwork proportional to actual evidence. Avoid tests that enforce recommendation-to-test name mappings, prompt wording, or coverage quotas.
 - `npm test` must remain deterministic and offline. Real-provider E2E is opt-in and change-triggered. Its default lane never prompts a root LLM to pick the tool call — it builds an in-process Pi SDK session with a faux, never-streamed root model and calls the `external_delegate`/`external_workflow`/`external_runs` tool executors directly, so only the selected external backend's own child (a real spawned CLI process, or, for `pi`, a real in-process nested Pi child) is real: `npm run e2e -- --backend <claude|codex|agy|grok|muse|opencode> [--workflow|--interrupt]`, or `npm run e2e -- --backend pi --harness <registered-name> [--workflow|--interrupt]` for a named Pi harness the caller has already registered under `harnesses` in their own real `settings.json` with real credentials configured. A separate `--routing-smoke` lane spawns a real `pi` CLI process with a real root model and a plain-language instruction to exercise natural-language tool-call routing end to end; it requires real root Pi auth/config and is never the default. An auth-blocked lane is not passing evidence.
 
 ## Verification and release
