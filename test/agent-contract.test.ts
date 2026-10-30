@@ -50,7 +50,7 @@ describe("pi-subagent agent contract", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("registers the external_delegate tool contract without an Agent alias", async () => {
+  it("registers and validates the external_delegate tool contract without an Agent alias", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "external_delegate");
@@ -77,13 +77,7 @@ describe("pi-subagent agent contract", () => {
     );
     expect(session.getAllTools().find((candidate) => candidate.name === "external_runs")).toBeDefined();
 
-    disposeSession(session);
-  });
-
-  it("requires description and prompt while exposing role-first and legacy selectors", async () => {
-    const { session } = await createSession();
-
-    const tool = session.getAllTools().find((candidate) => candidate.name === "external_delegate");
+    // Validate required fields against the same registered tool; no second Pi session.
     const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown>; anyOf?: unknown[] } | undefined;
     expect(schema?.required).toContain("description");
     expect(schema?.required).toContain("prompt");
