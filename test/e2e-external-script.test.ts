@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseArgs } from "../scripts/e2e/parse-args.mjs";
+import { preflightPiHarness } from "../scripts/e2e/preflight.mjs";
 
 const scriptPath = new URL("../scripts/e2e/external.mjs", import.meta.url).pathname;
 const temporaryDirectories: string[] = [];
@@ -49,57 +51,38 @@ function runScript(args: string[], env: Record<string, string | undefined> = {},
   }
 }
 
-describe("e2e external script argument validation", () => {
-  it("rejects an unknown --backend value", () => {
-    const result = runScript(["--backend", "gemini"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
+describe("e2e command argument validation", () => {
+  it.each([
+    { args: ["--backend", "gemini"], error: "--backend must be claude, codex, agy, grok, muse, opencode, or pi" },
+    { args: ["--backend", "pi"], error: "--backend pi requires --harness" },
+    { args: ["--backend", "codex", "--harness", "pi-deepseek"], error: "--harness only applies to --backend pi" },
+    { args: ["--backend", "codex", "--workflow", "--interrupt"], error: "--workflow and --interrupt are separate checks" },
+    { args: ["--backend", "codex", "--root-model", "openai-codex/gpt-5.6-sol"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--root-thinking", "high"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--permission", "yolo"], error: "--permission must be readonly, edit, or danger" },
+  ])("rejects $args with $error", ({ args, error }) => {
+    expect(() => parseArgs(args)).toThrow(error);
   });
 
-  it("requires --harness with --backend pi", () => {
-    const result = runScript(["--backend", "pi"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend pi requires --harness");
-  });
-
-  it("rejects --harness with a non-pi backend", () => {
-    const result = runScript(["--backend", "codex", "--harness", "pi-deepseek"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--harness only applies to --backend pi");
-  });
-
-  it("rejects combining --workflow and --interrupt", () => {
-    const result = runScript(["--backend", "codex", "--workflow", "--interrupt"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--workflow and --interrupt are separate checks");
-  });
-
-  it("rejects --root-model without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-model", "openai-codex/gpt-5.6-sol"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("rejects --root-thinking without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("accepts --root-model and --root-thinking together with --routing-smoke", () => {
-    const result = runScript(["--backend", "gemini", "--routing-smoke", "--root-model", "x", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    // Still rejected for the unrelated --backend value, not for combining routing-smoke with root flags.
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-    expect(result.stderr).not.toContain("only apply to --routing-smoke");
-  });
-
-  it("rejects an unknown --permission value", () => {
-    const result = runScript(["--backend", "codex", "--permission", "yolo"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--permission must be readonly, edit, or danger");
+  it("accepts root-model and root-thinking together in routing-smoke mode", () => {
+    const options = parseArgs(["--backend", "codex", "--routing-smoke",
+      "--root-model", "openai-codex/gpt-5.6-sol", "--root-thinking", "high"]);
+    expect(options.routingSmoke).toBe(true);
+    expect(options.rootModel).toBe("openai-codex/gpt-5.6-sol");
+    expect(options.rootThinking).toBe("high");
   });
 });
+
+// Keep the read-only rejection cases direct: the separate process smoke above
+// proves that the CLI calls this precheck before starting a Pi child.
+function preflightError(agentDir: string): string {
+  try {
+    preflightPiHarness(agentDir, "pi-deepseek");
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected the Pi harness precheck to reject invalid settings");
+}
 
 describe("e2e external script pi harness precheck", () => {
   it("fails fast with a clear message when no settings.json exists, before ever launching pi", async () => {
@@ -118,10 +101,9 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 5, harnesses: { "pi-other": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('Harness "pi-deepseek" is not registered');
-    expect(result.stderr).toContain("pi-other");
+    const error = preflightError(agentDir);
+    expect(error).toContain('Harness "pi-deepseek" is not registered');
+    expect(error).toContain("pi-other");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
   });
 
@@ -130,9 +112,8 @@ describe("e2e external script pi harness precheck", () => {
     const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, "{ not json");
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("is not valid JSON");
+    const error = preflightError(agentDir);
+    expect(error).toContain("is not valid JSON");
     expect(await readFile(settingsPath, "utf8")).toBe("{ not json");
   });
 
@@ -142,12 +123,11 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 3, defaultHarness: "agy", harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 3");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
+    const error = preflightError(agentDir);
+    expect(error).toContain("version 3");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
+    expect(error).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
   });
@@ -158,12 +138,11 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 4");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
+    const error = preflightError(agentDir);
+    expect(error).toContain("version 4");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
+    expect(error).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
   });
@@ -174,11 +153,10 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(legacyPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("Legacy configuration found");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
+    const error = preflightError(agentDir);
+    expect(error).toContain("Legacy configuration found");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
     expect(await readFile(legacyPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["harnesses.json"]);
   });
