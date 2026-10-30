@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseArgs } from "../scripts/e2e/args.mjs";
+import { preflightPiHarness } from "../scripts/e2e/settings-preflight.mjs";
 
 const scriptPath = new URL("../scripts/e2e/external.mjs", import.meta.url).pathname;
 const temporaryDirectories: string[] = [];
@@ -49,159 +51,95 @@ function runScript(args: string[], env: Record<string, string | undefined> = {},
   }
 }
 
-describe("e2e external script argument validation", () => {
-  it("rejects an unknown --backend value", () => {
+describe("e2e CLI arguments", () => {
+  it.each([
+    { args: ["--backend", "gemini"], error: "--backend must be claude, codex, agy, grok, muse, opencode, or pi" },
+    { args: ["--backend", "pi"], error: "--backend pi requires --harness" },
+    { args: ["--backend", "codex", "--harness", "pi-deepseek"], error: "--harness only applies to --backend pi" },
+    { args: ["--backend", "codex", "--workflow", "--interrupt"], error: "--workflow and --interrupt are separate checks" },
+    { args: ["--backend", "codex", "--root-model", "x"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--root-thinking", "high"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--permission", "yolo"], error: "--permission must be readonly, edit, or danger" },
+  ])("rejects invalid option combination: $args", ({ args, error }) => {
+    expect(() => parseArgs(args)).toThrow(error);
+  });
+
+  it("accepts root options when routing smoke is selected", () => {
+    const options = parseArgs(["--backend", "codex", "--routing-smoke", "--root-model", "x", "--root-thinking", "medium"]);
+    expect(options.rootModel).toBe("x");
+    expect(options.rootThinking).toBe("medium");
+    expect(options.routingSmoke).toBe(true);
+  });
+
+  it("still reports an argument failure through the CLI entry point", () => {
     const result = runScript(["--backend", "gemini"]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-  });
-
-  it("requires --harness with --backend pi", () => {
-    const result = runScript(["--backend", "pi"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend pi requires --harness");
-  });
-
-  it("rejects --harness with a non-pi backend", () => {
-    const result = runScript(["--backend", "codex", "--harness", "pi-deepseek"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--harness only applies to --backend pi");
-  });
-
-  it("rejects combining --workflow and --interrupt", () => {
-    const result = runScript(["--backend", "codex", "--workflow", "--interrupt"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--workflow and --interrupt are separate checks");
-  });
-
-  it("rejects --root-model without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-model", "openai-codex/gpt-5.6-sol"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("rejects --root-thinking without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("accepts --root-model and --root-thinking together with --routing-smoke", () => {
-    const result = runScript(["--backend", "gemini", "--routing-smoke", "--root-model", "x", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    // Still rejected for the unrelated --backend value, not for combining routing-smoke with root flags.
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-    expect(result.stderr).not.toContain("only apply to --routing-smoke");
-  });
-
-  it("rejects an unknown --permission value", () => {
-    const result = runScript(["--backend", "codex", "--permission", "yolo"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--permission must be readonly, edit, or danger");
+    expect(result.stderr).toContain("--backend must be claude");
   });
 });
 
-describe("e2e external script pi harness precheck", () => {
-  it("fails fast with a clear message when no settings.json exists, before ever launching pi", async () => {
-    const agentDir = await makeAgentDir();
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("No settings.json found");
-    expect(result.stderr).toContain("pi-deepseek");
-    expect(result.stderr).toContain("will not create or modify");
-    await expect(readFile(join(agentDir, "pi-flow-external", "settings.json"), "utf8")).rejects.toThrow();
+describe("named Pi harness preflight", () => {
+  const check = (dir: string) => preflightPiHarness(dir, "pi-deepseek");
+  const settingsPath = (dir: string) => join(dir, "pi-flow-external", "settings.json");
+
+  it("rejects absent settings without creating files", async () => {
+    const dir = await makeAgentDir();
+    expect(() => check(dir)).toThrow("No settings.json found");
+    expect(() => check(dir)).toThrow("will not create or modify");
+    await expect(readFile(settingsPath(dir), "utf8")).rejects.toThrow();
   });
 
-  it("fails fast and lists registered harnesses when the requested one is missing", async () => {
-    const agentDir = await makeAgentDir();
-    const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
-    const body = `${JSON.stringify({ version: 5, harnesses: { "pi-other": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } }, null, 2)}\n`;
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
-    await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('Harness "pi-deepseek" is not registered');
-    expect(result.stderr).toContain("pi-other");
-    expect(await readFile(settingsPath, "utf8")).toBe(body);
+  it("reports registered alternatives without touching settings", async () => {
+    const dir = await makeAgentDir();
+    const body = JSON.stringify({ version: 5, harnesses: { "pi-other": { model: "deepseek/deepseek-chat" } } });
+    await mkdir(join(dir, "pi-flow-external"), { recursive: true });
+    await writeFile(settingsPath(dir), body);
+    expect(() => check(dir)).toThrow('Harness "pi-deepseek" is not registered');
+    expect(() => check(dir)).toThrow("pi-other");
+    expect(await readFile(settingsPath(dir), "utf8")).toBe(body);
   });
 
-  it("fails fast on malformed settings.json", async () => {
-    const agentDir = await makeAgentDir();
-    const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
-    await writeFile(settingsPath, "{ not json");
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("is not valid JSON");
-    expect(await readFile(settingsPath, "utf8")).toBe("{ not json");
+  it("rejects malformed settings without editing them", async () => {
+    const dir = await makeAgentDir();
+    await mkdir(join(dir, "pi-flow-external"), { recursive: true });
+    await writeFile(settingsPath(dir), "{ not json");
+    expect(() => check(dir)).toThrow("is not valid JSON");
+    expect(await readFile(settingsPath(dir), "utf8")).toBe("{ not json");
   });
 
-  it("tells a version 3 installation to convert and does not modify the file", async () => {
-    const agentDir = await makeAgentDir();
-    const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
-    const body = `${JSON.stringify({ version: 3, defaultHarness: "agy", harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
-    await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 3");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
-    expect(await readFile(settingsPath, "utf8")).toBe(body);
-    expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
+  it.each([3, 4])("requires conversion for version %i without changing settings", async (version) => {
+    const dir = await makeAgentDir();
+    const body = JSON.stringify({ version, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat" } } });
+    await mkdir(join(dir, "pi-flow-external"), { recursive: true });
+    await writeFile(settingsPath(dir), body);
+    expect(() => check(dir)).toThrow(`version ${version}, not 5`);
+    expect(() => check(dir)).toThrow("Run /external config convert to upgrade");
+    expect(await readFile(settingsPath(dir), "utf8")).toBe(body);
+    expect(await readdir(join(dir, "pi-flow-external"))).toEqual(["settings.json"]);
   });
 
-  it("tells a version 4 installation to convert and never converts or modifies the real file", async () => {
-    const agentDir = await makeAgentDir();
-    const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
-    const body = `${JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
-    await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 4");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
-    expect(await readFile(settingsPath, "utf8")).toBe(body);
-    expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
-  });
-
-  it("tells a leftover harnesses.json installation to convert and does not modify it", async () => {
-    const agentDir = await makeAgentDir();
-    const legacyPath = join(agentDir, "pi-flow-external", "harnesses.json");
-    const body = `${JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
+  it("rejects legacy harnesses.json without modifying the file", async () => {
+    const dir = await makeAgentDir();
+    const legacyPath = join(dir, "pi-flow-external", "harnesses.json");
+    const body = JSON.stringify({ version: 1, harnesses: {} });
+    await mkdir(join(dir, "pi-flow-external"), { recursive: true });
     await writeFile(legacyPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("Legacy configuration found");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
+    expect(() => check(dir)).toThrow("Legacy configuration found");
+    expect(() => check(dir)).toThrow("Run /external config convert to upgrade");
     expect(await readFile(legacyPath, "utf8")).toBe(body);
-    expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["harnesses.json"]);
+    expect(await readdir(join(dir, "pi-flow-external"))).toEqual(["harnesses.json"]);
   });
 
-  it("passes the precheck (and only fails later, on real model resolution) once the harness is registered in settings version 5", async () => {
-    const agentDir = await makeAgentDir();
-    const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
-    const body = `${JSON.stringify({ version: 5, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } }, null, 2)}\n`;
-    await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
-    await writeFile(settingsPath, body);
-    // The default lane never spawns a "pi" binary at all (it builds the SDK
-    // session in-process), so unlike the old spawn-based check this fails
-    // for a real, later reason: "pi-deepseek" points at a deepseek model
-    // that isn't registered anywhere in this fresh, credential-less agent
-    // dir. That keeps this a fast, deterministic unit check of the precheck
-    // itself (no network access), not a real end-to-end provider run.
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir, "--timeout-ms", "3000"], {}, 20_000);
+  it("passes registered v5 harness preflight and reaches model resolution through the CLI", async () => {
+    const dir = await makeAgentDir();
+    const body = JSON.stringify({ version: 5, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } });
+    await mkdir(join(dir, "pi-flow-external"), { recursive: true });
+    await writeFile(settingsPath(dir), body);
+    expect(() => check(dir)).not.toThrow();
+    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", dir, "--timeout-ms", "3000"], {}, 20_000);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).not.toContain("No settings.json found");
-    expect(result.stderr).not.toContain("is not registered");
-    expect(result.stderr).not.toContain("to convert");
     expect(result.stderr).toContain("was not found in the registry");
-    expect(await readFile(settingsPath, "utf8")).toBe(body);
+    expect(await readFile(settingsPath(dir), "utf8")).toBe(body);
   });
 });
 

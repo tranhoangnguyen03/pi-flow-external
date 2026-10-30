@@ -6,108 +6,14 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "./args.mjs";
+import { readSettingsFile, preflightPiHarness } from "./settings-preflight.mjs";
 
-const defaults = {
-  claude: { model: "claude-sonnet-5", thinking: "high" },
-  codex: { model: "gpt-5.6-sol", thinking: "high" },
-  agy: { model: "gemini-3.7-flash-high", thinking: "high" },
-  grok: { model: "grok-4.6", thinking: "high" },
-  muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
-  // OpenCode needs no pinned model (its own configured default applies; pass
-  // --model provider/model to pin one). Thinking is a model variant, so it
-  // needs --model too.
-  opencode: {},
-  // No fixed model/thinking default: a named pi harness pins its own model and
-  // thinking in the caller's real settings.json (version 5) harnesses map;
-  // --harness names which one.
-  pi: {},
-};
-const PERMISSION_TIERS = ["readonly", "edit", "danger"];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 let cleanupFixture;
 process.once("exit", () => {
   if (cleanupFixture) removeCliFixture(cleanupFixture);
 });
-
-function parseArgs(argv) {
-  const options = {
-    backend: "codex",
-    routingSmoke: false,
-    rootModel: "openai-codex/gpt-5.6-sol",
-    rootThinking: "high",
-    runRoot: path.join(tmpdir(), `pi-flow-external-e2e-${randomUUID()}`),
-    timeoutMs: 180_000,
-    workflow: false,
-    interrupt: false,
-    keep: false,
-  };
-  let rootModelProvided = false;
-  let rootThinkingProvided = false;
-  let agentDirProvided = false;
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index];
-    const value = () => {
-      if (argv[index + 1] === undefined) throw new Error(`${arg} requires a value`);
-      return argv[++index];
-    };
-    if (arg === "--backend") options.backend = value();
-    else if (arg === "--harness") options.harness = value();
-    else if (arg === "--model") options.model = value();
-    else if (arg === "--thinking") options.thinking = value();
-    else if (arg === "--permission") options.permission = value();
-    else if (arg === "--root-model") { options.rootModel = value(); rootModelProvided = true; }
-    else if (arg === "--root-thinking") { options.rootThinking = value(); rootThinkingProvided = true; }
-    else if (arg === "--agent-dir") { options.agentDir = path.resolve(value()); agentDirProvided = true; }
-    else if (arg === "--run-root") options.runRoot = path.resolve(value());
-    else if (arg === "--timeout-ms") options.timeoutMs = Number(value());
-    else if (arg === "--workflow") options.workflow = true;
-    else if (arg === "--interrupt") options.interrupt = true;
-    else if (arg === "--routing-smoke") options.routingSmoke = true;
-    else if (arg === "--keep") options.keep = true;
-    else if (arg === "--help" || arg === "-h") options.help = true;
-    else throw new Error(`Unknown option: ${arg}`);
-  }
-  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-  if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 5");
-  if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
-  if (options.backend === "opencode" && options.thinking !== undefined && options.model === undefined) throw new Error("--thinking on --backend opencode names a model variant and needs --model provider/model");
-  if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
-    throw new Error("--permission must be readonly, edit, or danger");
-  }
-  // Field runs, including Grok, request a tier on the child call. Omit the
-  // flag to keep this runner's existing explicit danger tier.
-  options.permission ??= "danger";
-  if (options.workflow && options.interrupt) throw new Error("--workflow and --interrupt are separate checks");
-  // --root-model/--root-thinking only mean anything when a real root Pi LLM is
-  // actually prompted to choose the tool call, which only happens in the
-  // --routing-smoke lane. The default deterministic lane below never prompts
-  // a root model at all (it calls external_delegate/external_workflow/external_runs directly), so
-  // accepting these flags there would silently do nothing and mislead callers
-  // into thinking they changed root behavior.
-  if (!options.routingSmoke && (rootModelProvided || rootThinkingProvided)) {
-    throw new Error("--root-model and --root-thinking only apply to --routing-smoke");
-  }
-  // Only claude/codex/agy/grok/muse/opencode get an isolated, disposable agent dir by
-  // default: this script writes their temporary profile file into it itself,
-  // so isolation is safe and desirable. This default is unconditional — an
-  // inherited PI_CODING_AGENT_DIR from the caller's shell is deliberately
-  // ignored unless --agent-dir was passed explicitly, otherwise a real
-  // agent dir left set in the environment (as docs/maintainer/field-testing.md itself
-  // tells callers to export) would silently defeat isolation. A named pi
-  // harness is the opposite case — it is never written by this script, only
-  // read — so it must default to the caller's REAL Pi agent directory
-  // (matching the README's own PI_CODING_AGENT_DIR:-$HOME/.pi/agent
-  // convention), or every --backend pi run would silently look at an empty,
-  // freshly-created isolated directory that could never contain the harness
-  // the caller actually registered.
-  options.agentDir ??= options.backend === "pi"
-    ? (process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"))
-    : path.join(options.runRoot, "agent");
-  options.agentDirProvided = agentDirProvided;
-  options.model ??= defaults[options.backend].model;
-  options.thinking ??= defaults[options.backend].thinking;
-  return options;
-}
 
 function help() {
   console.log(`Usage: npm run e2e -- [options]
@@ -225,63 +131,6 @@ function withWatchdog(promise, controller, timeoutMs, message) {
     await Promise.race([settleQuietly, new Promise((resolve) => setTimeout(resolve, WATCHDOG_DRAIN_GRACE_MS))]);
     throw new Error(message);
   })();
-}
-
-function settingsPathFor(agentDir) {
-  return path.join(agentDir, "pi-flow-external", "settings.json");
-}
-
-/**
- * Read settings without writing. Version 1–3 and a leftover harnesses.json
- * are an actionable conversion, never something this script rewrites.
- */
-function readSettingsFile(agentDir) {
-  const settingsPath = settingsPathFor(agentDir);
-  const legacyHarnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
-  if (!existsSync(settingsPath)) {
-    if (existsSync(legacyHarnessesPath)) {
-      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external config convert to upgrade it to settings.json version 5. This script will not modify ${agentDir}.`);
-    }
-    return { settingsPath, missing: true };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch (error) {
-    throw new Error(`${settingsPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${settingsPath} must be a JSON object. This script will not modify it.`);
-  }
-  // Conversion is the user's explicit, reviewed action; this script never converts a real installation.
-  if (parsed.version !== 5) {
-    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 5. Run /external config convert to upgrade this installation. This script will not modify it.`);
-  }
-  return { settingsPath, missing: false, parsed };
-}
-
-/**
- * Doctor-style precheck: confirm the named pi harness is registered in the
- * real settings.json version 5 harnesses map before spending time on the
- * real backend call. Model shape and presence only; live provider auth is
- * not verified here. A version 1–4 file is reported for conversion and is
- * never rewritten.
- */
-function preflightPiHarness(agentDir, harnessName) {
-  const loaded = readSettingsFile(agentDir);
-  if (loaded.missing) {
-    throw new Error(`No settings.json found at ${loaded.settingsPath}. Register "${harnessName}" under "harnesses" in settings.json version 5. This script will not create or modify it.`);
-  }
-  const harnesses = loaded.parsed.harnesses;
-  const registry = harnesses && typeof harnesses === "object" && !Array.isArray(harnesses) ? harnesses : undefined;
-  const entry = registry ? registry[harnessName] : undefined;
-  if (!entry || typeof entry.model !== "string" || !entry.model.trim()) {
-    const registered = registry ? Object.keys(registry) : [];
-    throw new Error(
-      `Harness "${harnessName}" is not registered in ${loaded.settingsPath}. ` +
-      `Registered harnesses: ${registered.join(", ") || "none"}.`,
-    );
-  }
 }
 
 function writeSettingsAtomically(settingsPath, record) {
