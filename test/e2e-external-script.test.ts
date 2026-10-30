@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../scripts/e2e/parse-args.mjs";
+import { preflightPiHarness } from "../scripts/e2e/preflight.mjs";
 
 const scriptPath = new URL("../scripts/e2e/external.mjs", import.meta.url).pathname;
 const temporaryDirectories: string[] = [];
@@ -72,6 +73,17 @@ describe("e2e command argument validation", () => {
   });
 });
 
+// Keep the read-only rejection cases direct: the separate process smoke above
+// proves that the CLI calls this precheck before starting a Pi child.
+function preflightError(agentDir: string): string {
+  try {
+    preflightPiHarness(agentDir, "pi-deepseek");
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected the Pi harness precheck to reject invalid settings");
+}
+
 describe("e2e external script pi harness precheck", () => {
   it("fails fast with a clear message when no settings.json exists, before ever launching pi", async () => {
     const agentDir = await makeAgentDir();
@@ -89,10 +101,9 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 5, harnesses: { "pi-other": { model: "deepseek/deepseek-chat", thinking: "high", preset: "minimal" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('Harness "pi-deepseek" is not registered');
-    expect(result.stderr).toContain("pi-other");
+    const error = preflightError(agentDir);
+    expect(error).toContain('Harness "pi-deepseek" is not registered');
+    expect(error).toContain("pi-other");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
   });
 
@@ -101,9 +112,8 @@ describe("e2e external script pi harness precheck", () => {
     const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, "{ not json");
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("is not valid JSON");
+    const error = preflightError(agentDir);
+    expect(error).toContain("is not valid JSON");
     expect(await readFile(settingsPath, "utf8")).toBe("{ not json");
   });
 
@@ -113,12 +123,11 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 3, defaultHarness: "agy", harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 3");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
+    const error = preflightError(agentDir);
+    expect(error).toContain("version 3");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
+    expect(error).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
   });
@@ -129,12 +138,11 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 4, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(settingsPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("version 4");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
-    expect(result.stderr).not.toContain("was not found in the registry");
+    const error = preflightError(agentDir);
+    expect(error).toContain("version 4");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
+    expect(error).not.toContain("was not found in the registry");
     expect(await readFile(settingsPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["settings.json"]);
   });
@@ -145,11 +153,10 @@ describe("e2e external script pi harness precheck", () => {
     const body = `${JSON.stringify({ version: 1, harnesses: { "pi-deepseek": { model: "deepseek/deepseek-chat", thinking: "high" } } }, null, 2)}\n`;
     await mkdir(join(agentDir, "pi-flow-external"), { recursive: true });
     await writeFile(legacyPath, body);
-    const result = runScript(["--backend", "pi", "--harness", "pi-deepseek", "--agent-dir", agentDir]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("Legacy configuration found");
-    expect(result.stderr).toContain("Run /external config convert to upgrade");
-    expect(result.stderr).toContain("will not modify");
+    const error = preflightError(agentDir);
+    expect(error).toContain("Legacy configuration found");
+    expect(error).toContain("Run /external config convert to upgrade");
+    expect(error).toContain("will not modify");
     expect(await readFile(legacyPath, "utf8")).toBe(body);
     expect(await readdir(join(agentDir, "pi-flow-external"))).toEqual(["harnesses.json"]);
   });
