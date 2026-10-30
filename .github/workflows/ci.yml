@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   check:
+    # Labels change release policy, not source code. Do not repeat three full suites.
+    if: ${{ github.event.action != 'labeled' && github.event.action != 'unlabeled' }}
     name: Check (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
@@ -41,7 +43,21 @@ jobs:
       - name: Package dry run
         run: npm pack --dry-run
 
-      - name: Release metadata
+  release-metadata:
+    name: Release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Validate metadata
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
