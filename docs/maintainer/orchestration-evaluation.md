@@ -69,4 +69,4 @@ Only add new runtime helpers, automatic orchestration modes, or stronger UI base
 
 ## Dual-lane acceptance for the seven patterns (PR #103)
 
-See [Playbook Verification](playbook-test-plan.md) and its checked [coverage matrix](playbook-coverage.json). These connect each recommendation to existing or new mechanical tests and to an opt-in real Pi scenario with independently reviewed results. Do not infer model-quality or natural skill discovery from passing JS tests alone.
+See [Playbook Verification](playbook-test-plan.md) for executable recipe checks and opt-in, reviewed real Pi trials. Add a test when a distinct mechanical failure warrants it; use matched live trials for model-quality and natural-discovery claims.

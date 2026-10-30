@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseArgs } from "../scripts/e2e/args.mjs";
 
 const scriptPath = new URL("../scripts/e2e/external.mjs", import.meta.url).pathname;
 const temporaryDirectories: string[] = [];
@@ -49,55 +50,30 @@ function runScript(args: string[], env: Record<string, string | undefined> = {},
   }
 }
 
-describe("e2e external script argument validation", () => {
-  it("rejects an unknown --backend value", () => {
+describe("e2e CLI arguments", () => {
+  it.each([
+    { args: ["--backend", "gemini"], error: "--backend must be claude, codex, agy, grok, muse, opencode, or pi" },
+    { args: ["--backend", "pi"], error: "--backend pi requires --harness" },
+    { args: ["--backend", "codex", "--harness", "pi-deepseek"], error: "--harness only applies to --backend pi" },
+    { args: ["--backend", "codex", "--workflow", "--interrupt"], error: "--workflow and --interrupt are separate checks" },
+    { args: ["--backend", "codex", "--root-model", "x"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--root-thinking", "high"], error: "--root-model and --root-thinking only apply to --routing-smoke" },
+    { args: ["--backend", "codex", "--permission", "yolo"], error: "--permission must be readonly, edit, or danger" },
+  ])("rejects invalid option combination: $args", ({ args, error }) => {
+    expect(() => parseArgs(args)).toThrow(error);
+  });
+
+  it("accepts root options when routing smoke is selected", () => {
+    const options = parseArgs(["--backend", "codex", "--routing-smoke", "--root-model", "x", "--root-thinking", "medium"]);
+    expect(options.rootModel).toBe("x");
+    expect(options.rootThinking).toBe("medium");
+    expect(options.routingSmoke).toBe(true);
+  });
+
+  it("still reports an argument failure through the CLI entry point", () => {
     const result = runScript(["--backend", "gemini"]);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-  });
-
-  it("requires --harness with --backend pi", () => {
-    const result = runScript(["--backend", "pi"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--backend pi requires --harness");
-  });
-
-  it("rejects --harness with a non-pi backend", () => {
-    const result = runScript(["--backend", "codex", "--harness", "pi-deepseek"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--harness only applies to --backend pi");
-  });
-
-  it("rejects combining --workflow and --interrupt", () => {
-    const result = runScript(["--backend", "codex", "--workflow", "--interrupt"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--workflow and --interrupt are separate checks");
-  });
-
-  it("rejects --root-model without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-model", "openai-codex/gpt-5.6-sol"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("rejects --root-thinking without --routing-smoke", () => {
-    const result = runScript(["--backend", "codex", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--root-model and --root-thinking only apply to --routing-smoke");
-  });
-
-  it("accepts --root-model and --root-thinking together with --routing-smoke", () => {
-    const result = runScript(["--backend", "gemini", "--routing-smoke", "--root-model", "x", "--root-thinking", "high"]);
-    expect(result.code).not.toBe(0);
-    // Still rejected for the unrelated --backend value, not for combining routing-smoke with root flags.
-    expect(result.stderr).toContain("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
-    expect(result.stderr).not.toContain("only apply to --routing-smoke");
-  });
-
-  it("rejects an unknown --permission value", () => {
-    const result = runScript(["--backend", "codex", "--permission", "yolo"]);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("--permission must be readonly, edit, or danger");
+    expect(result.stderr).toContain("--backend must be claude");
   });
 });
 

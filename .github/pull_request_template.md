@@ -4,3 +4,8 @@
 - [ ] Otherwise: labelled `release:none`.
 
 CI enforces this. Merging a PR that bumps the version tags it, publishes to npm, and creates the GitHub release automatically. See [`docs/maintainer/releasing.md`](../docs/maintainer/releasing.md).
+
+## Testing
+
+- What distinct regression could this change introduce? Name the existing test that catches it, or explain why a new test is needed. Update or replace overlapping tests rather than adding parallel versions.
+- If the change affects a provider or runtime boundary, note any targeted real-provider checks and their results; mark unavailable checks as unverified.
