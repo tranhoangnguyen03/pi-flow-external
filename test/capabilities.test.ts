@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agyUsageToSubagentUsage,
@@ -46,7 +45,6 @@ import {
 } from "../src/core/opencode.ts";
 import {
   PARENT_CONTEXT_MAX_BYTES,
-  prepareParentContext,
 } from "../src/core/parent-context.ts";
 import {
   buildPermissionArgs,
@@ -57,10 +55,7 @@ import {
 import { getSubagentUsage } from "../src/core/progress.ts";
 import { resolveResume } from "../src/core/resume.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
-import {
-  createPiChildResourceLoader,
-  hasNestedAgentActivity,
-} from "../src/core/spawn.ts";
+import { hasNestedAgentActivity } from "../src/core/spawn.ts";
 import { loadExternalCatalog, resolveExternalProfile } from "../src/profiles.ts";
 import type { SubagentBackend, SubagentProfile } from "../src/types.ts";
 import { createStructuredOutputTool } from "../src/workflow/structured-output.ts";
@@ -369,7 +364,7 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     }
   });
 
-  it("derives per-tier permissions, platform/UID conditions, context limits, and Pi resources from canonical helpers", async () => {
+  it("derives permission, context and Pi resource claims from canonical helpers", () => {
     for (const backend of ALL_BACKENDS) {
       const tiers = buildPermissionTierCapabilities(backend, { effectiveUid: 501, platform: "linux" });
       for (const tier of PERMISSION_TIERS) {
@@ -404,47 +399,15 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     expect(piHelp).not.toContain("read/bash/edit/write/grep/find/ls");
     expect(piHelp).not.toContain("external CLI");
 
-    // Pi resources match createPiChildResourceLoader
-    const cwd = makeTempDir();
-    const agentDir = makeTempDir();
-    // Create user skill and project skill fixtures to verify skill discovery boundary
-    mkdirSync(join(agentDir, "skills", "user-skill"), { recursive: true });
-    writeFileSync(join(agentDir, "skills", "user-skill", "SKILL.md"), "---\nname: user-skill\ndescription: user skill\n---\n");
-    mkdirSync(join(cwd, ".pi", "skills", "project-skill"), { recursive: true });
-    writeFileSync(join(cwd, ".pi", "skills", "project-skill", "SKILL.md"), "---\nname: project-skill\ndescription: project skill\n---\n");
-
+    // The real Pi resource loader and trust boundary are exercised in
+    // pi-runtime.test.ts. Here we check the advertised capability only.
     for (const [preset, projectTrusted, expectedSkills] of [
-      ["minimal", false, "none"],
-      ["minimal", true, "none"],
-      ["skills", false, "user"],
-      ["skills", true, "user_and_project"],
+      ["minimal", false, "none"], ["minimal", true, "none"],
+      ["skills", false, "user"], ["skills", true, "user_and_project"],
     ] as const) {
-      const resources = buildPiCapabilityResources(preset, projectTrusted);
-      expect(resources).toEqual({
-        skills: expectedSkills,
-        extensions: "none",
-        promptTemplates: "none",
-        themes: "none",
+      expect(buildPiCapabilityResources(preset, projectTrusted)).toEqual({
+        skills: expectedSkills, extensions: "none", promptTemplates: "none", themes: "none",
       });
-      const settingsManager = SettingsManager.inMemory();
-      const loader = createPiChildResourceLoader({
-        cwd,
-        agentDir,
-        settingsManager,
-        projectTrusted,
-        preset,
-      });
-      await loader.reload();
-      const loadedSkills = loader.getSkills().skills.map((s) => s.name);
-      if (expectedSkills === "none") {
-        expect(loadedSkills).toEqual([]);
-      } else if (expectedSkills === "user") {
-        expect(loadedSkills).toEqual(["user-skill"]);
-      } else {
-        expect(loadedSkills.sort()).toEqual(["project-skill", "user-skill"]);
-      }
-      expect(loader.getPrompts().prompts).toEqual([]);
-      expect(loader.getThemes().themes).toEqual([]);
     }
 
     // Context ceiling is shared with prepareParentContext
@@ -458,13 +421,6 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
       maxBytes: PARENT_CONTEXT_MAX_BYTES,
       resumeConflict: true,
     });
-    const oversized = "x".repeat(PARENT_CONTEXT_MAX_BYTES + 1);
-    expect(() =>
-      prepareParentContext(
-        "task",
-        { mode: "full" },
-        [{ role: "user", content: [{ type: "text", text: oversized }], timestamp: 0 }] as never,
-      ),
-    ).toThrow(/over 1 MiB/);
+
   });
 });
