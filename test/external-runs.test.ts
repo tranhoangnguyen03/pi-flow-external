@@ -850,301 +850,97 @@ describe("external_runs", () => {
     ), "cursor_invalid", /different session or project/i);
   });
 
-  it("identifies the applicable action and shows a minimal valid call on argument and cursor errors", async () => {
+  it("identifies the action and a valid call on malformed arguments and cursors", async () => {
     const { execute, runsDirectory } = setup();
     const first = await completedRecord(runsDirectory, { description: "First" });
     const second = await completedRecord(runsDirectory, { description: "Second" });
+    const ids = [first.runId, second.runId];
 
-    // inspect missing targets (neither runId nor runIds, or empty runIds)
-    await expectFailure(
-      execute({ action: "inspect" }),
-      "request_invalid",
-      /Invalid run ID for inspect.*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [] }),
-      "request_invalid",
-      /inspect runIds requires 1-20 run IDs.*"action":"inspect"/,
-    );
-    // batch inspect with non-summary view
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId, second.runId], view: "final" }),
-      "request_invalid",
-      /Batch inspect \(runIds\) only supports view: "summary".*"action":"inspect"/,
-    );
-    // inspect conflicting runId and runIds
-    await expectFailure(
-      execute({ action: "inspect", runId: first.runId, runIds: [second.runId] }),
-      "request_invalid",
-      /inspect accepts either runId or runIds, not both.*"action":"inspect"/,
-    );
-    // inspect invalid cursor
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], view: "output", cursor: "not-a-valid-cursor" }),
-      "cursor_invalid",
-      /Invalid cursor for inspect.*"action":"inspect"/,
-    );
-    // wait missing targets
-    await expectFailure(
-      execute({ action: "wait", runIds: [] }),
-      "request_invalid",
-      /wait requires 1-100 run IDs.*"action":"wait"/,
-    );
-    // cancel missing or multiple targets
-    await expectFailure(
-      execute({ action: "cancel", runIds: [] }),
-      "request_invalid",
-      /Invalid run ID for cancel.*"action":"cancel"/,
-    );
-    await expectFailure(
-      execute({ action: "cancel", runIds: [first.runId, second.runId] }),
-      "request_invalid",
-      /cancel targets one run at a time.*"action":"cancel"/,
-    );
-    // list invalid workflowRunId, inapplicable workflowCursor, and cursor errors
-    await expectFailure(
-      execute({ action: "list", workflowRunId: "../bad" }),
-      "request_invalid",
-      /Invalid workflow run ID for list.*"action":"list".*"workflowRunId"/,
-    );
-    await expectFailure(
-      execute({ action: "list", workflowRunId: 123 as any }),
-      "request_invalid",
-      /Invalid workflow run ID for list.*"action":"list".*"workflowRunId"/,
-    );
-    // empty or whitespace-only workflowRunId normalizes to unfiltered list (#62 forced placeholder)
-    const emptyWfRunId = await execute({ action: "list", workflowRunId: "" });
-    expect(emptyWfRunId.details).toMatchObject({ runs: expect.any(Array), workflows: expect.any(Array) });
-    const whitespaceWfRunId = await execute({ action: "list", workflowRunId: "   " });
-    expect(whitespaceWfRunId.details).toMatchObject({ runs: expect.any(Array), workflows: expect.any(Array) });
-    await expectFailure(
-      execute({ action: "list", workflowRunId: "wf_target", workflowCursor: "wf_not_applicable" }),
-      "request_invalid",
-      /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/,
-    );
-    const blankWorkflowCursor = await execute({ action: "list", workflowRunId: "wf_target", workflowCursor: "" });
-    expect(blankWorkflowCursor.details).toMatchObject({ runs: [] });
-    await expectFailure(
-      execute({ action: "list", cursor: "not-a-valid-cursor" }),
-      "cursor_invalid",
-      /Invalid cursor for list.*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", workflowCursor: "not-a-valid-cursor" }),
-      "cursor_invalid",
-      /Invalid workflow list cursor for list.*"action":"list"/,
-    );
-    // batch inspect mismatched runIds cursor error identifies action and shows minimal valid call
     const batchCursor = Buffer.from(JSON.stringify({
       v: 1,
       kind: "batch-inspect",
       scope: JSON.stringify({ sessionId: "session-a", project: "/project" }),
-      runIds: [first.runId, second.runId],
+      runIds: ids,
       nextIndex: 1,
     })).toString("base64url");
-    await expectFailure(
-      execute({ action: "inspect", runIds: [second.runId, first.runId], cursor: batchCursor }),
-      "cursor_invalid",
-      /Batch cursor does not match the requested run IDs for inspect.*"action":"inspect"/,
-    );
-    // invalid run ID format on inspect (batch), wait, and cancel
-    await expectFailure(
-      execute({ action: "inspect", runIds: ["not-a-valid-run-id"] }),
-      "request_invalid",
-      /Invalid run ID for inspect.*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId, "not-a-valid-run-id"] }),
-      "request_invalid",
-      /Invalid run ID for inspect.*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "wait", runIds: ["not-a-valid-run-id"] }),
-      "request_invalid",
-      /Invalid run ID for wait.*"action":"wait"/,
-    );
-    await expectFailure(
-      execute({ action: "cancel", runIds: ["not-a-valid-run-id"] }),
-      "request_invalid",
-      /Invalid run ID for cancel.*"action":"cancel"/,
-    );
-    // wait conflicting runId and runIds
-    await expectFailure(
-      execute({ action: "wait", runId: first.runId, runIds: [second.runId] }),
-      "request_invalid",
-      /wait accepts either runId or runIds, not both.*"action":"wait"/,
-    );
-    // wait accepts runId when paired with forced-placeholder empty runIds: []
-    const waitedPlaceholder = await execute({ action: "wait", runId: first.runId, runIds: [] });
-    expect(waitedPlaceholder.details).toMatchObject({ action: "wait" });
 
-    // missing or unsupported action rejects with request_invalid naming choices and showing minimal list call
-    await expectFailure(
-      execute({} as any),
-      "request_invalid",
-      /Missing required action; choose list, inspect, wait, or cancel.*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "unsupported" as any }),
-      "request_invalid",
-      /Invalid action "unsupported"; choose list, inspect, wait, or cancel.*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "unsupported" as any, runIds: [first.runId] }),
-      "request_invalid",
-      /Invalid action "unsupported"; choose list, inspect, wait, or cancel.*"action":"list"/,
-    );
-
-    // invalid view on single inspect
-    await expectFailure(
-      execute({ action: "inspect", runId: first.runId, view: "invalid_view" as any }),
-      "request_invalid",
-      /Invalid view "invalid_view" for inspect; choose summary, output, diagnostics, final, launch.*"action":"inspect"/,
-    );
-
-    // invalid mode on wait
-    await expectFailure(
-      execute({ action: "wait", runIds: [first.runId], mode: "invalid_mode" as any }),
-      "request_invalid",
-      /Invalid mode "invalid_mode" for wait; choose any or all.*"action":"wait"/,
-    );
-
-    // invalid reason on cancel (non-string or exceeding 512 chars)
-    await expectFailure(
-      execute({ action: "cancel", runIds: [first.runId], reason: "x".repeat(513) }),
-      "request_invalid",
-      /Invalid reason for cancel \(must be a string up to 512 characters\).*"action":"cancel"/,
-    );
-    await expectFailure(
-      execute({ action: "cancel", runIds: [first.runId], reason: 123 as any }),
-      "request_invalid",
-      /Invalid reason for cancel \(must be a string up to 512 characters\).*"action":"cancel"/,
-    );
-
-    // workflowCursor with workflowRunId: whitespace-padded non-empty string and non-string both reject
-    await expectFailure(
-      execute({ action: "list", workflowRunId: "wf_target", workflowCursor: "   not_applicable   " }),
-      "request_invalid",
-      /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", workflowRunId: "wf_target", workflowCursor: 123 as any }),
-      "request_invalid",
-      /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/,
-    );
-    // whitespace-only workflowCursor is treated as empty placeholder for #62 compatibility
-    const whitespaceWorkflowCursor = await execute({ action: "list", workflowRunId: "wf_target", workflowCursor: "   " });
-    expect(whitespaceWorkflowCursor.details).toMatchObject({ runs: [] });
-
-    // limit on list bounds and type validation
-    await expectFailure(
-      execute({ action: "list", limit: 0 }),
-      "request_invalid",
-      /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", limit: 101 }),
-      "request_invalid",
-      /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", limit: 10.5 as any }),
-      "request_invalid",
-      /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", limit: "50" as any }),
-      "request_invalid",
-      /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/,
-    );
-
-    // non-string cursor and workflowCursor on list
-    await expectFailure(
-      execute({ action: "list", cursor: 123 as any }),
-      "cursor_invalid",
-      /Invalid cursor for list.*"action":"list"/,
-    );
-    await expectFailure(
-      execute({ action: "list", workflowCursor: 123 as any }),
-      "cursor_invalid",
-      /Invalid workflow list cursor for list.*"action":"list"/,
-    );
-
-    // limitBytes on inspect bounds and type validation (single and batch)
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], limitBytes: 3 }),
-      "request_invalid",
-      /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], limitBytes: 65537 }),
-      "request_invalid",
-      /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], limitBytes: 50.5 as any }),
-      "request_invalid",
-      /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], limitBytes: "500" as any }),
-      "request_invalid",
-      /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes: 2 }),
-      "request_invalid",
-      /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/,
-    );
-
-    // limitBytes on wait bounds and type validation
-    await expectFailure(
-      execute({ action: "wait", runIds: [first.runId], limitBytes: 3 }),
-      "request_invalid",
-      /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/,
-    );
-    await expectFailure(
-      execute({ action: "wait", runIds: [first.runId], limitBytes: 65537 }),
-      "request_invalid",
-      /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/,
-    );
-    await expectFailure(
-      execute({ action: "wait", runIds: [first.runId], limitBytes: "500" as any }),
-      "request_invalid",
-      /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/,
-    );
-
-    // non-string cursor on inspect (single and batch)
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId], view: "output", cursor: 123 as any }),
-      "cursor_invalid",
-      /Invalid inspect cursor.*"action":"inspect"/,
-    );
-    await expectFailure(
-      execute({ action: "inspect", runIds: [first.runId, second.runId], cursor: 123 as any }),
-      "cursor_invalid",
-      /Invalid batch cursor.*"action":"inspect"/,
-    );
-
-    // single-target inspect via 1 ID in runIds for non-summary views returns mode: "single"
-    for (const view of ["output", "diagnostics", "final", "launch"] as const) {
-      const res = await execute({ action: "inspect", runIds: [first.runId], view });
-      expect((res as any).structuredContent.data).toMatchObject({ mode: "single", runId: first.runId, view });
-    }
-
-    // batch inspect (2-20 IDs) with any non-summary view strictly rejects
-    for (const view of ["output", "diagnostics", "final", "launch"] as const) {
-      await expectFailure(
-        execute({ action: "inspect", runIds: [first.runId, second.runId], view: view as any }),
+    // Each entry preserves the original rejection, error code and actionable
+    // message. A single table makes it easier to add a distinct failure
+    // without copying three lines of tool invocation and receipt validation.
+    const invalid: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ action: "inspect" }, "request_invalid", /Invalid run ID for inspect.*"action":"inspect"/],
+      [{ action: "inspect", runIds: [] }, "request_invalid", /inspect runIds requires 1-20 run IDs.*"action":"inspect"/],
+      [{ action: "inspect", runIds: ids, view: "final" }, "request_invalid", /Batch inspect \(runIds\) only supports view: "summary".*"action":"inspect"/],
+      [{ action: "inspect", runId: first.runId, runIds: [second.runId] }, "request_invalid", /inspect accepts either runId or runIds, not both.*"action":"inspect"/],
+      [{ action: "inspect", runIds: [first.runId], view: "output", cursor: "not-a-valid-cursor" }, "cursor_invalid", /Invalid cursor for inspect.*"action":"inspect"/],
+      [{ action: "wait", runIds: [] }, "request_invalid", /wait requires 1-100 run IDs.*"action":"wait"/],
+      [{ action: "cancel", runIds: [] }, "request_invalid", /Invalid run ID for cancel.*"action":"cancel"/],
+      [{ action: "cancel", runIds: ids }, "request_invalid", /cancel targets one run at a time.*"action":"cancel"/],
+      [{ action: "list", workflowRunId: "../bad" }, "request_invalid", /Invalid workflow run ID for list.*"action":"list".*"workflowRunId"/],
+      [{ action: "list", workflowRunId: 123 }, "request_invalid", /Invalid workflow run ID for list.*"action":"list".*"workflowRunId"/],
+      [{ action: "list", workflowRunId: "wf_target", workflowCursor: "wf_not_applicable" }, "request_invalid", /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/],
+      [{ action: "list", cursor: "not-a-valid-cursor" }, "cursor_invalid", /Invalid cursor for list.*"action":"list"/],
+      [{ action: "list", workflowCursor: "not-a-valid-cursor" }, "cursor_invalid", /Invalid workflow list cursor for list.*"action":"list"/],
+      [{ action: "inspect", runIds: [second.runId, first.runId], cursor: batchCursor }, "cursor_invalid", /Batch cursor does not match the requested run IDs for inspect.*"action":"inspect"/],
+      [{ action: "inspect", runIds: ["not-a-valid-run-id"] }, "request_invalid", /Invalid run ID for inspect.*"action":"inspect"/],
+      [{ action: "inspect", runIds: [first.runId, "not-a-valid-run-id"] }, "request_invalid", /Invalid run ID for inspect.*"action":"inspect"/],
+      [{ action: "wait", runIds: ["not-a-valid-run-id"] }, "request_invalid", /Invalid run ID for wait.*"action":"wait"/],
+      [{ action: "cancel", runIds: ["not-a-valid-run-id"] }, "request_invalid", /Invalid run ID for cancel.*"action":"cancel"/],
+      [{ action: "wait", runId: first.runId, runIds: [second.runId] }, "request_invalid", /wait accepts either runId or runIds, not both.*"action":"wait"/],
+      [{}, "request_invalid", /Missing required action; choose list, inspect, wait, or cancel.*"action":"list"/],
+      [{ action: "unsupported" }, "request_invalid", /Invalid action "unsupported"; choose list, inspect, wait, or cancel.*"action":"list"/],
+      [{ action: "unsupported", runIds: [first.runId] }, "request_invalid", /Invalid action "unsupported"; choose list, inspect, wait, or cancel.*"action":"list"/],
+      [{ action: "inspect", runId: first.runId, view: "invalid_view" }, "request_invalid", /Invalid view "invalid_view" for inspect; choose summary, output, diagnostics, final, launch.*"action":"inspect"/],
+      [{ action: "wait", runIds: [first.runId], mode: "invalid_mode" }, "request_invalid", /Invalid mode "invalid_mode" for wait; choose any or all.*"action":"wait"/],
+      [{ action: "cancel", runIds: [first.runId], reason: "x".repeat(513) }, "request_invalid", /Invalid reason for cancel \(must be a string up to 512 characters\).*"action":"cancel"/],
+      [{ action: "cancel", runIds: [first.runId], reason: 123 }, "request_invalid", /Invalid reason for cancel \(must be a string up to 512 characters\).*"action":"cancel"/],
+      [{ action: "list", workflowRunId: "wf_target", workflowCursor: "   not_applicable   " }, "request_invalid", /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/],
+      [{ action: "list", workflowRunId: "wf_target", workflowCursor: 123 }, "request_invalid", /workflowCursor is inapplicable when filtering list by workflowRunId.*"action":"list"/],
+      [{ action: "list", limit: 0 }, "request_invalid", /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/],
+      [{ action: "list", limit: 101 }, "request_invalid", /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/],
+      [{ action: "list", limit: 10.5 }, "request_invalid", /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/],
+      [{ action: "list", limit: "50" }, "request_invalid", /Invalid limit for list \(must be an integer from 1 to 100\).*"action":"list"/],
+      [{ action: "list", cursor: 123 }, "cursor_invalid", /Invalid cursor for list.*"action":"list"/],
+      [{ action: "list", workflowCursor: 123 }, "cursor_invalid", /Invalid workflow list cursor for list.*"action":"list"/],
+      [{ action: "inspect", runIds: [first.runId], limitBytes: 3 }, "request_invalid", /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/],
+      [{ action: "inspect", runIds: [first.runId], limitBytes: 65537 }, "request_invalid", /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/],
+      [{ action: "inspect", runIds: [first.runId], limitBytes: 50.5 }, "request_invalid", /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/],
+      [{ action: "inspect", runIds: [first.runId], limitBytes: "500" }, "request_invalid", /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/],
+      [{ action: "inspect", runIds: ids, limitBytes: 2 }, "request_invalid", /Invalid limitBytes for inspect \(must be an integer from 4 to 65536\).*"action":"inspect"/],
+      [{ action: "wait", runIds: [first.runId], limitBytes: 3 }, "request_invalid", /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/],
+      [{ action: "wait", runIds: [first.runId], limitBytes: 65537 }, "request_invalid", /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/],
+      [{ action: "wait", runIds: [first.runId], limitBytes: "500" }, "request_invalid", /Invalid limitBytes for wait \(must be an integer from 4 to 65536\).*"action":"wait"/],
+      [{ action: "inspect", runIds: [first.runId], view: "output", cursor: 123 }, "cursor_invalid", /Invalid inspect cursor.*"action":"inspect"/],
+      [{ action: "inspect", runIds: ids, cursor: 123 }, "cursor_invalid", /Invalid batch cursor.*"action":"inspect"/],
+      ...(["output", "diagnostics", "final", "launch"] as const).map((view): [Record<string, unknown>, string, RegExp] => [
+        { action: "inspect", runIds: ids, view },
         "request_invalid",
         /Batch inspect \(runIds\) only supports view: "summary".*"action":"inspect"/,
-      );
+      ]),
+    ];
+    for (const [params, code, message] of invalid) {
+      await expectFailure(execute(params), code, message);
     }
 
-    // batch inspect (2 IDs) with view "summary" or omitted view returns mode: "batch"
-    const batchExplicitSummary = await execute({ action: "inspect", runIds: [first.runId, second.runId], view: "summary" });
-    expect((batchExplicitSummary as any).structuredContent.data).toMatchObject({ mode: "batch" });
-    const batchOmittedView = await execute({ action: "inspect", runIds: [first.runId, second.runId] });
-    expect((batchOmittedView as any).structuredContent.data).toMatchObject({ mode: "batch" });
+    // Forced-placeholder compatibility and supported single/batch shapes.
+    for (const workflowRunId of ["", "   "]) {
+      const listed = await execute({ action: "list", workflowRunId });
+      expect(listed.details).toMatchObject({ runs: expect.any(Array), workflows: expect.any(Array) });
+    }
+    for (const workflowCursor of ["", "   "]) {
+      const listed = await execute({ action: "list", workflowRunId: "wf_target", workflowCursor });
+      expect(listed.details).toMatchObject({ runs: [] });
+    }
+    const waited = await execute({ action: "wait", runId: first.runId, runIds: [] });
+    expect(waited.details).toMatchObject({ action: "wait" });
+
+    for (const view of ["output", "diagnostics", "final", "launch"] as const) {
+      const single = await execute({ action: "inspect", runIds: [first.runId], view });
+      expect(single.structuredContent.data).toMatchObject({ mode: "single", runId: first.runId, view });
+    }
+    for (const view of ["summary", undefined]) {
+      const batch = await execute({ action: "inspect", runIds: ids, ...(view ? { view } : {}) });
+      expect(batch.structuredContent.data).toMatchObject({ mode: "batch" });
+    }
   });
 });
