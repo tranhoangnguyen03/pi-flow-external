@@ -8,7 +8,7 @@ For changes to the delegation experience, read [Agent-first development principl
 
 The detailed implementation contract below remains in force; the agent-first direction complements it rather than overriding mechanics, configuration, backends or safety guarantees. For exact behavior consult current source and tests. Verify work with `npm run check`; use [maintainer field testing](docs/maintainer/field-testing.md) for live routing checks.
 
-When changing a runnable playbook recipe, update the authoritative recipe test for the behavior that changed. Guidance-only changes need an accuracy review, not automatic new tests or scenario paperwork. Use matched real-agent trials only when claiming better model choice, task quality, or efficiency; stubbed execution cannot prove these outcomes. The old [coverage matrix](docs/maintainer/playbook-coverage.json) is a historical snapshot, not a maintained gate. See [playbook verification](docs/maintainer/playbook-test-plan.md).
+When changing a runnable playbook recipe, update the authoritative test of the behavior that changed. Guidance-only edits need an accuracy review. Use a small matched real-agent trial before claiming better model judgment or task quality, following [orchestration evaluation](docs/maintainer/orchestration-evaluation.md); simulated child tests cannot prove those claims. The former playbook trial/coverage-verifier apparatus was retired because it had no qualified behavioral results and imposed excessive test maintenance. Its historical design remains in Git history.
 
 ## pi-flow external contract
 
