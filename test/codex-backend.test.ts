@@ -113,7 +113,6 @@ describe("pi-subagent codex backend", () => {
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-reviewer.md"), `---
 description: Reviews through Codex CLI.
 backend: codex
@@ -173,7 +172,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     const spawnCountPath = join(tempDir, "spawn-count");
     const releasePath = join(tempDir, "release-first");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Queue test.\nbackend: codex\n---\n");
     installFakeCli(binDir, "codex", `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -256,7 +254,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
 
   it("forwards every parsed codex stream event", async () => {
     const binDir = join(tempDir, "bin-codex-events");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "codex", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-events' }));
@@ -294,7 +291,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
 
   it("does not accept final text without a terminal codex event", async () => {
     const binDir = join(tempDir, "bin-codex-no-terminal");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "codex", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'plausible but unverified' } }));
@@ -326,7 +322,6 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
   it("kills a codex child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-abort-race");
     const markerPath = join(tempDir, "codex-child-completed");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "codex", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 process.stdin.resume();
@@ -377,7 +372,6 @@ setTimeout(() => {
 
   it("fails clearly when codex emits an oversized stdout line", async () => {
     const binDir = join(tempDir, "bin-codex-oversize");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "codex", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
@@ -413,7 +407,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-unknown-cost");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-unknown.md"), `---
 description: Uses an unpriced Codex model.
 backend: codex
