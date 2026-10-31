@@ -136,108 +136,60 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     expect(res.details.error).toMatch(/structured workflow output is unsupported on opencode/i);
   });
 
-  it.each(ALL_BACKENDS)("matches resume support, mechanism, and conditions for %s against adapter and resolveResume behavior", async (backend) => {
+  it.each(ALL_BACKENDS)("matches %s resume claims to persisted sessions and adapter arguments", async (backend) => {
     const cap = BACKEND_CAPABILITIES[backend].resume;
     const runsDir = makeTempDir();
-
+    const record = createRunRecord({
+      directory: runsDir,
+      metadata: { description: "Completed", backend, profile: profile(backend).name },
+    });
+    await record.finish({
+      backend, profile: profile(backend).name, status: "done", result: "ok",
+      ...(backend === "pi" ? {} : { sessionId: "sess-1" }),
+    });
+    const resolved = await resolveResume(runsDir, record.runId, backend);
     if (backend === "pi") {
       expect(cap.support).toBe("unsupported");
       expect(cap.mechanism).toBeUndefined();
-      const record = createRunRecord({
-        directory: runsDir,
-        metadata: { description: "Pi run", backend: "pi", profile: "pi-test/worker" },
-      });
-      await record.finish({ backend: "pi", profile: "pi-test/worker", status: "done", result: "ok" });
-      const resolved = await resolveResume(runsDir, record.runId, "pi");
       expect(resolved.session).toBeUndefined();
       expect(resolved.error).toMatch(/no session id to resume/i);
       return;
     }
-
     expect(cap.support).toBe("supported");
-    expect(cap.mechanism).toBeTruthy();
-
-    const record = createRunRecord({
-      directory: runsDir,
-      metadata: { description: "CLI run", backend, profile: `${backend}/worker` },
-    });
-    await record.finish({
-      backend,
-      profile: `${backend}/worker`,
-      status: "done",
-      result: "ok",
-      sessionId: "sess-conformance-1",
-    });
-    const resolved = await resolveResume(runsDir, record.runId, backend);
     expect(resolved.error).toBeUndefined();
-    expect(resolved.session).toEqual({
-      runId: record.runId,
-      sessionId: "sess-conformance-1",
-      backend,
-    });
+    expect(resolved.session).toEqual({ runId: record.runId, sessionId: "sess-1", backend });
 
-    switch (backend) {
-      case "claude":
-        expect(cap.mechanism).toBe("--resume");
-        expect(buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--resume", "sess-1"]),
-        );
-        expect(extractClaudeSessionId({ type: "result", session_id: "sess-1" })).toBe("sess-1");
-        break;
-      case "codex":
-        expect(cap.mechanism).toBe("exec resume");
-        expect(buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, resumeSessionId: "thread-1" })).toEqual(
-          expect.arrayContaining(["exec", "resume", "thread-1"]),
-        );
-        expect(extractCodexSessionId({ type: "thread.started", thread_id: "thread-1" })).toBe("thread-1");
-        break;
-      case "agy":
-        expect(cap.mechanism).toBe("--conversation");
-        expect(buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, resumeConversationId: "conv-1" })).toEqual(
-          expect.arrayContaining(["--conversation", "conv-1"]),
-        );
-        expect(extractAgyTerminalResult({ event: "result", result: { conversation_id: "conv-1" } })?.conversationId).toBe("conv-1");
-        break;
-      case "grok":
-        expect(cap.mechanism).toBe("--resume");
-        expect(buildGrokArgs({ profile: profile("grok"), resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--resume", "sess-1"]),
-        );
-        expect(extractGrokSessionId({ session_id: "sess-1" })).toBe("sess-1");
-        break;
-      case "muse":
-        expect(cap.mechanism).toBe("--session-id");
-        expect(
-          buildMuseArgs({
-            promptFilePath: "/tmp/p",
-            workspace: "/tmp",
-            profile: profile("muse"),
-            thinkingLevel: "low",
-            resumeSessionId: "sess-1",
-          }),
-        ).toEqual(expect.arrayContaining(["--session-id", "sess-1"]));
-        expect(extractMuseSessionId({ stream: { kind: "session", id: "sess-1" } })).toBe("sess-1");
-        break;
-      case "opencode":
-        expect(cap.mechanism).toBe("--session");
-        expect(buildOpencodeArgs({ profile: profile("opencode"), resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--session", "sess-1"]),
-        );
-        expect(() =>
-          checkOpencodeResumable(
-            { info: { id: "sess-1", permissions: [{ action: "*", effect: "allow" }] }, messages: [] },
-            "sess-1",
-            "readonly",
-          ),
-        ).toThrow(/carries its own permission rules/);
-        expect(() =>
-          checkOpencodeResumable(
-            { info: { id: "sess-1", agent: "pi-flow-readonly-0123456789ab" }, messages: [] },
-            "sess-1",
-            "danger",
-          ),
-        ).toThrow(/last run at a restricted tier/);
-        break;
+    // The adapter's exact resume switch and session-ID parser must agree with
+    // the published mechanism; backend tests own the full resume lifecycle.
+    const launch = {
+      claude: () => ["--resume", buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, resumeSessionId: "sess-1" }),
+        extractClaudeSessionId({ type: "result", session_id: "sess-1" })],
+      codex: () => ["exec resume", buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, resumeSessionId: "sess-1" }),
+        extractCodexSessionId({ type: "thread.started", thread_id: "sess-1" })],
+      agy: () => ["--conversation", buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, resumeConversationId: "sess-1" }),
+        extractAgyTerminalResult({ event: "result", result: { conversation_id: "sess-1" } })?.conversationId],
+      grok: () => ["--resume", buildGrokArgs({ profile: profile("grok"), resumeSessionId: "sess-1" }),
+        extractGrokSessionId({ session_id: "sess-1" })],
+      muse: () => ["--session-id", buildMuseArgs({ promptFilePath: "/tmp/p", workspace: "/tmp",
+        profile: profile("muse"), thinkingLevel: "low", resumeSessionId: "sess-1" }),
+        extractMuseSessionId({ stream: { kind: "session", id: "sess-1" } })],
+      opencode: () => ["--session", buildOpencodeArgs({ profile: profile("opencode"), resumeSessionId: "sess-1" }),
+        "sess-1"],
+    } as const;
+    const [mechanism, args, sessionId] = launch[backend]();
+    expect(cap.mechanism).toBe(mechanism);
+    if (backend === "codex") expect(args).toEqual(expect.arrayContaining(["exec", "resume", "sess-1"]));
+    else expect(args).toEqual(expect.arrayContaining([mechanism, "sess-1"]));
+    expect(sessionId).toBe("sess-1");
+    if (backend === "opencode") {
+      expect(() => checkOpencodeResumable(
+        { info: { id: "sess-1", permissions: [{ action: "*", effect: "allow" }] }, messages: [] },
+        "sess-1", "readonly",
+      )).toThrow(/carries its own permission rules/);
+      expect(() => checkOpencodeResumable(
+        { info: { id: "sess-1", agent: "pi-flow-readonly-0123456789ab" }, messages: [] },
+        "sess-1", "danger",
+      )).toThrow(/last run at a restricted tier/);
     }
   });
 
