@@ -240,10 +240,12 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     expect(agyUsageToSubagentUsage({ inputTokens: 100, outputTokens: 50, thinkingTokens: 10,
       cacheReadTokens: 20, totalTokens: 160 })).toMatchObject({ cost: 0, costKnown: false });
     expect(BACKEND_CAPABILITIES.muse.cost.conditions[0]).toMatch(/costKnown is always false/);
-    expect(getSubagentUsage({
+    const piUsage = getSubagentUsage({
       getSessionStats: () => ({ tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 }, cost: 0.025 }),
       messages: [],
-    })).toMatchObject({ cost: 0.025, costKnown: true, costEstimated: false });
+    });
+    expect(piUsage).toMatchObject({ cost: 0.025, costKnown: true });
+    expect(piUsage.costEstimated).not.toBe(true);
   });
 
   it("discloses OpenCode uncounted nested-subagent costs", () => {
