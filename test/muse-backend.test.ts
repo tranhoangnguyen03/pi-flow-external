@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { installFakeCli } from "./helpers/fake-cli.ts";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
 import type { SubagentProfile, SubagentUsage } from "../src/types.ts";
 import {
@@ -273,8 +274,7 @@ describe("pi-subagent muse backend", () => {
     const runInfoPath = join(tempDir, "muse-run-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -288,9 +288,7 @@ bootstrap();
 console.log(env('run.model.configured', root({ provider_id: 'meta', model_id: 'muse-spark-1.3-contributor' })));
 console.log(env('tool.result', root({ call_id: 'call_1', text: 'Inspecting repository...', correlation_facts: { tool_name: 'read_file' } })));
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'Muse execution complete.', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const usageEvents: SubagentUsage[] = [];
     const backendEvents: unknown[] = [];
@@ -346,17 +344,14 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'M
     const runInfoPath = join(tempDir, "muse-resume-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 writeFileSync(${JSON.stringify(runInfoPath)}, JSON.stringify({ args: process.argv.slice(2) }));
 ${museBinaryPrelude("prior-muse-sess")}
 bootstrap();
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'Resumed task done.', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_resume",
@@ -391,8 +386,7 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'R
     const runInfoPath = join(tempDir, "muse-structured-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -402,9 +396,7 @@ writeFileSync(${JSON.stringify(runInfoPath)}, JSON.stringify({ args, schemaExist
 ${museBinaryPrelude("muse-struct-sess")}
 bootstrap();
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: JSON.stringify({ nonce: '60db8abf-e619-42b6' }), reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const schema = { type: "object", properties: { nonce: { type: "string" } }, required: ["nonce"], additionalProperties: false };
 
@@ -436,17 +428,14 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: JS
     const binDir = join(tempDir, "bin-muse-nested-success");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 ${MUSE_BINARY_PRELUDE}
 bootstrap();
 console.log(env('run.output.delta', root({ text: 'root progress...' })));
 console.log(env('run.terminal.completed', rogue({ terminal: 'completed', text: 'ROGUE NESTED TEXT MUST BE IGNORED', reason: null })));
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'REAL ROOT RESULT', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_nested_success",
@@ -470,16 +459,13 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'R
     const binDir = join(tempDir, "bin-muse-nested-failure");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 ${MUSE_BINARY_PRELUDE}
 bootstrap();
 console.log(env('run.terminal.failed', rogue({ terminal: 'failed', text: '', reason: 'nested failure must not propagate to the root result' })));
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'root succeeded despite nested failure', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_nested_failure",
@@ -503,15 +489,12 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'r
     const binDir = join(tempDir, "bin-muse-mismatched-terminal");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 ${MUSE_BINARY_PRELUDE}
 bootstrap();
 console.log(env('run.terminal.completed', rogue({ terminal: 'completed', text: 'FOREIGN RUN TEXT, NEVER THE ROOT ANSWER', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_mismatched_terminal",
@@ -536,8 +519,7 @@ console.log(env('run.terminal.completed', rogue({ terminal: 'completed', text: '
     const promptPathFile = join(tempDir, "prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -546,9 +528,7 @@ if (promptFileIdx !== -1) writeFileSync(${JSON.stringify(promptPathFile)}, args[
 ${MUSE_BINARY_PRELUDE}
 bootstrap();
 console.log(env('run.output.delta', root({ text: 'Partial analysis before unexpected exit.' })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_no_term",
@@ -579,15 +559,12 @@ console.log(env('run.output.delta', root({ text: 'Partial analysis before unexpe
     const binDir = join(tempDir, "bin-muse-terminal-fail");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 ${MUSE_BINARY_PRELUDE}
 bootstrap();
 console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reason: 'API error 402 [request_id=abc]: Billing verification failed. Please check your payment method. (billing_error)' })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_term_fail",
@@ -669,14 +646,11 @@ console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reas
     const binDir = join(tempDir, "bin-muse-nonzero-exit");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 process.stderr.write('muse: authentication token expired\\n');
 process.exit(2);
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_nonzero_exit",
@@ -702,8 +676,7 @@ process.exit(2);
     const promptPathFile = join(tempDir, "abort-prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 process.stdin.resume();
 const args = process.argv.slice(2);
@@ -719,9 +692,7 @@ setTimeout(() => {
     payload: { terminal: 'completed', text: 'Should not happen', reason: null },
   }));
 }, 800);
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     let abortedChecks = 0;
     const signal = {
@@ -763,8 +734,7 @@ setTimeout(() => {
     const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -778,9 +748,7 @@ console.log(JSON.stringify({
   causation_id: 'cmd-1', payload_type: 'run.terminal.completed', payload_schema_version: 1,
   payload: { terminal: 'completed', text: 'must not reach', reason: null },
 }));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnMuseSubagent({
       toolCallId: "call_muse_oversize",
@@ -814,8 +782,7 @@ console.log(JSON.stringify({
       "---\ndescription: Works through Muse Code.\nbackend: muse\nmodel: muse-spark-1.3-contributor\nthinking: high\n---\n\nMuse worker prompt.",
     );
 
-    const fakeMusePath = join(binDir, "muse");
-    writeFileSync(fakeMusePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -828,9 +795,7 @@ bootstrap();
 console.log(env('run.output.delta', root({ text: 'muse ' })));
 console.log(env('run.output.delta', root({ text: 'child done' })));
 console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'muse child done', reason: null })));
-`);
-    chmodSync(fakeMusePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
