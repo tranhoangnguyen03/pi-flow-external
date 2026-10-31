@@ -272,7 +272,6 @@ describe("pi-subagent muse backend", () => {
   it("runs a normal muse subagent with exact argv, envelope streaming, and temp file cleanup", async () => {
     const binDir = join(tempDir, "bin-muse-normal");
     const runInfoPath = join(tempDir, "muse-run-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -342,7 +341,6 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'M
   it("handles resume by forwarding --session-id and reports the same session id", async () => {
     const binDir = join(tempDir, "bin-muse-resume");
     const runInfoPath = join(tempDir, "muse-resume-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -384,7 +382,6 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'R
   it("handles structured output via --output-schema, treating the terminal text as the pre-serialized JSON result", async () => {
     const binDir = join(tempDir, "bin-muse-structured");
     const runInfoPath = join(tempDir, "muse-structured-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -426,7 +423,6 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: JS
 
   it("ignores a nested/foreign run's own terminal.completed and only finalizes on the root run's own terminal event", async () => {
     const binDir = join(tempDir, "bin-muse-nested-success");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -457,7 +453,6 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'R
 
   it("ignores a nested/foreign run's own terminal.failed and still finalizes success from the root run's own terminal event", async () => {
     const binDir = join(tempDir, "bin-muse-nested-failure");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -487,7 +482,6 @@ console.log(env('run.terminal.completed', root({ terminal: 'completed', text: 'r
 
   it("treats a terminal event whose run_stream does not match the established root as if it never arrived, failing closed", async () => {
     const binDir = join(tempDir, "bin-muse-mismatched-terminal");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -517,7 +511,6 @@ console.log(env('run.terminal.completed', rogue({ terminal: 'completed', text: '
   it("rejects when muse exits without a terminal JSON event and preserves interrupted output", async () => {
     const binDir = join(tempDir, "bin-muse-no-terminal");
     const promptPathFile = join(tempDir, "prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -557,7 +550,6 @@ console.log(env('run.output.delta', root({ text: 'Partial analysis before unexpe
 
   it("rejects when the run's own terminal event reports failed, surfacing the billing-style reason", async () => {
     const binDir = join(tempDir, "bin-muse-terminal-fail");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -644,7 +636,6 @@ console.log(env('run.terminal.failed', root({ terminal: 'failed', text: '', reas
 
   it("reports a nonzero muse exit code along with captured stderr", async () => {
     const binDir = join(tempDir, "bin-muse-nonzero-exit");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -674,7 +665,6 @@ process.exit(2);
     const binDir = join(tempDir, "bin-muse-abort");
     const markerPath = join(tempDir, "muse-child-finished");
     const promptPathFile = join(tempDir, "abort-prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -732,7 +722,6 @@ setTimeout(() => {
   it("fails clearly when muse emits an oversized stdout line and cleans up the temp files", async () => {
     const binDir = join(tempDir, "bin-muse-oversize");
     const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "muse", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -776,7 +765,6 @@ console.log(JSON.stringify({
     const binDir = join(tempDir, "bin-muse-agent-tool");
     const runInfoPath = join(tempDir, "muse-agent-tool-info.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "muse-worker.md"),
       "---\ndescription: Works through Muse Code.\nbackend: muse\nmodel: muse-spark-1.3-contributor\nthinking: high\n---\n\nMuse worker prompt.",
