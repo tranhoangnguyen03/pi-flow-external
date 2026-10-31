@@ -42,7 +42,7 @@ Do not introduce fixed agent counts, approval ceremonies, mandatory subagents, q
 
 Use three layers with distinct jobs:
 
-1. **Ambient prompt / tool descriptions:** a concise orientation to the available actions and when each is useful. Loaded routinely; minimize cognitive and context cost.
+1. **Tool descriptions and optional mode prompt:** concise tool descriptions are always available. A short orchestration nudge is injected only when `/external mode` is enabled. Keep routine context cost low.
 2. **On-demand skill and examples:** help with nontrivial composition and real-world work shapes; easy to find, adapt and run. Never a compulsory prerequisite.
 3. **Technical help and contracts:** exact schemas, capability-specific behavior, advanced failure/replay details and version-specific boundaries, retrieved when needed.
 
