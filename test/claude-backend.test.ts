@@ -193,7 +193,6 @@ describe("pi-subagent claude backend", () => {
     const binDir = join(tempDir, "bin-claude");
     const argsPath = join(tempDir, "claude-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-reviewer.md"), `---
 description: Reviews through Claude Code.
 backend: claude
@@ -272,7 +271,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude-denials");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-implementer.md"), `---
 description: Implements through Claude Code.\nbackend: claude\nmodel: sonnet\n---\n\nClaude implementer prompt.`);
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
@@ -313,7 +311,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const binDir = join(tempDir, "bin-claude-elevate");
     const argsPath = join(tempDir, "claude-elevate-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-worker.md"), `---
 description: General work through Claude Code.
 backend: claude
@@ -360,7 +357,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("forwards every parsed claude stream event", async () => {
     const binDir = join(tempDir, "bin-claude-events");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-events' }));
@@ -398,7 +394,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("uses the latest result when a background-agent notification adds one", async () => {
     const binDir = join(tempDir, "bin-claude-two-results");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-two-results' }));
@@ -425,7 +420,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("does not accept a Claude result that does not affirm success", async () => {
     const binDir = join(tempDir, "bin-claude-no-terminal");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'plausible but unverified' }], usage: { input_tokens: 10, output_tokens: 2 } } }));
@@ -458,7 +452,6 @@ console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' 
   it("kills a claude child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-claude-abort-race");
     const markerPath = join(tempDir, "claude-child-completed");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 process.stdin.resume();
@@ -512,7 +505,6 @@ setTimeout(() => {
 
   it("fails clearly when claude emits an oversized stdout line", async () => {
     const binDir = join(tempDir, "bin-claude-oversize");
-    mkdirSync(binDir, { recursive: true });
     installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
