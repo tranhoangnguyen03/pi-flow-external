@@ -251,7 +251,6 @@ describe("pi-subagent grok backend", () => {
   it("runs a normal grok subagent with exact argv, streaming events, and temp prompt cleanup", async () => {
     const binDir = join(tempDir, "bin-grok-normal");
     const runInfoPath = join(tempDir, "grok-run-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -361,7 +360,6 @@ console.log(JSON.stringify({
   it("handles resume by forwarding --resume sessionId", async () => {
     const binDir = join(tempDir, "bin-grok-resume");
     const runInfoPath = join(tempDir, "grok-resume-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -410,7 +408,6 @@ console.log(JSON.stringify({
   it("handles structured output with --json-schema and parses nonstreaming JSON document at close", async () => {
     const binDir = join(tempDir, "bin-grok-structured");
     const runInfoPath = join(tempDir, "grok-structured-info.json");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -486,7 +483,6 @@ console.log(JSON.stringify(doc, null, 2));
 
   it("surfaces the backend's own structuredOutputError when structuredOutput is missing", async () => {
     const binDir = join(tempDir, "bin-grok-structured-error");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -530,7 +526,6 @@ console.log(JSON.stringify({
   it("rejects when grok exits without a terminal JSON event and preserves interrupted output", async () => {
     const binDir = join(tempDir, "bin-grok-no-terminal");
     const promptPathFile = join(tempDir, "prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -578,7 +573,6 @@ console.log(JSON.stringify({
 
   it("rejects when terminal event does not affirm success or stop_reason is not end_turn", async () => {
     const binDir = join(tempDir, "bin-grok-terminal-fail");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -615,7 +609,6 @@ console.log(JSON.stringify({
 
   it("reports a nonzero grok exit code along with captured stderr", async () => {
     const binDir = join(tempDir, "bin-grok-nonzero-exit");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
@@ -649,7 +642,6 @@ process.exit(2);
     const binDir = join(tempDir, "bin-grok-abort");
     const markerPath = join(tempDir, "grok-child-finished");
     const promptPathFile = join(tempDir, "abort-prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -712,7 +704,6 @@ setTimeout(() => {
   it("fails clearly when grok emits an oversized stdout line and cleans up prompt file", async () => {
     const binDir = join(tempDir, "bin-grok-oversize");
     const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
-    mkdirSync(binDir, { recursive: true });
 
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
@@ -761,7 +752,6 @@ console.log(JSON.stringify({
     const binDir = join(tempDir, "bin-grok-agent-tool");
     const runInfoPath = join(tempDir, "grok-agent-tool-info.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(
       join(subagentsDir, "grok-worker.md"),
       "---\ndescription: Works through Grok CLI.\nbackend: grok\nmodel: grok-4.6\nthinking: high\n---\n\nGrok worker prompt.",
@@ -858,7 +848,6 @@ console.log(JSON.stringify({
 
   it("preserves requested readonly permission receipt and surfaces actionable diagnosis on runtime socket symlink failure", async () => {
     const binDir = join(tempDir, "bin-grok-symlink-receipt");
-    mkdirSync(binDir, { recursive: true });
 
     const invocationLogPath = join(tempDir, "grok-symlink-invocations.json");
     installFakeCli(binDir, "grok", `#!/usr/bin/env node
