@@ -97,98 +97,43 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     return dir;
   }
 
-  it.each(ALL_BACKENDS)("matches workflowChildSchema support and mechanism for %s against adapter behavior", async (backend) => {
-    const cap = BACKEND_CAPABILITIES[backend].workflowChildSchema;
+  it("keeps structured-output capability claims aligned with each CLI adapter", () => {
     const sampleSchema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
-
-    switch (backend) {
-      case "claude": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
-      }
-      case "agy": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
-      }
-      case "grok": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildGrokArgs({ profile: profile("grok"), outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildGrokArgs({ profile: profile("grok") });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
-      }
-      case "codex": {
-        expect(cap).toEqual({ support: "supported", mechanism: "schema_file" });
-        const withSchema = buildCodexArgs({
-          prompt: "p",
-          profile: profile("codex"),
-          thinkingLevel: undefined,
-          outputSchemaPath: "/tmp/schema.json",
-        });
-        expect(withSchema).toContain("--output-schema");
-        expect(withSchema).toContain("/tmp/schema.json");
-        const withoutSchema = buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--output-schema");
-        break;
-      }
-      case "muse": {
-        expect(cap).toEqual({ support: "supported", mechanism: "schema_file" });
-        const withSchema = buildMuseArgs({
-          promptFilePath: "/tmp/prompt.txt",
-          schemaFilePath: "/tmp/schema.json",
-          workspace: "/tmp",
-          profile: profile("muse"),
-          thinkingLevel: "low",
-        });
-        expect(withSchema).toContain("--output-schema");
-        expect(withSchema).toContain("/tmp/schema.json");
-        const withoutSchema = buildMuseArgs({
-          promptFilePath: "/tmp/prompt.txt",
-          workspace: "/tmp",
-          profile: profile("muse"),
-          thinkingLevel: "low",
-        });
-        expect(withoutSchema).not.toContain("--output-schema");
-        break;
-      }
-      case "opencode": {
-        expect(cap).toEqual({ support: "unsupported", mechanism: "none" });
-        const res = await spawnOpencodeSubagent({
-          toolCallId: "cap-opencode-schema",
-          description: "Schema check",
-          prompt: "Check schema rejection",
-          profile: profile("opencode"),
-          ctx: { cwd: "/tmp" } as never,
-          signal: undefined,
-          progressEnabled: false,
-          onProgress: undefined,
-          onUsage: () => {},
-          outputSchema: sampleSchema,
-        });
-        expect(res.details.status).toBe("error");
-        expect(res.details.error).toMatch(/structured workflow output is unsupported on opencode/i);
-        break;
-      }
-      case "pi": {
-        expect(cap).toEqual({ support: "supported", mechanism: "injected_tool" });
-        const capture = { value: undefined, called: false, count: 0, duplicateCall: false };
-        const tool = createStructuredOutputTool(sampleSchema, capture);
-        expect(tool.name).toBe("structured_output");
-        break;
-      }
+    const flagCases: Array<[SubagentBackend, "cli_flag" | "schema_file", string, (withSchema: boolean) => string[]]> = [
+      ["claude", "cli_flag", "--json-schema", (enabled) =>
+        buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, ...(enabled ? { outputSchema: sampleSchema } : {}) })],
+      ["agy", "cli_flag", "--json-schema", (enabled) =>
+        buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, ...(enabled ? { outputSchema: sampleSchema } : {}) })],
+      ["grok", "cli_flag", "--json-schema", (enabled) =>
+        buildGrokArgs({ profile: profile("grok"), ...(enabled ? { outputSchema: sampleSchema } : {}) })],
+      ["codex", "schema_file", "--output-schema", (enabled) =>
+        buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined,
+          ...(enabled ? { outputSchemaPath: "/tmp/schema.json" } : {}) })],
+      ["muse", "schema_file", "--output-schema", (enabled) =>
+        buildMuseArgs({ promptFilePath: "/tmp/p", workspace: "/tmp", profile: profile("muse"), thinkingLevel: "low",
+          ...(enabled ? { schemaFilePath: "/tmp/schema.json" } : {}) })],
+    ];
+    for (const [backend, mechanism, flag, build] of flagCases) {
+      expect(BACKEND_CAPABILITIES[backend].workflowChildSchema).toEqual({ support: "supported", mechanism });
+      expect(build(true)).toContain(flag);
+      expect(build(true)).toContain(mechanism === "cli_flag" ? JSON.stringify(sampleSchema) : "/tmp/schema.json");
+      expect(build(false)).not.toContain(flag);
     }
+    expect(BACKEND_CAPABILITIES.pi.workflowChildSchema).toEqual({ support: "supported", mechanism: "injected_tool" });
+    expect(createStructuredOutputTool(sampleSchema, { value: undefined, called: false, count: 0, duplicateCall: false }).name)
+      .toBe("structured_output");
+  });
+
+  it("discloses OpenCode structured-output rejection before any provider call", async () => {
+    expect(BACKEND_CAPABILITIES.opencode.workflowChildSchema).toEqual({ support: "unsupported", mechanism: "none" });
+    const res = await spawnOpencodeSubagent({
+      toolCallId: "cap-opencode-schema", description: "Schema check",
+      prompt: "Check schema rejection", profile: profile("opencode"), ctx: { cwd: "/tmp" } as never,
+      signal: undefined, progressEnabled: false, onProgress: undefined, onUsage: () => {},
+      outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+    });
+    expect(res.details.status).toBe("error");
+    expect(res.details.error).toMatch(/structured workflow output is unsupported on opencode/i);
   });
 
   it.each(ALL_BACKENDS)("matches resume support, mechanism, and conditions for %s against adapter and resolveResume behavior", async (backend) => {
