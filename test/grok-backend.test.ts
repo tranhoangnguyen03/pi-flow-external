@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { installFakeCli } from "./helpers/fake-cli.ts";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
 import type { SubagentProfile, SubagentUsage } from "../src/types.ts";
 import {
@@ -252,8 +253,7 @@ describe("pi-subagent grok backend", () => {
     const runInfoPath = join(tempDir, "grok-run-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -289,9 +289,7 @@ console.log(JSON.stringify({
   },
   session_id: 'grok-test-session'
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const usageEvents: SubagentUsage[] = [];
     const backendEvents: unknown[] = [];
@@ -365,8 +363,7 @@ console.log(JSON.stringify({
     const runInfoPath = join(tempDir, "grok-resume-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 writeFileSync(${JSON.stringify(runInfoPath)}, JSON.stringify({ args: process.argv.slice(2) }));
@@ -380,9 +377,7 @@ console.log(JSON.stringify({
   usage: { input_tokens: 50, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   session_id: 'prior-grok-sess'
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnGrokSubagent({
       toolCallId: "call_grok_resume",
@@ -417,8 +412,7 @@ console.log(JSON.stringify({
     const runInfoPath = join(tempDir, "grok-structured-info.json");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -443,9 +437,7 @@ const doc = {
   }
 };
 console.log(JSON.stringify(doc, null, 2));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const schema = {
       type: "object",
@@ -496,16 +488,13 @@ console.log(JSON.stringify(doc, null, 2));
     const binDir = join(tempDir, "bin-grok-structured-error");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({
   stopReason: 'end_turn',
   structuredOutputError: 'schema validation failed: missing required property "decision"'
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const schema = {
       type: "object",
@@ -543,8 +532,7 @@ console.log(JSON.stringify({
     const promptPathFile = join(tempDir, "prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -557,9 +545,7 @@ console.log(JSON.stringify({
     content: [{ type: 'text', text: 'Partial analysis before unexpected exit.' }]
   }
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnGrokSubagent({
       toolCallId: "call_grok_no_term",
@@ -594,8 +580,7 @@ console.log(JSON.stringify({
     const binDir = join(tempDir, "bin-grok-terminal-fail");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({
   type: 'result',
@@ -605,9 +590,7 @@ console.log(JSON.stringify({
   stop_reason: 'refusal',
   result: ''
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnGrokSubagent({
       toolCallId: "call_grok_term_fail",
@@ -634,14 +617,11 @@ console.log(JSON.stringify({
     const binDir = join(tempDir, "bin-grok-nonzero-exit");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 process.stderr.write('grok: authentication token expired\\n');
 process.exit(2);
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnGrokSubagent({
       toolCallId: "call_grok_nonzero_exit",
@@ -671,8 +651,7 @@ process.exit(2);
     const promptPathFile = join(tempDir, "abort-prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 process.stdin.resume();
 const args = process.argv.slice(2);
@@ -689,9 +668,7 @@ setTimeout(() => {
     stop_reason: 'end_turn'
   }));
 }, 800);
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     let abortedChecks = 0;
     const signal = {
@@ -737,8 +714,7 @@ setTimeout(() => {
     const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
     mkdirSync(binDir, { recursive: true });
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -753,9 +729,7 @@ console.log(JSON.stringify({
   result: 'must not reach',
   stop_reason: 'end_turn'
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnGrokSubagent({
       toolCallId: "call_grok_oversize",
@@ -793,8 +767,7 @@ console.log(JSON.stringify({
       "---\ndescription: Works through Grok CLI.\nbackend: grok\nmodel: grok-4.6\nthinking: high\n---\n\nGrok worker prompt.",
     );
 
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const args = process.argv.slice(2);
@@ -822,9 +795,7 @@ console.log(JSON.stringify({
   total_cost_usd: 0.01,
   usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 }));
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -890,8 +861,7 @@ console.log(JSON.stringify({
     mkdirSync(binDir, { recursive: true });
 
     const invocationLogPath = join(tempDir, "grok-symlink-invocations.json");
-    const fakeGrokPath = join(binDir, "grok");
-    writeFileSync(fakeGrokPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "grok", `#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const invocations = existsSync(${JSON.stringify(invocationLogPath)})
@@ -905,9 +875,7 @@ process.stderr.write(
   "error: could not apply the 'read-only' sandbox profile; see the warning above for the cause. Refusing to start with its protections missing.\\n"
 );
 process.exit(1);
-`);
-    chmodSync(fakeGrokPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
