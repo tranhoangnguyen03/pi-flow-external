@@ -2,6 +2,17 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [5.6.0-external.0] - 2026-11-01
+
+### Added
+- `/external mode` toggles a session-scoped Orchestrator Mode that nudges the main Pi agent toward early, useful delegation. The state follows the active session branch across resume and tree navigation, with a visible status indicator when enabled.
+
+### Changed
+- Normal mode no longer injects Flow's coordinator prompt. Orchestrator mode injects only the chosen short instruction; detailed coordination guidance stays available through `pi-flow-orchestration` and `external_help` on demand.
+
+### Compatibility
+- `/external` and `/external config` retain their settings UI. Delegation tools, runtime behavior, permissions, approvals, global config, and existing saved workflows remain unchanged. Mode is off by default.
+
 ## [5.5.0-external.2] - 2026-10-27
 
 ### Fixed

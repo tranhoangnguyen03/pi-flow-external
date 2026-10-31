@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ORCHESTRATOR_MODE_ENTRY, isOrchestratorMode } from "../src/orchestrator-mode.ts";
 import { registerExternalCommand } from "../src/external-command.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
@@ -64,6 +66,52 @@ function failureResult(code: string, message: string) {
 }
 
 describe("/external command", () => {
+  it("toggles session mode without changing configuration or the existing config route", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-flow-mode-"));
+    try {
+      await withAgentDir(root, async () => {
+        const manager = SessionManager.inMemory(root);
+        const notices: string[] = [];
+        const status: Array<[string, string | undefined]> = [];
+        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+        const pi = {
+          exec: vi.fn(),
+          appendEntry: (kind: string, data: unknown) => manager.appendCustomEntry(kind, data),
+          registerCommand: (_name: string, definition: typeof command) => { command = definition; },
+        };
+        registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root) }) as never);
+        const ctx = {
+          cwd: root,
+          hasUI: true,
+          mode: "headless",
+          sessionManager: manager,
+          isProjectTrusted: () => false,
+          ui: {
+            notify: (message: string) => notices.push(message),
+            setStatus: (key: string, value: string | undefined) => status.push([key, value]),
+          },
+        };
+
+        expect(isOrchestratorMode(ctx)).toBe(false);
+        await command?.handler("mode", ctx);
+        expect(isOrchestratorMode(ctx)).toBe(true);
+        expect(notices.at(-1)).toBe("Orchestrator Mode enabled");
+        expect(status.at(-1)).toEqual(["pi-flow-mode", "pi-flow: orchestrator"]);
+
+        await command?.handler("mode", ctx);
+        expect(isOrchestratorMode(ctx)).toBe(false);
+        expect(notices.at(-1)).toBe("Orchestrator Mode disabled");
+        expect(status.at(-1)).toEqual(["pi-flow-mode", undefined]);
+        expect(manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === ORCHESTRATOR_MODE_ENTRY)).toHaveLength(2);
+
+        await command?.handler("config text", ctx);
+        expect(notices.at(-1)).toContain("defaultHarness:");
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("registers the new surface, drops the old profile commands, and routes overview without model turns", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-"));
     try {
@@ -81,7 +129,7 @@ describe("/external command", () => {
 
         const verbs = (group: string, list: string[]) => list.map((verb) => `config ${group} ${verb}`);
         expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-          "doctor", "config", "config text", "config edit", "config convert",
+          "doctor", "mode", "config", "config text", "config edit", "config convert",
           ...verbs("harness", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "default", "test", "assist"]),
           ...verbs("role", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "assist"]),
           "[danger]purge-old-files", "workflows", "runs", "runs summary", "runs --prune", "help",

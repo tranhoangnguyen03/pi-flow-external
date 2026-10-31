@@ -132,6 +132,14 @@ When setting configuration via the CLI, flags map to settings schema attributes 
 
 ---
 
+## Orchestrator Mode
+
+`/external mode` toggles between **Normal** (default) and **Orchestrator** for the active session. Normal adds no Flow system-prompt instructions. Orchestrator adds a short, proactive delegation nudge; its detailed methods remain in the installed `pi-flow-orchestration` skill and `external_help` on demand.
+
+The choice is stored in the session tree, follows the active branch after resume or navigation, and appears as `pi-flow: orchestrator` in the status bar when enabled. It does not change global/project settings, registered tools, permissions, or user approvals. `/external` and `/external config` keep opening the same settings window.
+
+---
+
 ## Full Command Reference
 
 ### Harness Management
@@ -170,7 +178,8 @@ When setting configuration via the CLI, flags map to settings schema attributes 
 
 | Command | Purpose |
 |---|---|
-| `/external` | Open interactive guided configuration window. |
+| `/external` and `/external config` | Open interactive guided configuration window. |
+| `/external mode` | Toggle the active session’s orchestrator prompt on/off. |
 | `/external config text` | Print effective configuration in any environment. |
 | `/external config edit` | Open `settings.json` in `$EDITOR` with validation. |
 | `/external config convert` | Preview and execute migration to version 5. |
