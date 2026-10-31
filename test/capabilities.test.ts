@@ -322,112 +322,52 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     }
   });
 
-  it.each(ALL_BACKENDS)("matches cost reporting kind for %s against each backend usage converter", (backend) => {
-    const cost = BACKEND_CAPABILITIES[backend].cost;
-    switch (backend) {
-      case "claude": {
-        expect(cost.kind).toBe("native");
-        const tokens = { inputTokens: 100, cacheReadInputTokens: 20, cacheCreationInputTokens: 10, outputTokens: 50 };
-        const known = claudeUsageToSubagentUsage(tokens, 0.05);
-        expect(known).toMatchObject({ cost: 0.05, costKnown: true, costEstimated: false });
-        const unknown = claudeUsageToSubagentUsage(tokens, undefined);
-        expect(unknown).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "grok": {
-        expect(cost.kind).toBe("native");
-        const tokens = { inputTokens: 100, cacheReadInputTokens: 20, cacheCreationInputTokens: 10, outputTokens: 50 };
-        const known = grokUsageToSubagentUsage(tokens, 0.05);
-        expect(known).toMatchObject({ cost: 0.05, costKnown: true, costEstimated: false });
-        const unknown = grokUsageToSubagentUsage(tokens, undefined);
-        expect(unknown).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "codex": {
-        expect(cost.kind).toBe("estimated");
-        const tokens = { inputTokens: 1_000, cachedInputTokens: 200, outputTokens: 500, reasoningOutputTokens: 100 };
-        const mapped = codexUsageToSubagentUsage("gpt-5.4", tokens);
-        expect(mapped.cost).toBeGreaterThan(0);
-        expect(mapped.costKnown).toBe(true);
-        expect(mapped.costEstimated).toBe(true);
-        const unmapped = codexUsageToSubagentUsage("unmapped-custom-model", tokens);
-        expect(unmapped).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "opencode": {
-        expect(cost.kind).toBe("partial");
-        const completeExport = {
-          info: { id: "s1", outcome: "succeeded" },
-          messages: [
-            { id: "u1", type: "user", text: "prompt" },
-            {
-              id: "a1",
-              type: "assistant",
-              finish: "stop",
-              time: { completed: 1 },
-              tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
-              cost: 0.01,
-              content: [{ type: "text", text: "done" }],
-            },
-            { id: "i1", type: "idle", outcome: "succeeded" },
-          ],
-        };
-        const complete = verifyOpencodeTurn(completeExport, { sessionId: "s1", prompt: "prompt" });
-        expect(complete.usage).toMatchObject({ cost: 0.01, costKnown: true, costEstimated: false });
-
-        const subagentExport = {
-          ...completeExport,
-          messages: [
-            completeExport.messages[0],
-            {
-              ...completeExport.messages[1],
-              content: [
-                { type: "tool", name: "subagent" },
-                { type: "text", text: "done" },
-              ],
-            },
-            completeExport.messages[2],
-          ],
-        };
-        const withSubagent = verifyOpencodeTurn(subagentExport, { sessionId: "s1", prompt: "prompt" });
-        expect(withSubagent.usage.costKnown).toBe(false);
-        expect(withSubagent.usage.costEstimated).toBe(false);
-        break;
-      }
-      case "agy": {
-        expect(cost.kind).toBe("unknown");
-        const usage = agyUsageToSubagentUsage({
-          inputTokens: 100,
-          outputTokens: 50,
-          thinkingTokens: 10,
-          cacheReadTokens: 20,
-          totalTokens: 160,
-        });
-        expect(usage.cost).toBe(0);
-        expect(usage.costKnown).toBe(false);
-        expect(usage.costEstimated).not.toBe(true);
-        break;
-      }
-      case "muse": {
-        expect(cost.kind).toBe("unknown");
-        expect(cost.conditions[0]).toMatch(/costKnown is always false/);
-        break;
-      }
-      case "pi": {
-        expect(cost.kind).toBe("native");
-        const usage = getSubagentUsage({
-          getSessionStats: () => ({
-            tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 },
-            cost: 0.025,
-          }),
-          messages: [],
-        });
-        expect(usage.cost).toBe(0.025);
-        expect(usage.costKnown).toBe(true);
-        expect(usage.costEstimated).not.toBe(true);
-        break;
-      }
+  it("advertises accurate native, estimated and unknown costs", () => {
+    const kinds: Record<SubagentBackend, string> = {
+      claude: "native", grok: "native", pi: "native",
+      codex: "estimated", opencode: "partial", agy: "unknown", muse: "unknown",
+    };
+    for (const backend of ALL_BACKENDS) {
+      expect(BACKEND_CAPABILITIES[backend].cost.kind).toBe(kinds[backend]);
     }
+    const tokens = { inputTokens: 100, cacheReadInputTokens: 20, cacheCreationInputTokens: 10, outputTokens: 50 };
+    for (const converter of [claudeUsageToSubagentUsage, grokUsageToSubagentUsage]) {
+      expect(converter(tokens, 0.05)).toMatchObject({ cost: 0.05, costKnown: true, costEstimated: false });
+      expect(converter(tokens, undefined)).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
+    }
+    const codexTokens = { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 500, reasoningOutputTokens: 100 };
+    expect(codexUsageToSubagentUsage("gpt-5.4", codexTokens))
+      .toMatchObject({ costKnown: true, costEstimated: true });
+    expect(codexUsageToSubagentUsage("unmapped-custom-model", codexTokens))
+      .toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
+    expect(agyUsageToSubagentUsage({ inputTokens: 100, outputTokens: 50, thinkingTokens: 10,
+      cacheReadTokens: 20, totalTokens: 160 })).toMatchObject({ cost: 0, costKnown: false });
+    expect(BACKEND_CAPABILITIES.muse.cost.conditions[0]).toMatch(/costKnown is always false/);
+    expect(getSubagentUsage({
+      getSessionStats: () => ({ tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 }, cost: 0.025 }),
+      messages: [],
+    })).toMatchObject({ cost: 0.025, costKnown: true, costEstimated: false });
+  });
+
+  it("discloses OpenCode uncounted nested-subagent costs", () => {
+    const exported = {
+      info: { id: "s1", outcome: "succeeded" },
+      messages: [
+        { id: "u1", type: "user", text: "prompt" },
+        { id: "a1", type: "assistant", finish: "stop", time: { completed: 1 },
+          tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: 0.01, content: [{ type: "text", text: "done" }] },
+        { id: "i1", type: "idle", outcome: "succeeded" },
+      ],
+    };
+    expect(verifyOpencodeTurn(exported, { sessionId: "s1", prompt: "prompt" }).usage)
+      .toMatchObject({ cost: 0.01, costKnown: true, costEstimated: false });
+    expect(verifyOpencodeTurn({ ...exported, messages: [
+      exported.messages[0],
+      { ...exported.messages[1], content: [{ type: "tool", name: "subagent" }, { type: "text", text: "done" }] },
+      exported.messages[2],
+    ] }, { sessionId: "s1", prompt: "prompt" }).usage)
+      .toMatchObject({ costKnown: false, costEstimated: false });
   });
 
   it.each(ALL_BACKENDS)("matches retry policy for %s against the agy-only infrastructure classifier", (backend) => {
