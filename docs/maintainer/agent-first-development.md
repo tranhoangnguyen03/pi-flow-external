@@ -42,7 +42,7 @@ Do not introduce fixed agent counts, approval ceremonies, mandatory subagents, q
 
 Use three layers with distinct jobs:
 
-1. **Tool descriptions and optional mode prompt:** concise tool descriptions are always available. A short orchestration nudge is injected only when `/external mode` is enabled. Keep routine context cost low.
+1. **Tool descriptions and optional mode prompts:** concise tool descriptions are always available. `/external mode` cycles Normal (no injection), Orchestrator (delegate-first nudge), and Frontline Worker (execute-first nudge). Keep routine context cost low.
 2. **On-demand skill and examples:** help with nontrivial composition and real-world work shapes; easy to find, adapt and run. Never a compulsory prerequisite.
 3. **Technical help and contracts:** exact schemas, capability-specific behavior, advanced failure/replay details and version-specific boundaries, retrieved when needed.
 

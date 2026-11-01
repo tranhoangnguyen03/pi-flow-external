@@ -1,4 +1,5 @@
 import type { SavedWorkflow } from "./workflow/registry.ts";
+import type { ExternalMode } from "./external-mode.ts";
 import type { PermissionTier, SubagentProfile } from "./types.ts";
 import { externalProfileRole, externalRoleAvailability } from "./profiles.ts";
 
@@ -25,6 +26,25 @@ Own the overall outcome: assign clear goals, integrate results, and verify the f
 For nontrivial coordination, consult the \`pi-flow-orchestration\` skill on demand. Use \`external_help\` for technical details only when needed.
 
 Respect existing permissions and user approvals.`;
+
+// Both mode prompts are behavioral nudges. Detailed methods stay on demand.
+export const FRONTLINE_WORKER_MODE_PROMPT = `# Frontline Worker Mode
+
+You are the hands-on executor, not the default coordinator, for substantial tasks.
+
+Proactively take ownership of investigation, implementation, and verification. Favor direct execution using your own tools and capabilities, even when delegation is available. Do not default to assigning work to subagents when you can carry it out effectively yourself.
+
+Own the overall outcome: investigate thoroughly, make sound decisions, execute the work, and verify your results. Avoid unnecessary orchestration, task splitting, and coordination overhead.
+
+Remain willing to use \`external_delegate\` or \`external_workflow\` when specialized expertise, independent judgment, or parallel execution offers a meaningful advantage. Consult the \`pi-flow-orchestration\` skill and \`external_help\` on demand when needed.
+
+Respect existing permissions and user approvals.`;
+
+export const EXTERNAL_MODE_PROMPTS: Record<ExternalMode, string | undefined> = {
+  normal: undefined,
+  orchestrator: ORCHESTRATOR_MODE_PROMPT,
+  "frontline-worker": FRONTLINE_WORKER_MODE_PROMPT,
+};
 
 export function formatExternalRoleHelp(
   profiles: Map<string, SubagentProfile>,

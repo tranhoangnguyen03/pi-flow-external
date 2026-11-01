@@ -132,11 +132,19 @@ When setting configuration via the CLI, flags map to settings schema attributes 
 
 ---
 
-## Orchestrator Mode
+## Session work modes
 
-`/external mode` toggles between **Normal** (default) and **Orchestrator** for the active session. Normal adds no Flow system-prompt instructions. Orchestrator adds a short, proactive delegation nudge; its detailed methods remain in the installed `pi-flow-orchestration` skill and `external_help` on demand.
+`/external mode` cycles **Normal → Orchestrator → Frontline Worker → Normal**. Each press selects the next mode without asking for extra arguments.
 
-The choice is stored in the session tree, follows the active branch after resume or navigation, and appears as `pi-flow: orchestrator` in the status bar when enabled. It does not change global/project settings, registered tools, permissions, or user approvals. `/external` and `/external config` keep opening the same settings window.
+| Mode | Effect | Status |
+|---|---|---|
+| Normal (default) | No Flow system-prompt injection; use the agent's own judgment. | No mode indicator |
+| Orchestrator | Strong nudge to seek useful delegation and integrate results. | `pi-flow: orchestrator` |
+| Frontline Worker | Strong nudge to investigate, execute, and verify directly; delegate when useful. | `pi-flow: frontline-worker` |
+
+Only the short mode prompt is injected. The `pi-flow-orchestration` skill and `external_help` contain detailed methods on demand. These are execution preferences, not restrictions: both modes retain all existing tools, permissions, and user approval rules.
+
+The choice is stored in the session tree and restored from the active branch on resume or navigation. Existing two-state session entries remain readable: enabled restores Orchestrator; disabled restores Normal. No settings-file migration is needed. `/external` and `/external config` still open the settings window.
 
 ---
 
@@ -179,7 +187,7 @@ The choice is stored in the session tree, follows the active branch after resume
 | Command | Purpose |
 |---|---|
 | `/external` and `/external config` | Open interactive guided configuration window. |
-| `/external mode` | Toggle the active session’s orchestrator prompt on/off. |
+| `/external mode` | Cycle the active session through Normal, Orchestrator, and Frontline Worker. |
 | `/external config text` | Print effective configuration in any environment. |
 | `/external config edit` | Open `settings.json` in `$EDITOR` with validation. |
 | `/external config convert` | Preview and execute migration to version 5. |

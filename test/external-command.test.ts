@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { ORCHESTRATOR_MODE_ENTRY, isOrchestratorMode } from "../src/orchestrator-mode.ts";
+import { EXTERNAL_MODE_ENTRY, getExternalMode } from "../src/external-mode.ts";
 import { registerExternalCommand } from "../src/external-command.ts";
 import { createExternalRunsTool } from "../src/external-runs.ts";
 import { createRunRecord } from "../src/core/run-record.ts";
@@ -66,7 +66,7 @@ function failureResult(code: string, message: string) {
 }
 
 describe("/external command", () => {
-  it("toggles session mode without changing configuration or the existing config route", async () => {
+  it("cycles three session modes without changing settings or the existing config route", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-mode-"));
     try {
       await withAgentDir(root, async () => {
@@ -92,20 +92,26 @@ describe("/external command", () => {
           },
         };
 
-        expect(isOrchestratorMode(ctx)).toBe(false);
+        expect(getExternalMode(ctx)).toBe("normal");
         await command?.handler("mode", ctx);
-        expect(isOrchestratorMode(ctx)).toBe(true);
+        expect(getExternalMode(ctx)).toBe("orchestrator");
         expect(notices.at(-1)).toBe("Orchestrator Mode enabled");
         expect(status.at(-1)).toEqual(["pi-flow-mode", "pi-flow: orchestrator"]);
 
         await command?.handler("mode", ctx);
-        expect(isOrchestratorMode(ctx)).toBe(false);
-        expect(notices.at(-1)).toBe("Orchestrator Mode disabled");
+        expect(getExternalMode(ctx)).toBe("frontline-worker");
+        expect(notices.at(-1)).toBe("Frontline Worker Mode enabled");
+        expect(status.at(-1)).toEqual(["pi-flow-mode", "pi-flow: frontline-worker"]);
+
+        await command?.handler("mode", ctx);
+        expect(getExternalMode(ctx)).toBe("normal");
+        expect(notices.at(-1)).toBe("Normal Mode enabled");
         expect(status.at(-1)).toEqual(["pi-flow-mode", undefined]);
-        expect(manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === ORCHESTRATOR_MODE_ENTRY)).toHaveLength(2);
+        expect(manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === EXTERNAL_MODE_ENTRY)).toHaveLength(3);
 
         await command?.handler("config text", ctx);
         expect(notices.at(-1)).toContain("defaultHarness:");
+        expect(existsSync(join(root, "pi-flow-external", "settings.json"))).toBe(false);
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

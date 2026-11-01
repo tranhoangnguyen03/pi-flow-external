@@ -61,11 +61,17 @@ Check installed CLIs, authentication, and harness availability:
 
 Run `/external` to open the interactive settings window. You can set your default harness, choose default models or reasoning levels, and manage roles.
 
-### 3. Optional: encourage orchestration
+### 3. Choose a work mode (optional)
 
-Run `/external mode` to switch between **Normal** (default: no Flow system-prompt injection) and **Orchestrator** (a short prompt encouraging early, useful delegation). Run the same command again to switch back. The mode follows your session when you resume or navigate branches, and shows `pi-flow: orchestrator` in the status bar while enabled.
+Each `/external mode` cycles **Normal → Orchestrator → Frontline Worker → Normal**:
 
-The detailed [orchestration skill](skills/pi-flow-orchestration/SKILL.md) and `external_help` remain on demand. Switching mode does not change tools, access, or approvals. `/external` and `/external config` still open the settings window.
+- **Normal (default):** No Flow system-prompt injection; the agent chooses how to work.
+- **Orchestrator:** A short, strong nudge to seek useful delegation.
+- **Frontline Worker:** A short, strong nudge to investigate, build, and verify directly; delegation remains available when it adds value.
+
+These are preferences, not restrictions. The active mode follows your session across resume and branch navigation. The status bar shows `pi-flow: orchestrator` or `pi-flow: frontline-worker`; Normal shows no mode indicator.
+
+The detailed [orchestration skill](skills/pi-flow-orchestration/SKILL.md) and `external_help` remain on demand. Modes do not change tools, access, or approvals. `/external` and `/external config` still open the settings window.
 
 ### 4. Run your first delegation
 
@@ -200,7 +206,7 @@ return { arch, coverage };
 ## Configuration &amp; Commands
 
 - `/external` and `/external config`: Interactive settings window (TUI &amp; RPC) to set defaults, manage models, and edit roles.
-- `/external mode`: Toggle this session between normal and orchestrator behavior.
+- `/external mode`: Cycle this session through Normal, Orchestrator, and Frontline Worker.
 - `/external doctor`: Validates catalog and checks CLI / provider authentication.
 - `/external runs`: Interactive viewer for active and completed runs, outputs, and diagnostics.
 
@@ -210,7 +216,7 @@ return { arch, coverage };
 # Config UI and Menu
 /external config
 
-# Toggle the short orchestrator prompt for this session
+# Cycle Normal → Orchestrator → Frontline Worker → Normal
 /external mode
 ```
 
