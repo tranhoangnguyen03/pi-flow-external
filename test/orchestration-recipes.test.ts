@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
-import { buildCoordinatorPrompt, formatUsagePlaybook, usageWorkflowScript } from "../src/prompts.ts";
+import { ORCHESTRATOR_MODE_PROMPT, formatUsagePlaybook, usageWorkflowScript } from "../src/prompts.ts";
 import { ChildRunError, parseWorkflowScript, runWorkflow, type WorkflowAgentCall } from "../src/workflow/runtime.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -52,7 +52,7 @@ describe("orchestration skill package", () => {
   });
 
   it("keeps ambient guidance within its deliberate size budget", () => {
-    expect(buildCoordinatorPrompt(new Map(), "codex", ["codex"]).length).toBeLessThan(3200);
+    expect(ORCHESTRATOR_MODE_PROMPT.length).toBeLessThan(1000);
     const usage = formatUsagePlaybook();
     expect(usage).toContain(usageWorkflowScript());
     expect(usage.length).toBeLessThan(4500);

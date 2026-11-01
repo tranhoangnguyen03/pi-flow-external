@@ -20,6 +20,7 @@ Full detail, including per-backend permission mapping, Muse/OpenCode/Grok specif
 - **Truthful results.** Success needs a recognized terminal-success event, exit 0 and a non-empty result. Keep complete-failure and damaged-record evidence distinct. No automatic retries except agy's single disclosed infrastructure retry.
 - **Process control.** Every CLI child runs through `src/core/cli-process.ts`: abort kills the whole process tree; oversized output fails the run. Background work belongs to its session; shutdown cancels it.
 - **Disclosure.** Receipts and intent cards show the resolved tier, the real boundary (`unsandboxed external CLI` vs `Pi SDK child`), and any shared parent context. Before a workflow, tell the user its purpose, assignments, order, allowed changes and deliverable.
+- **Guidance layers.** Normal mode injects no Flow system prompt; `/external mode` toggles a short orchestrator nudge. `external_help` topics are the on-demand reference; do not copy the playbook or schemas into prompts.
 - **Workflows.** Trusted JavaScript with `meta.apiVersion: 1`; one frozen catalog snapshot per run; replay reuses only the longest unchanged successful prefix.
 - **Public contract v1.** Tool results use one `ok` envelope (`src/contract/`); expected errors are coded at the source and returned, not thrown.
 

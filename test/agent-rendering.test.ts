@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { buildCoordinatorPrompt } from "../src/prompts.ts";
+import { formatExternalRoleHelp } from "../src/prompts.ts";
 import type { SubagentToolDetails, WorkflowToolDetails } from "../src/types.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
@@ -290,8 +290,8 @@ describe("delegation transparency rendering", () => {
   });
 });
 
-describe("delegation roster lane disclosure", () => {
-  it("shows a compact role catalog with restricted and exact-only availability", () => {
+describe("on-demand delegation role help", () => {
+  it("describes role availability and exact-only profiles when requested", () => {
     const profiles = new Map([
       ["claude/implementer", {
         name: "claude/implementer", role: "implementer", harness: "claude", configVersion: 5 as const,
@@ -317,12 +317,13 @@ describe("delegation roster lane disclosure", () => {
         backend: "codex" as const,
       }],
     ]);
-    const roster = buildCoordinatorPrompt(profiles, "agy");
-    expect(roster).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
-    expect(roster).toContain("Roles: implementer (claude only), reviewer (agy, claude only).");
-    expect(roster).toContain("Exact-only profiles: specialist (codex).");
+    const roster = formatExternalRoleHelp(profiles, "agy");
+    expect(roster).toContain("External roles. Default harness: agy.");
+    expect(roster).toContain("- implementer (claude)");
+    expect(roster).toContain("- reviewer (agy, claude)");
+    expect(roster).toContain("- specialist (codex): Legacy exact profile.");
+    expect(roster).toContain("Code review through Antigravity.");
     expect(roster).not.toContain("native Pi subagents");
     expect(roster).not.toContain("advisory");
-    expect(roster).not.toContain("Code review through Antigravity.");
   });
 });

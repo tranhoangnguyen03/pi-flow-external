@@ -61,7 +61,13 @@ Check installed CLIs, authentication, and harness availability:
 
 Run `/external` to open the interactive settings window. You can set your default harness, choose default models or reasoning levels, and manage roles.
 
-### 3. Run your first delegation
+### 3. Optional: encourage orchestration
+
+Run `/external mode` to switch between **Normal** (default: no Flow system-prompt injection) and **Orchestrator** (a short prompt encouraging early, useful delegation). Run the same command again to switch back. The mode follows your session when you resume or navigate branches, and shows `pi-flow: orchestrator` in the status bar while enabled.
+
+The detailed [orchestration skill](skills/pi-flow-orchestration/SKILL.md) and `external_help` remain on demand. Switching mode does not change tools, access, or approvals. `/external` and `/external config` still open the settings window.
+
+### 4. Run your first delegation
 
 Ask Pi in chat:
 
@@ -193,7 +199,8 @@ return { arch, coverage };
 
 ## Configuration &amp; Commands
 
-- `/external`: Interactive settings window (TUI &amp; RPC) to set defaults, manage models, and edit roles.
+- `/external` and `/external config`: Interactive settings window (TUI &amp; RPC) to set defaults, manage models, and edit roles.
+- `/external mode`: Toggle this session between normal and orchestrator behavior.
 - `/external doctor`: Validates catalog and checks CLI / provider authentication.
 - `/external runs`: Interactive viewer for active and completed runs, outputs, and diagnostics.
 
@@ -203,6 +210,8 @@ return { arch, coverage };
 # Config UI and Menu
 /external config
 
+# Toggle the short orchestrator prompt for this session
+/external mode
 ```
 
 ---
