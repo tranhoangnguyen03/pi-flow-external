@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDefaultProfile, defaultProfileNames } from "../src/defaults.ts";
-import { compileProfile } from "../src/profile-creator.ts";
-import { filterExternalAgentProfiles, getSubagentProfiles, parseSubagentProfileContent, resolveExternalProfile } from "../src/profiles.ts";
+import { getSubagentProfiles } from "../src/profiles.ts";
 
 const tempDirs: string[] = [];
 
@@ -21,7 +20,7 @@ afterEach(() => {
 describe("built-in profiles with zero generated files", () => {
   it("exposes the six-role roster for all six CLIs without writing profiles or seed markers", () => {
     const agentDir = tempAgentDir();
-    const profiles = filterExternalAgentProfiles(getSubagentProfiles(agentDir));
+    const profiles = getSubagentProfiles(agentDir);
 
     expect(defaultProfileNames()).toHaveLength(36);
     expect(profiles.size).toBe(36);
@@ -47,46 +46,6 @@ describe("built-in profiles with zero generated files", () => {
     expect(existsSync(join(agentDir, "pi-flow-external"))).toBe(false);
   });
 
-  it("lets an exact override replace one builtin, keeps a disabled canonical identity unselectable, and ignores subagents files", () => {
-    const agentDir = tempAgentDir();
-    const overridesDir = join(agentDir, "pi-flow-external", "overrides");
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(overridesDir, { recursive: true });
-    mkdirSync(subagentsDir, { recursive: true });
-    const customExplorer = "---\ndescription: Mine.\nbackend: claude\n---\nMy custom explorer.\n";
-    writeFileSync(join(overridesDir, "claude-explorer.md"), customExplorer, "utf8");
-    writeFileSync(join(subagentsDir, "claude-worker.md"), "---\ndescription: Legacy disk worker.\nbackend: claude\n---\nShould not load.\n", "utf8");
-    writeFileSync(join(subagentsDir, "scout.md"), "---\ndescription: Native Pi scout.\nbackend: pi\n---\nNative work.\n", "utf8");
-    writeFileSync(
-      join(agentDir, "pi-flow-external", "settings.json"),
-      JSON.stringify({ version: 4, disabledProfiles: ["codex-worker"] }),
-      "utf8",
-    );
-
-    const profiles = getSubagentProfiles(agentDir, { legacyInspection: true });
-    expect(profiles.get("claude-explorer")?.systemPrompt).toBe("My custom explorer.");
-    expect(profiles.get("claude-explorer")?.description).toBe("Mine.");
-    expect(profiles.get("claude-worker")?.systemPrompt).not.toBe("Should not load.");
-    expect(profiles.get("claude-worker")?.description).toBe(buildDefaultProfile("claude-worker")?.description);
-    expect(profiles.has("scout")).toBe(false);
-    expect(profiles.get("codex-worker")?.configurationError).toMatch(/disabled/i);
-    expect(() => resolveExternalProfile(profiles, { role: "worker", harness: "codex" }, "agy")).toThrow(/disabled/i);
-    expect(() => resolveExternalProfile(profiles, { subagentType: "codex-worker" }, "agy")).toThrow(/disabled/i);
-    expect(resolveExternalProfile(profiles, { role: "worker", harness: "agy" }, "agy").name).toBe("agy-worker");
-
-    const external = filterExternalAgentProfiles(profiles);
-    expect(external.has("scout")).toBe(false);
-    expect(external.has("codex-worker")).toBe(true);
-    expect([...external.keys()].sort()).toEqual([...defaultProfileNames()].sort());
-
-    getSubagentProfiles(agentDir, { legacyInspection: true });
-    expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v1"))).toBe(false);
-    expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v2"))).toBe(false);
-    expect(existsSync(join(subagentsDir, ".pi-flow-defaults-seeded-v3"))).toBe(false);
-    expect(readdirSync(overridesDir)).toEqual(["claude-explorer.md"]);
-    expect(readdirSync(subagentsDir).sort()).toEqual(["claude-worker.md", "scout.md"]);
-  });
-
   it("blocks catalog reads when a legacy seed marker or harnesses.json is present and writes nothing", () => {
     const marked = tempAgentDir();
     const subagentsDir = join(marked, "subagents");
@@ -107,18 +66,5 @@ describe("built-in profiles with zero generated files", () => {
     expect(() => getSubagentProfiles(legacyRegistry)).toThrow(/convert/i);
     expect(existsSync(join(legacyRegistry, "pi-flow-external", "settings.json"))).toBe(false);
     expect(readdirSync(join(legacyRegistry, "pi-flow-external"))).toEqual(["harnesses.json"]);
-  });
-});
-
-describe("default profile content", () => {
-  it("compiles every default through the same validator as created profiles", () => {
-    for (const name of defaultProfileNames()) {
-      const profile = buildDefaultProfile(name)!;
-      const compiled = compileProfile(profile);
-      const parsed = parseSubagentProfileContent(compiled, name, { requireBody: true });
-      expect(parsed, `${name}:\n${compiled}`).toBeDefined();
-      expect(parsed?.backend).toBe(profile.backend);
-      expect(compiled).not.toContain("permission:");
-    }
   });
 });

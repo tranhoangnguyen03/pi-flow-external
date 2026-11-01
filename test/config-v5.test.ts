@@ -13,7 +13,8 @@ function fixture(settings: object, files: Record<string,string> = {}) {
  for(const [path,body] of Object.entries(files)){const target=join(base,path);mkdirSync(join(target,'..'),{recursive:true});writeFileSync(target,body);}
  return loadExternalCatalog(root);
 }
-function select(c:ReturnType<typeof loadExternalCatalog>,role:string,harness:string) {return resolveExternalProfile(c.profiles,{role,harness},'agy',{configuredHarnessNames:new Set([...EXTERNAL_HARNESSES,...c.harnessConfigs.keys()]),harnessConfigs:c.harnessConfigs,disabledHarnesses:c.disabledHarnesses});}
+function select(c:ReturnType<typeof loadExternalCatalog>,role:string,harness:string) {return resolveExternalProfile(c.profiles,{role,harness},'agy',{configuredHarnessNames:new Set([...EXTERNAL_HARNESSES,...c.harnessConfigs.keys()]),disabledHarnesses:c.disabledHarnesses});}
+const options=(c:ReturnType<typeof loadExternalCatalog>)=>({configuredHarnessNames:new Set([...EXTERNAL_HARNESSES,...c.harnessConfigs.keys()]),disabledHarnesses:c.disabledHarnesses});
 afterEach(()=>{for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 it('blocks v4 runtime until explicit conversion without rewriting it',()=>{
  const c=fixture({version:4});
@@ -33,12 +34,19 @@ it('combines harness role and binding gates and filters all blocked selections f
  expect(()=>select(c,'reviewer','claude')).toThrow(/role.*disabled/i);
  expect(()=>select(c,'worker','muse')).toThrow(/disabled/i);
  expect(externalRoleAvailability(c.profiles).has('reviewer')).toBe(false);
+ // A disabled default never substitutes another harness; exact records on it are blocked too.
+ const d=fixture({disabledHarnesses:['codex'],exact:{special:{harness:'codex',description:'Exact',instructions:'x'}}});
+ expect(()=>resolveExternalProfile(d.profiles,{role:'reviewer'},'codex',options(d))).toThrow(/Default harness "codex" is disabled/);
+ expect(()=>resolveExternalProfile(d.profiles,{subagentType:'special'},'agy',options(d))).toThrow(/disabled/);
+ expect(resolveExternalProfile(d.profiles,{role:'reviewer',harness:'claude'},'codex',options(d)).name).toBe('claude/reviewer');
 });
 it('keeps hyphenated binding pairs distinct and rejects ambiguous legacy selectors',()=>{
- const c=fixture({harnesses:{'pi-deep':{model:'p/one'},'pi-deep-seek':{model:'p/two'}}},{'roles/seek-reviewer.md':'---\ndescription: Alternate\n---\nAlternate','overrides/pi-deep/seek-reviewer.md':'---\ndescription: Specific\n---\nSpecific'});
+ const c=fixture({harnesses:{'pi-deep':{model:'p/one'},'pi-deep-seek':{model:'p/two'}}},{'roles/seek-reviewer.md':'---\ndescription: Alternate\n---\nAlternate','overrides/pi-deep/seek-reviewer.md':'---\ndescription: Specific\n---\nSpecific','overrides/codex/solo.md':'---\ndescription: Solo\n---\nSolo'});
  expect(select(c,'seek-reviewer','pi-deep')).toMatchObject({model:'p/one',systemPrompt:'Specific'});
  expect(select(c,'reviewer','pi-deep-seek')).toMatchObject({model:'p/two'});
- expect(()=>resolveExternalProfile(c.profiles,{subagentType:'pi-deep-seek-reviewer'},'agy',{harnessConfigs:c.harnessConfigs})).toThrow(/ambiguous/i);
+ // A harness-local role never falls back to another harness.
+ expect(()=>select(c,'solo','claude')).toThrow(/unavailable for harness "claude".*codex/);
+ expect(()=>resolveExternalProfile(c.profiles,{subagentType:'pi-deep-seek-reviewer'},'agy')).toThrow(/ambiguous/i);
 });
 it('preserves explicit exact selection and exclusions while keeping structured bindings independent',()=>{
  const c=fixture({disabledProfiles:['codex-reviewer'],exact:{'codex-reviewer':{harness:'claude',description:'Legacy',instructions:'legacy'}}});

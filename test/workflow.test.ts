@@ -287,11 +287,8 @@ describe("runWorkflow", () => {
   });
 
   it("resolves role/harness before workflow events and fingerprints", async () => {
-    const profile = (name: string, backend: "agy" | "codex"): SubagentProfile => ({ name, backend, description: name });
-    const profiles = new Map([
-      ["agy-reviewer", profile("agy-reviewer", "agy")],
-      ["codex-reviewer", profile("codex-reviewer", "codex")],
-    ]);
+    const profile = (backend: "agy" | "codex"): SubagentProfile => ({ name: `${backend}/reviewer`, role: "reviewer", harness: backend, backend, configVersion: 5, description: backend });
+    const profiles = new Map([["agy/reviewer", profile("agy")], ["codex/reviewer", profile("codex")]]);
     const resolveSubagentType = (selection: { role?: string; harness?: string; subagentType?: string }) =>
       resolveExternalProfile(profiles, selection, "agy").name;
     const firstEvents: any[] = [];
@@ -309,9 +306,9 @@ describe("runWorkflow", () => {
         firstEvents.push(event);
       },
     });
-    expect(first.result).toBe("agy-reviewer");
-    expect(queued).toEqual(["agy-reviewer"]);
-    expect(firstEvents[0]).toMatchObject({ subagentType: "agy-reviewer" });
+    expect(first.result).toBe("agy/reviewer");
+    expect(queued).toEqual(["agy/reviewer"]);
+    expect(firstEvents[0]).toMatchObject({ subagentType: "agy/reviewer" });
 
     const runAgent = vi.fn<WorkflowAgentRunner>();
     const replay = await runWorkflow(`${META}return await agent('review', { label: 'review', subagent_type: 'agy-reviewer' });`, {
@@ -322,7 +319,7 @@ describe("runWorkflow", () => {
       resolveSubagentType,
       resumeAgentResults: firstEvents.map(({ index, fingerprint, result }) => ({ index, fingerprint, result })),
     });
-    expect(replay.result).toBe("agy-reviewer");
+    expect(replay.result).toBe("agy/reviewer");
     expect(runAgent).not.toHaveBeenCalled();
 
     const override = await runWorkflow(`${META}return await agent('review', { role: 'reviewer', harness: 'codex' });`, {
@@ -332,7 +329,7 @@ describe("runWorkflow", () => {
       defaultSubagentType: null,
       resolveSubagentType,
     });
-    expect(override.result).toBe("codex-reviewer");
+    expect(override.result).toBe("codex/reviewer");
   });
 
   it("widens the fingerprint with the resolved descriptor so a model/thinking/body/tools change invalidates cache", async () => {
@@ -396,7 +393,7 @@ describe("runWorkflow", () => {
 
   it("fails the workflow before launch when role selection is invalid", async () => {
     const profiles = new Map<string, SubagentProfile>([
-      ["claude-security", { name: "claude-security", backend: "claude", description: "security" }],
+      ["claude/security", { name: "claude/security", role: "security", harness: "claude", backend: "claude", configVersion: 5, description: "security" }],
     ]);
     const runAgent = vi.fn<WorkflowAgentRunner>();
     await expect(runWorkflow(`${META}return await agent('review', { role: 'security' });`, {

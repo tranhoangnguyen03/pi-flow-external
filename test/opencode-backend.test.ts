@@ -147,23 +147,6 @@ describe("opencode backend", () => {
     expect(resolveExternalProfile(catalog.profiles, { role: "qa", harness: "opencode" }, "agy")).toMatchObject({ name: "opencode/qa", model: "openrouter/anthropic/claude", thinking: "max" });
   });
 
-  it("blocks a legacy v4 opencode override whose thinking has no model to be a variant of, or whose model lacks a provider (inspection only)", () => {
-    const overrides = join(agentDir, "pi-flow-external", "overrides");
-    mkdirSync(overrides, { recursive: true });
-    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 4 }));
-    writeFileSync(join(overrides, "opencode-reviewer.md"), "---\ndescription: Review\nbackend: opencode\nthinking: high\n---\nReview.");
-    writeFileSync(join(overrides, "opencode-planner.md"), "---\ndescription: Plan\nbackend: opencode\nmodel: sonnet\n---\nPlan.");
-    writeFileSync(join(overrides, "opencode-explorer.md"), "---\ndescription: Explore\nbackend: opencode\nmodel: openai/gpt-5#low\nthinking: high\n---\nExplore.");
-    writeFileSync(join(overrides, "opencode-qa.md"), "---\ndescription: QA\nbackend: opencode\nmodel: openrouter/anthropic/claude\nthinking: max\n---\nQA.");
-    expect(loadExternalCatalog(agentDir).blocked).toBe(true);
-    const catalog = loadExternalCatalog(agentDir, { legacyInspection: true });
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "reviewer", harness: "opencode" }, "agy")).toThrow(/without a model/);
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "planner", harness: "opencode" }, "agy")).toThrow(/provider\/model/);
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "explorer", harness: "opencode" }, "agy")).toThrow(/Keep one/);
-    expect(resolveExternalProfile(catalog.profiles, { role: "qa", harness: "opencode" }, "agy")).toMatchObject({ model: "openrouter/anthropic/claude", thinking: "max" });
-  });
-
-
   it("takes the result and usage from the verified export, never from streamed narration, and runs as the injected agent", async () => {
     const infoPath = installFake("success", `${STREAM}
 emit('tool_use', { part: part({ type: 'tool', tool: 'shell', state: { status: 'error', error: 'Permission denied: shell' } }) });

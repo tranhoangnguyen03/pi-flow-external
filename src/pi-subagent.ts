@@ -28,13 +28,10 @@ import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
   disabledHarnessMessage,
-  filterExternalAgentProfiles,
-  getSubagentProfiles,
   loadExternalCatalog,
   resolveExternalProfile,
   selectorHarness,
 } from "./profiles.ts";
-import { getConfiguredHarnessNames, loadHarnessConfigs } from "./harnesses.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
@@ -413,14 +410,6 @@ function createAgentTool(
       const allProfiles = catalog.profiles;
       const harnessConfigs = catalog.harnessConfigs;
       const configuredHarnessNames: ReadonlySet<string> = new Set([...EXTERNAL_HARNESSES, ...harnessConfigs.keys()]);
-      // Merge synthesized pi role profiles in, not just filter to on-disk
-      // ones: a legacy exact subagent_type selector only ever looks up the
-      // map directly (resolveExternalProfile's role+harness branch has its
-      // own inline synthesis fallback, but the subagent_type branch does
-      // not), so without this merge a synthesized role like
-      // "pi-deepseek-reviewer" could be reached via role+harness but not via
-      // subagent_type="pi-deepseek-reviewer", which is confusing and
-      // inconsistent for the parent agent driving delegation.
       const profiles = allProfiles;
       const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
       const defaultHarness = requestedDefault.harness;
@@ -439,7 +428,7 @@ function createAgentTool(
           role: params.role,
           harness: params.harness,
           subagentType: params.subagent_type,
-        }, defaultHarness, { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses });
+        }, defaultHarness, { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses });
       } catch (error) {
         if (!(error instanceof ExpectedFlowError)) throw error;
         const message = error.message;
@@ -676,7 +665,7 @@ function createAgentTool(
               subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
             },
             defaultHarness,
-            { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
+            { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses },
           );
         } catch {
           profile = undefined;

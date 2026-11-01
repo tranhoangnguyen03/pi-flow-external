@@ -39,10 +39,6 @@ export interface HarnessConfig {
   owner?: string;
 }
 
-export function harnessesPath(agentDir: string): string {
-  return externalSettingsPath(agentDir);
-}
-
 export interface LoadedHarnessConfigs {
   harnesses: Map<string, HarnessConfig>;
   diagnostics: string[];
@@ -65,10 +61,6 @@ export function parseHarnessEntry(name: string, value: unknown): HarnessConfig |
 export function loadHarnessConfigs(agentDir: string): LoadedHarnessConfigs {
   const loaded = loadExternalSettings(agentDir);
   return { harnesses: loaded.blocked ? new Map() : new Map(Object.entries(loaded.settings.harnesses ?? {})), diagnostics: loaded.diagnostics };
-}
-
-export function getConfiguredHarnessNames(agentDir: string): Set<string> {
-  return new Set(loadHarnessConfigs(agentDir).harnesses.keys());
 }
 
 export interface InstallHarnessConfigParams {
@@ -103,7 +95,7 @@ export async function installHarnessConfigWithSmokeTest(params: InstallHarnessCo
     throw new Error(`Unsupported Pi resource preset ${JSON.stringify(preset)}; expected one of: ${PI_RESOURCE_PRESETS.join(", ")}.`);
   }
 
-  const finalPath = harnessesPath(agentDir);
+  const finalPath = externalSettingsPath(agentDir);
   const loaded = loadExternalSettings(agentDir);
   if (loaded.blocked) throw new Error(loaded.diagnostics.join(" "));
   if (loadHarnessConfigs(agentDir).harnesses.has(name)) {

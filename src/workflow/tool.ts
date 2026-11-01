@@ -428,7 +428,7 @@ export function createWorkflowTool(
               profiles,
               selection,
               defaultHarness,
-              { configuredHarnessNames, harnessConfigs, disabledHarnesses: catalog.disabledHarnesses },
+              { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses },
             ).name;
           },
           describeSubagentType: (name) => descriptors.get(name),

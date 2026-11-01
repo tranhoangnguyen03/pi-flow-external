@@ -27,7 +27,7 @@ function fixture(settings: object | undefined, files: Record<string, string> = {
 const saved = (root: string) => JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8"));
 function select(root: string, role: string, harness: string) {
   const c = loadExternalCatalog(root);
-  return resolveExternalProfile(c.profiles, { role, harness }, "agy", { configuredHarnessNames: new Set([...EXTERNAL_HARNESSES, ...c.harnessConfigs.keys()]), harnessConfigs: c.harnessConfigs, disabledHarnesses: c.disabledHarnesses });
+  return resolveExternalProfile(c.profiles, { role, harness }, "agy", { configuredHarnessNames: new Set([...EXTERNAL_HARNESSES, ...c.harnessConfigs.keys()]), disabledHarnesses: c.disabledHarnesses });
 }
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) { try { chmodSync(join(root, "pi-flow-external", "overrides", "pi-x"), 0o700); } catch { /* absent */ } rmSync(root, { recursive: true, force: true }); } });
 

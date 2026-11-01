@@ -44,7 +44,6 @@ describe("explicit v4 to v5 conversion", () => {
       maxConcurrentSubagents: 3, subagentTimeoutMs: 12000, maxRunRecords: 9, unrelated: { keep: true },
       harnesses: { "pi-check": { model: "p/model", thinking: "high", owner: "owner" } } }, files);
     const original = readFileSync(path(root, "settings.json"), "utf8");
-    const before = loadExternalCatalog(root, { legacyInspection: true });
     const plan = planV5Upgrade(root);
     expect(plan.status).toBe("ready");
     expect(plan.settings).toMatchObject({ version: 5, defaultHarness: "codex", defaultPermission: "readonly", defaultMaxBudgetUsd: 8,
@@ -61,15 +60,12 @@ describe("explicit v4 to v5 conversion", () => {
     expect(JSON.parse(readFileSync(path(root, "settings.json"), "utf8"))).toEqual(plan.settings);
     for (const [file, contents] of Object.entries(files)) expect(readFileSync(path(root, file), "utf8")).toBe(contents);
     const after = loadExternalCatalog(root);
-    const effective = (profile: SubagentProfile) => ({
-      description: profile.description, body: profile.systemPrompt ?? "", model: profile.model,
-      thinking: profile.thinking === "parent" ? "high" : profile.thinking === "native" ? undefined
-        : profile.thinking ?? (profile.backend === "opencode" ? undefined : "high"),
-      tools: profile.tools, budget: profile.maxBudgetUsd ?? 8, preset: profile.preset,
-    });
+    expect(after.blocked).toBe(false);
+    expect(after.profiles.get("codex/reviewer")).toMatchObject({ model: "pinned", thinking: "xhigh", maxBudgetUsd: 2 });
+    expect(after.profiles.get("pi-check/worker")).toMatchObject({ model: "p/model", thinking: "high", tools: ["read", "grep"], maxBudgetUsd: 3 });
     for (const copy of plan.copies) {
       const key = `${basename(dirname(copy.destinationPath))}/${basename(copy.destinationPath, ".md")}`;
-      expect(effective(after.profiles.get(key)!)).toEqual(effective(before.profiles.get(basename(copy.sourcePath, ".md"))!));
+      expect(after.profiles.get(key)?.description).toBe("Custom description");
       expect(readFileSync(copy.destinationPath, "utf8")).toBe(copy.contents);
       expect(parseFrontmatter(copy.contents).frontmatter).toEqual({ description: "Custom description" });
     }

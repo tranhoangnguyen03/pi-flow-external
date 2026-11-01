@@ -4,7 +4,9 @@ import { dirname, join, resolve, relative, sep } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { CONFIG_NAME, cliHarness, objectRecord, executionProblems, reasoningLevels, type HarnessSettings, type ExactSettings, type BindingSettings } from "./config-v5.ts";
 import { planConfigUpgrade } from "./config-upgrade.ts";
-import { parseSubagentProfileContent, computeReconciledPiProfile, opencodeProfileProblem } from "./profiles.ts";
+import { parseSubagentProfileContent, opencodeProfileProblem } from "./profiles.ts";
+import type { HarnessConfig } from "./harnesses.ts";
+import type { SubagentProfile } from "./types.ts";
 import { externalSettingsPath, parseSettings, saveExternalSettings } from "./settings.ts";
 import { EXTERNAL_HARNESSES } from "./types.ts";
 
@@ -37,6 +39,16 @@ export interface V5UpgradeApplyResult extends Omit<V5UpgradePlan, "status"> {
 }
 
 function digest(bytes: string | Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
+/** A v4 Pi override inherits its registration's model/thinking; a differing pin is a conflict. */
+function reconcileV4PiProfile(profile: SubagentProfile, configs: ReadonlyMap<string, HarnessConfig>): { profile: SubagentProfile; conflict?: string } {
+  if (profile.backend !== "pi" || !profile.harness) return { profile };
+  const config = configs.get(profile.harness);
+  if (!config) return { profile, conflict: `Harness "${profile.harness}" is not registered.` };
+  for (const key of ["model", "thinking"] as const) {
+    if (profile[key] !== undefined && profile[key] !== config[key]) return { profile, conflict: `Profile "${profile.name}" pins ${key} "${profile[key]}", which conflicts with "${profile.harness}"'s registered ${key} "${config[key]}".` };
+  }
+  return { profile: { ...profile, model: config.model, thinking: config.thinking, preset: config.preset } };
+}
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
 function directories(root: string, directory: string): void {
@@ -149,7 +161,7 @@ function plan(root: string): V5UpgradePlan {
     const harness = profile.backend === "pi" ? profile.harness : profile.backend;
     if (!harness || !harnesses[harness]) throw new Error(`Pi harness ${harness ?? "(missing)"} in ${sourcePath} is not registered.`);
     if (cliHarness(harness) && profile.harness !== undefined && profile.harness !== harness) throw new Error(`Override ${sourcePath} declares a mismatched execution harness ${profile.harness}.`);
-    const reconciled = computeReconciledPiProfile(profile, piConfigs);
+    const reconciled = reconcileV4PiProfile(profile, piConfigs);
     if (reconciled.conflict) throw new Error(`${sourcePath}: ${reconciled.conflict}`);
     const opencodeProblem = opencodeProfileProblem(profile);
     if (opencodeProblem) throw new Error(opencodeProblem);
