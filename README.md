@@ -209,11 +209,13 @@ return { arch, coverage };
 
 ## Upgrading from v4
 
-Settings use version 5. If upgrading from an older version:
+Settings use version 5. If upgrading from version 4:
 
 1. Run `/external` and choose **Preview format update…**, or run `/external config convert`.
 2. Existing configurations, overrides, and disabled states are preserved.
-3. See [Migration Guide](docs/migration-v4-to-v5.md) for full details and optional file purging.
+3. See [Migration Guide](docs/migration-v4-to-v5.md) for full details.
+
+Installations older than settings version 4 are blocked without changes. Convert them with `@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2` first, then upgrade (steps in the [Migration Guide](docs/migration-v4-to-v5.md#upgrading-from-pre-v4-versions)).
 
 ### Upgrading from the `Agent` tool
 

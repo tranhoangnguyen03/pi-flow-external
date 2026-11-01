@@ -8,7 +8,7 @@ Solutions to common issues, authentication questions, and environment quirks whe
 
 ### 1. "Settings need attention" or Delegation Blocked
 - **Cause:** Settings file is using an older version format (v1–v4) or has JSON syntax errors.
-- **Fix:** If older version, run `/external` and choose **Preview format update…**, or run `/external config convert`. If malformed JSON, edit and repair `settings.json` via `/external config edit`.
+- **Fix:** For version 4, run `/external` and choose **Preview format update…**, or run `/external config convert`. For v1–v3 (or leftover `harnesses.json`), follow the [pre-v4 steps](migration-v4-to-v5.md#upgrading-from-pre-v4-versions); this release leaves those files untouched. If malformed JSON, edit and repair `settings.json` via `/external config edit`.
 
 ### 2. Role Unavailable on Selected Harness
 - **Cause:** The requested role is disabled or not configured on that specific harness.

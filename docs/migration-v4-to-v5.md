@@ -31,11 +31,17 @@ If you have an existing v4 installation, the extension blocks delegation until s
 5. Confirm the conversion. Settings version 5 is activated immediately.
 
 ### Upgrading from Pre-v4 Versions
-This release converts only settings version 4. If your installation is v1, v2, or v3 (or still has `harnesses.json`, seed markers, or extension profiles under `subagents/`), delegation stays blocked with a message naming the last converting release:
+This release converts only settings version 4. If your installation is v1, v2, or v3 (or still has `harnesses.json`, seed markers, or extension profiles under `subagents/`), delegation stays blocked with a message naming the last converting release. This release does not read, convert, or modify those files.
 
-1. Install `@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2`.
-2. Run `/external config convert` until settings are version 5 (pre-v4 → v4, then v4 → v5).
-3. Upgrade to the current release.
+1. Install the last converting release:
+   ```bash
+   pi install npm:@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2
+   ```
+2. Start Pi and run `/external config convert`. The first run converts pre-v4 files to v4 and keeps the originals; run it again to preview and apply v4 → v5.
+3. Upgrade to the current release:
+   ```bash
+   pi install npm:@tranhoangnguyen0310/pi-flow-external
+   ```
 
 Legacy files left behind after conversion are ignored. Delete them yourself if you want; the extension no longer ships a purge command.
 

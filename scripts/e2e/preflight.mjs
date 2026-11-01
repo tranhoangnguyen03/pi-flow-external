@@ -8,15 +8,15 @@ function settingsPathFor(agentDir) {
 }
 
 /**
- * Read settings without writing. Version 1–3 and a leftover harnesses.json
- * are an actionable conversion, never something this script rewrites.
+ * Read settings without writing. Version 4 needs /external config convert;
+ * pre-v4 files (or a leftover harnesses.json) need the last converting release.
  */
 export function readSettingsFile(agentDir) {
   const settingsPath = settingsPathFor(agentDir);
   const legacyHarnessesPath = path.join(agentDir, "pi-flow-external", "harnesses.json");
   if (!existsSync(settingsPath)) {
     if (existsSync(legacyHarnessesPath)) {
-      throw new Error(`Legacy configuration found at ${legacyHarnessesPath}. Run /external config convert to upgrade it to settings.json version 5. This script will not modify ${agentDir}.`);
+      throw new Error(`Pre-v4 configuration found at ${legacyHarnessesPath}. Convert it with @tranhoangnguyen0310/pi-flow-external@5.5.0-external.2 first. This script will not modify ${agentDir}.`);
     }
     return { settingsPath, missing: true };
   }
@@ -31,7 +31,8 @@ export function readSettingsFile(agentDir) {
   }
   // Conversion is the user's explicit, reviewed action; this script never converts a real installation.
   if (parsed.version !== 5) {
-    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 5. Run /external config convert to upgrade this installation. This script will not modify it.`);
+    const how = [1, 2, 3].includes(parsed.version) ? "Convert them with @tranhoangnguyen0310/pi-flow-external@5.5.0-external.2 first" : "Run /external config convert to upgrade this installation";
+    throw new Error(`Settings at ${settingsPath} are version ${JSON.stringify(parsed.version)}, not 5. ${how}. This script will not modify it.`);
   }
   return { settingsPath, missing: false, parsed };
 }

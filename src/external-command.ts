@@ -60,7 +60,7 @@ const COMMANDS = [
   { value: "config", description: "Open guided settings (text without UI)" },
   { value: "config text", description: "Show configuration details as text in any mode" },
   { value: "config edit", description: "Edit and validate settings, including named Pi harnesses, with the standard editor" },
-  { value: "config convert", description: "Preview and confirm conversion to v5 (pre-v4 installs convert in two steps)" },
+  { value: "config convert", description: "Preview and confirm conversion of version 4 settings to v5" },
   { value: "config harness list", description: "List harnesses with model, effort, enabled, and default state" },
   { value: "config harness inspect", description: "Show one harness's effective defaults, exceptions, and gates" },
   { value: "config harness create", description: "Register a named Pi harness: create pi-NAME --model provider/model" },
@@ -138,6 +138,7 @@ const MOVED_COMMANDS = [
   ["role create", "config role create NAME, or config role assist"],
   ["role inspect <role> [harness]", "config role inspect <role> [--harness NAME]"],
   ["role override <role> <harness>", "config role edit <role> --harness NAME"],
+  ["[danger]purge-old-files", "(removed) legacy files are ignored; delete them manually if wanted"],
 ] as const;
 
 function helpText(): string {
@@ -840,9 +841,9 @@ async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionComma
     return;
   }
   // Explicit editor repair: a guided full replacement may overwrite a
-  // malformed or v4-invalid current file. Valid pre-v4 installations and
-  // future versions are still rejected — those go through
-  // /external config convert, not the editor.
+  // malformed or invalid current file. Valid version 4 files go through
+  // /external config convert; pre-v4 and future versions are refused, never
+  // rewritten here.
   const save = options.saveSettings ?? saveExternalSettings;
   try {
     const path = save(agentDir, record, { repair: true });
