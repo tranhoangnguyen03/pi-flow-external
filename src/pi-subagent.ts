@@ -20,8 +20,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
-import { AGENT_PROMPT_SNIPPET, ORCHESTRATOR_MODE_PROMPT } from "./prompts.ts";
-import { isOrchestratorMode, updateOrchestratorModeStatus, ORCHESTRATOR_MODE_STATUS_KEY } from "./orchestrator-mode.ts";
+import { AGENT_PROMPT_SNIPPET, EXTERNAL_MODE_PROMPTS } from "./prompts.ts";
+import { getExternalMode, updateExternalModeStatus, EXTERNAL_MODE_STATUS_KEY } from "./external-mode.ts";
 import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
@@ -993,7 +993,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("session_tree", (_event, ctx) => {
       restoreRenamedLaunchers(pi, ctx);
-      updateOrchestratorModeStatus(ctx);
+      updateExternalModeStatus(ctx);
     });
     pi.on("session_start", (_event, ctx) => {
       restoreRenamedLaunchers(pi, ctx);
@@ -1012,7 +1012,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         ctx.ui.setStatus(STATUS_KEY, undefined);
         ctx.ui.setStatus(BG_STATUS_KEY, undefined);
       }
-      updateOrchestratorModeStatus(ctx);
+      updateExternalModeStatus(ctx);
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
@@ -1028,7 +1028,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const cleanup = await rootState.registry.shutdownSession(sessionId);
       if (ctx.hasUI) {
         ctx.ui.setStatus(BG_STATUS_KEY, undefined);
-        ctx.ui.setStatus(ORCHESTRATOR_MODE_STATUS_KEY, undefined);
+        ctx.ui.setStatus(EXTERNAL_MODE_STATUS_KEY, undefined);
       }
       if (cleanup.pending.length && ctx.hasUI) {
         const shown = cleanup.pending.slice(0, 10);
@@ -1038,9 +1038,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("before_agent_start", (event, ctx) => {
       if (!activeSessionId) rememberSessionContext(ctx);
-      if (!isOrchestratorMode(ctx)) return;
+      const modePrompt = EXTERNAL_MODE_PROMPTS[getExternalMode(ctx)];
+      if (!modePrompt) return;
       if (!pi.getAllTools().some((tool) => tool.name === EXTERNAL_DELEGATE_TOOL)) return;
-      return { systemPrompt: `${event.systemPrompt}\n\n${ORCHESTRATOR_MODE_PROMPT}` };
+      return { systemPrompt: `${event.systemPrompt}\n\n${modePrompt}` };
     });
   };
 }

@@ -1,5 +1,5 @@
 import { openConfigHub } from './config-hub.ts';
-import { ORCHESTRATOR_MODE_ENTRY, isOrchestratorMode, updateOrchestratorModeStatus } from './orchestrator-mode.ts';
+import { EXTERNAL_MODE_ENTRY, externalModeLabel, getExternalMode, nextExternalMode, updateExternalModeStatus } from './external-mode.ts';
 import { planV5Upgrade, applyV5Upgrade } from './config-v5-upgrade.ts';
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
@@ -58,7 +58,7 @@ import { diagnoseCli, usageLimitHistory } from "./doctor.ts";
 
 const COMMANDS = [
   { value: "doctor", description: "Validate config/catalog and report runtime readiness" },
-  { value: "mode", description: "Toggle this session between normal and orchestrator mode" },
+  { value: "mode", description: "Cycle this session: normal → orchestrator → frontline-worker" },
   { value: "config", description: "Open guided settings (text without UI)" },
   { value: "config text", description: "Show configuration details as text in any mode" },
   { value: "config edit", description: "Edit and validate settings, including named Pi harnesses, with the standard editor" },
@@ -1163,10 +1163,10 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       } else if (action === "doctor") {
         ctx.ui.notify(await doctorText(pi, options, ctx), "info");
       } else if (action === "mode") {
-        const enabled = !isOrchestratorMode(ctx);
-        pi.appendEntry(ORCHESTRATOR_MODE_ENTRY, { enabled });
-        updateOrchestratorModeStatus(ctx);
-        ctx.ui.notify(`Orchestrator Mode ${enabled ? "enabled" : "disabled"}`, "info");
+        const mode = nextExternalMode(getExternalMode(ctx));
+        pi.appendEntry(EXTERNAL_MODE_ENTRY, { mode });
+        updateExternalModeStatus(ctx);
+        ctx.ui.notify(`${externalModeLabel(mode)} Mode enabled`, "info");
       } else if (action === "config" || action === 'config text') {
         const config = configText(options, ctx);
         ctx.ui.notify(config.text, config.warn ? "warning" : "info");

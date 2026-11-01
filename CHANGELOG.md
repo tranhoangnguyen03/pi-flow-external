@@ -2,6 +2,18 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.1.0-external.0] - 2026-11-01
+
+### Added
+- Frontline Worker mode: a short, opt-in instruction nudges the parent agent to investigate, implement, and verify work directly while preserving selective delegation.
+
+### Changed
+- `/external mode` now cycles Normal → Orchestrator → Frontline Worker → Normal. The second press selects Frontline Worker instead of turning Orchestrator off; the third returns to Normal.
+- Use a three-state session entry while continuing to read old enabled/disabled entries. Resumes and session-tree navigation keep the active branch's mode. The status bar names either active nudge.
+
+### Compatibility
+- Normal still injects no Flow system prompt. The previously approved Orchestrator prompt is unchanged; detailed guidance remains on demand. `/external` and `/external config`, tools, permissions, workflow behavior, and approval rules remain unchanged. No settings migration is needed.
+
 ## [6.0.0-external.0] - 2026-11-01
 
 ### Breaking
