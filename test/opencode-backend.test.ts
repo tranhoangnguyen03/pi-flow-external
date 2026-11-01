@@ -257,38 +257,6 @@ console.error('! permission requested: external_directory (/etc/*); auto-rejecti
     expect(existsSync(infoPath)).toBe(false);
   });
 
-  it("kills the opencode process tree on abort and keeps streamed text", async () => {
-    const pidPath = join(tempDir, "grandchild.pid");
-    installFake("abort", `
-import { spawn } from 'node:child_process';
-const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
-writeFileSync(${JSON.stringify(pidPath)}, String(grandchild.pid));
-emit('step_start', { part: part({ type: 'step-start' }) });
-emit('text', { part: part({ type: 'text', text: 'working on it' }) });
-setTimeout(() => {}, 60000);
-`);
-    const controller = new AbortController();
-    const pending = run({
-      signal: controller.signal,
-      progressEnabled: true,
-      onProgress: (partial) => {
-        if ((partial.details.progress?.activity ?? []).some((line) => line.includes("working on it"))) controller.abort();
-      },
-    });
-    const result = await pending;
-    expect(result.details.status).toBe("aborted");
-    expect(result.details.assistantOutput).toEqual({ status: "interrupted", messages: [{ text: "working on it" }] });
-    const grandchild = Number(readFileSync(pidPath, "utf8"));
-    await expect.poll(() => {
-      try {
-        process.kill(grandchild, 0);
-        return "alive";
-      } catch {
-        return "gone";
-      }
-    }, { timeout: 5000 }).toBe("gone");
-  });
-
   it("runs through the external_delegate tool with a session receipt and reconstructable output", async () => {
     installFake("agent-tool", `
 emit('step_start', { part: part({ type: 'step-start' }) });

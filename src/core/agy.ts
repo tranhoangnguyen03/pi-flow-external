@@ -1,15 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { assistantOutput, createProgressEmitter, formatInterruptedOutputPreview, textResult, type AgentToolResult } from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
-import { abortChildTree } from "./process-tree.ts";
+import { runCliProcess } from "./cli-process.ts";
 
 const AGY_COMMAND = "agy";
 
@@ -285,15 +279,11 @@ export async function spawnAgySubagent(params: {
     executionStartedAt: params.executionStartedAt,
   });
   const progress = emitter.progress;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let terminalResult: AgyTerminalResult | undefined;
   const assistantMessages: Array<{ id?: string; text: string }> = [];
   let conversationId: string | undefined;
   let protocolError: string | undefined;
-  let oversizeError: string | undefined;
   let sawTerminalEvent = false;
-  let child: ChildProcess | undefined;
-  let abortHandler: (() => void) | undefined;
 
   const handleEvent = (event: Record<string, unknown>) => {
     try {
@@ -355,91 +345,33 @@ export async function spawnAgySubagent(params: {
     if (params.signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
     }
-    const proc = spawn(AGY_COMMAND, buildAgyArgs({
-      profile: params.profile,
-      thinkingLevel: params.thinkingLevel,
-      outputSchema: params.outputSchema,
-      permission: params.permission,
-      resumeConversationId: params.resumeConversationId,
-      timeoutMs: params.timeoutMs,
-    }), {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-    proc.once("spawn", () => {
-      if (progress) progress.processStartedAt = Date.now();
-      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
-    });
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("agy stdin/stdout/stderr pipes were not available");
-    }
-    abortHandler = () => abortChildTree(proc);
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChildTree(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // If agy exits before reading stdin, the process close/error path below
-      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
-    });
-    proc.stdin.end(`${JSON.stringify({ event: "user", message: { content: taskPrompt } })}\n`);
-    let stdoutBuffer = "";
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += String(chunk);
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `agy emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChildTree(proc);
-        return;
-      }
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-        const event = parseAgyJsonLine(line);
-        if (!event) {
-          protocolError ??= "agy emitted invalid stream-json output";
-          continue;
-        }
-        handleEvent(event);
-      }
-    });
-    proc.stderr.on("data", (chunk) => stderrBuffer.append(String(chunk)));
-
     emitter.emit();
     emitter.startHeartbeat();
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseAgyJsonLine(stdoutBuffer);
-          if (event) {
-            handleEvent(event);
-          } else {
-            protocolError ??= "agy emitted invalid stream-json output";
-          }
-        }
-        resolve({ code, signal });
-      });
+    const closeResult = await runCliProcess({
+      label: "agy",
+      command: AGY_COMMAND,
+      args: buildAgyArgs({
+        profile: params.profile,
+        thinkingLevel: params.thinkingLevel,
+        outputSchema: params.outputSchema,
+        permission: params.permission,
+        resumeConversationId: params.resumeConversationId,
+        timeoutMs: params.timeoutMs,
+      }),
+      cwd: params.ctx.cwd,
+      stdin: `${JSON.stringify({ event: "user", message: { content: taskPrompt } })}\n`,
+      signal: params.signal,
+      onSpawn: (pid) => {
+        if (progress) progress.processStartedAt = Date.now();
+        params.onProcessStart?.(pid);
+      },
+      onLine: (line) => {
+        if (!line.trim()) return;
+        const event = parseAgyJsonLine(line);
+        if (event) handleEvent(event);
+        else protocolError ??= "agy emitted invalid stream-json output";
+      },
     });
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
     if (protocolError) {
       throw new Error(protocolError);
     }
@@ -447,7 +379,7 @@ export async function spawnAgySubagent(params: {
       ? ` (exit code ${closeResult.code}${closeResult.signal ? `, signal ${closeResult.signal}` : ""})`
       : "";
     if (!terminalResult) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       const detail = agyFlagErrorHint(stderr) ?? (stderr ? stderr : undefined);
       throw new Error(`agy exited without a terminal result event${exitSuffix}${detail ? `: ${detail}` : ""}`);
     }
@@ -460,7 +392,7 @@ export async function spawnAgySubagent(params: {
       throw new Error(`agy failed with status ${terminalStatus}${terminalResult.error?.trim() ? `: ${terminalResult.error.trim()}` : ""}${exitSuffix}`);
     }
     if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       throw new Error(`agy exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
     }
     const result = textFromAgyResult(terminalResult)?.trim();
@@ -489,7 +421,6 @@ export async function spawnAgySubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const candidate = terminalResult ? textFromAgyResult(terminalResult)?.trim() : undefined;
@@ -517,6 +448,5 @@ export async function spawnAgySubagent(params: {
     });
   } finally {
     emitter.stop();
-    if (abortHandler) params.signal?.removeEventListener("abort", abortHandler);
   }
 }

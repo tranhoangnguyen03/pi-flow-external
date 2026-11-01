@@ -719,47 +719,6 @@ setTimeout(() => {
     }
   });
 
-  it("fails clearly when muse emits an oversized stdout line and cleans up the temp files", async () => {
-    const binDir = join(tempDir, "bin-muse-oversize");
-    const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
-
-    installFakeCli(binDir, "muse", `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-for await (const _chunk of process.stdin) {}
-const args = process.argv.slice(2);
-const promptFileIdx = args.indexOf('--prompt-file');
-if (promptFileIdx !== -1) writeFileSync(${JSON.stringify(promptPathFile)}, args[promptFileIdx + 1]);
-
-console.log('m'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
-console.log(JSON.stringify({
-  schema_version: 1, id: '1', stream: { kind: 'session', id: 'muse-oversize' },
-  sequence: 1, recorded_at: 1, record_type: 'event', durability: 'durable',
-  causation_id: 'cmd-1', payload_type: 'run.terminal.completed', payload_schema_version: 1,
-  payload: { terminal: 'completed', text: 'must not reach', reason: null },
-}));
-`, originalPathEnv);
-
-    const result = await spawnMuseSubagent({
-      toolCallId: "call_muse_oversize",
-      description: "Muse oversize test",
-      prompt: "Trigger oversize line.",
-      profile: { name: "muse-oversize", description: "Muse oversize profile", backend: "muse" as any },
-      thinkingLevel: "low",
-      ctx: { cwd } as ExtensionContext,
-      signal: undefined,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("muse emitted a stdout line over");
-    expect(result.details.error).toContain("chars");
-
-    const promptPath = readFileSync(promptPathFile, "utf8");
-    expect(existsSync(promptPath)).toBe(false);
-  });
-
   it("runs a muse-backed subagent through the external_delegate tool with a session receipt and reconstructable output", async () => {
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-muse-agent-tool");

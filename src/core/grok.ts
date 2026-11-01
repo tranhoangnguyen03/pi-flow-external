@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,14 +9,9 @@ import {
   textResult,
   type AgentToolResult,
 } from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
-import { abortChildTree } from "./process-tree.ts";
+import { runCliProcess } from "./cli-process.ts";
 
 const GROK_COMMAND = "grok";
 
@@ -389,16 +383,11 @@ export async function spawnGrokSubagent(params: {
   let resultText = "";
   const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
   let eventError: string | undefined;
-  let oversizeError: string | undefined;
-  let child: ChildProcess | undefined;
   let promptFile: Awaited<ReturnType<typeof createGrokPromptFile>> | undefined;
-  let abortHandler: (() => void) | undefined;
   const isStructuredMode = params.outputSchema !== undefined && params.outputSchema !== null;
-  let structuredStdout = "";
 
   const publishUsage = (usage: GrokTokenUsage | undefined, costUsd: number | undefined) => {
     if (usage) {
@@ -479,108 +468,31 @@ export async function spawnGrokSubagent(params: {
       resumeSessionId: params.resumeSessionId,
     });
 
-    const proc = spawn(GROK_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-
-    proc.once("spawn", () => {
-      if (progress) progress.processStartedAt = Date.now();
-      try {
-        params.onProcessStart?.(proc.pid);
-      } catch {
-        // observation is best-effort
-      }
-    });
-
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("grok stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChildTree(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChildTree(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // Avoid unhandled EPIPE if child exits before reading stdin
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      if (isStructuredMode) {
-        structuredStdout += chunk;
-        if (structuredStdout.length > MAX_STDOUT_LINE_CHARS) {
-          oversizeError ??= `grok emitted a stdout payload over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-          structuredStdout = "";
-          abortChildTree(proc);
-        }
-        return;
-      }
-
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `grok emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChildTree(proc);
-        return;
-      }
-      for (const line of lines) {
-        const event = parseGrokJsonLine(line);
-        if (event) {
-          handleEvent(event);
-        }
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end();
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (!isStructuredMode && stdoutBuffer.trim()) {
-          const event = parseGrokJsonLine(stdoutBuffer);
-          if (event) {
-            handleEvent(event);
-          }
-        }
-        resolve({ code, signal });
-      });
+    const closeResult = await runCliProcess({
+      label: "grok",
+      command: GROK_COMMAND,
+      args,
+      cwd: params.ctx.cwd,
+      signal: params.signal,
+      rawStdout: isStructuredMode,
+      onSpawn: (pid) => {
+        if (progress) progress.processStartedAt = Date.now();
+        params.onProcessStart?.(pid);
+      },
+      onLine: (line) => {
+        const event = parseGrokJsonLine(line);
+        if (event) handleEvent(event);
+      },
     });
+    const structuredStdout = closeResult.stdout ?? "";
 
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
     if (eventError) {
       throw new Error(eventError);
     }
     if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       const diagnostic = diagnoseGrokSandboxError(stderr);
       const diagnosticSuffix = diagnostic ? `\n\nDiagnostic: ${diagnostic}` : "";
       throw new Error(
@@ -674,7 +586,6 @@ export async function spawnGrokSubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(assistantMessages, "interrupted", resultText);
@@ -701,9 +612,6 @@ export async function spawnGrokSubagent(params: {
     });
   } finally {
     emitter.stop();
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-    }
     await promptFile?.cleanup().catch(() => undefined);
   }
 }

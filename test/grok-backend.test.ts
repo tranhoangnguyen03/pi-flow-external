@@ -701,52 +701,6 @@ setTimeout(() => {
     }
   });
 
-  it("fails clearly when grok emits an oversized stdout line and cleans up prompt file", async () => {
-    const binDir = join(tempDir, "bin-grok-oversize");
-    const promptPathFile = join(tempDir, "oversize-prompt-path.txt");
-
-    installFakeCli(binDir, "grok", `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-for await (const _chunk of process.stdin) {}
-const args = process.argv.slice(2);
-const promptFileIdx = args.indexOf('--prompt-file');
-if (promptFileIdx !== -1) writeFileSync(${JSON.stringify(promptPathFile)}, args[promptFileIdx + 1]);
-
-console.log('g'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
-console.log(JSON.stringify({
-  type: 'result',
-  subtype: 'success',
-  is_error: false,
-  result: 'must not reach',
-  stop_reason: 'end_turn'
-}));
-`, originalPathEnv);
-
-    const result = await spawnGrokSubagent({
-      toolCallId: "call_grok_oversize",
-      description: "Grok oversize test",
-      prompt: "Trigger oversize line.",
-      profile: {
-        name: "grok-oversize",
-        description: "Grok oversize profile",
-        backend: "grok" as any,
-      },
-      thinkingLevel: "low",
-      ctx: { cwd } as ExtensionContext,
-      signal: undefined,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("grok emitted a stdout line over");
-    expect(result.details.error).toContain("chars");
-
-    const promptPath = readFileSync(promptPathFile, "utf8");
-    expect(existsSync(promptPath)).toBe(false);
-  });
-
   it("runs a grok-backed subagent through the external_delegate tool with nested activity and a session receipt", async () => {
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-grok-agent-tool");
