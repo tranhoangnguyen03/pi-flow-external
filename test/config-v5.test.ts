@@ -61,6 +61,10 @@ it('uses identical validity gates for exact records and rejects invalid OpenCode
  expect(c.profiles.get('bad')?.configurationError).toMatch(/model/);
  const broken=fixture({harnesses:{opencode:{model:'a/b#x',thinking:'high'}}});
  expect(broken.profiles.get('opencode/reviewer')?.configurationError).toMatch(/variant|#/);
+ // A binding that supplies the missing model (or returns to native effort) stays enabled.
+ const fixed=fixture({harnesses:{opencode:{thinking:'high',roles:{worker:{model:'a/b'}}}}});
+ expect(fixed.profiles.get('opencode/worker')?.configurationError).toBeUndefined();
+ expect(fixed.profiles.get('opencode/explorer')?.configurationError).toMatch(/model/);
 });
 it('lets a valid instruction replacement supersede invalid shared instructions and rejects linked directories',()=>{
  const c=fixture({}, {'roles/reviewer.md':'bad','overrides/codex/reviewer.md':'---\ndescription: Valid\n---\n'});
