@@ -403,12 +403,9 @@ setInterval(() => {}, 1000);
   });
 
   it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-cancel-reason");
     const startedPath = join(tempDir, "cancel-reason-started");
-    mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Cancel worker.\nbackend: codex\n---\n");
     const fakeCodex = join(binDir, "codex");
     writeFileSync(fakeCodex, `#!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
@@ -418,7 +415,7 @@ setInterval(() => {}, 1000);
     chmodSync(fakeCodex, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
-    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 5_000 });
+    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 2_000 });
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
     context.sessionManager.getBranch = () => [];
     const agent = session.getToolDefinition("external_delegate") as any;
