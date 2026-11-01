@@ -7,6 +7,6 @@ CI enforces this. Merging a PR that bumps the version tags it, publishes to npm,
 
 ## Testing
 
-- What distinct failure does this change need to catch? Name its existing test, or explain the new test.
-- If coverage overlaps, which check was extended or retired? Preserve separate safety and integration boundaries.
-- For affected external providers, state whether a real-provider check was run, not applicable, or blocked; never present a stub as a live result.
+- Which existing test owns the changed behavior? If you added a test, what distinct failure does it catch?
+- Which tests, fixtures or docs did this change make obsolete, and were they removed?
+- For affected external providers: real-provider check run, not applicable, or blocked? Never present a stub as a live result.

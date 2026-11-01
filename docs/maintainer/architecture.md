@@ -78,9 +78,9 @@ external_delegate selection ─┐
 Workflow frozen catalog ─────┘                                      └─ evidence/progress
 ```
 
-`src/pi-subagent.ts` registers tools and owns the session limiter, runtime flags, coordinator guidance and shutdown. `src/core/spawn.ts` handles effective permissions, resume, timeout, records, backend dispatch and terminal mapping. `src/core/permissions.ts` owns tier mapping and Pi tool allow-lists. Queue time is excluded from the normal run timeout; confirmed nested activity may extend it once, capped at twice the base. Process cancellation uses the CLI process-tree helpers; Pi cancellation is cooperative.
+`src/pi-subagent.ts` registers tools and owns the session limiter, runtime flags, coordinator guidance and shutdown. `src/core/spawn.ts` handles effective permissions, resume, timeout, records, backend dispatch and terminal mapping. `src/core/permissions.ts` owns tier mapping and Pi tool allow-lists. Queue time is excluded from the normal run timeout; confirmed nested activity may extend it once, capped at twice the base. Every CLI child runs through `src/core/cli-process.ts` (detached process group, whole-tree kill on abort, oversized-output kill, bounded stderr); Pi cancellation is cooperative.
 
-Adapters are `src/core/{claude,codex,agy,grok,muse,opencode}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in AGENTS.md; important distinctions are:
+Adapters are `src/core/{claude,codex,agy,grok,muse,opencode}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in [contracts.md](contracts.md); important distinctions are:
 
 - Antigravity supports full/danger access only and refuses narrower tiers.
 - Codex/Grok use native sandbox axes; Grok readonly network isolation is Linux-only, and sandbox startup failures remain fail-closed.
