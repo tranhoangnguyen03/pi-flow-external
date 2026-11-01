@@ -31,10 +31,13 @@ If you have an existing v4 installation, the extension blocks delegation until s
 5. Confirm the conversion. Settings version 5 is activated immediately.
 
 ### Upgrading from Pre-v4 Versions
-If your installation is v1, v2, or v3:
-- The first run of `/external config convert` upgrades your legacy files to v4.
-- Running `/external config convert` a second time previews and applies the v5 upgrade.
-- Existing legacy files are preserved throughout this process.
+This release converts only settings version 4. If your installation is v1, v2, or v3 (or still has `harnesses.json`, seed markers, or extension profiles under `subagents/`), delegation stays blocked with a message naming the last converting release:
+
+1. Install `@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2`.
+2. Run `/external config convert` until settings are version 5 (pre-v4 → v4, then v4 → v5).
+3. Upgrade to the current release.
+
+Legacy files left behind after conversion are ignored. Delete them yourself if you want; the extension no longer ships a purge command.
 
 ---
 
@@ -53,28 +56,6 @@ The following older command routes have been replaced:
 | `/external role create <name>` | `/external config role create <name>` or `/external config role assist` |
 | `/external role inspect <role> [harness]` | `/external config role inspect <role> [--harness <harness>]` |
 | `/external role override <role> <harness>` | `/external config role edit <role> --harness <harness>` (instructions)<br>`/external config role set <role> --harness <harness>` (scalars) |
-
----
-
-## Optional: Purging Legacy Files
-
-Once version 5 is active and verified, you can optionally remove legacy files that are no longer used:
-
-```bash
-/external [danger]purge-old-files
-```
-*(Note: The brackets and the word `danger` are part of the command syntax).*
-
-### What the Purge Tool Scans:
-- **Legacy Seeded Profiles:** The original 30 markdown profiles under `subagents/` (e.g. `claude-explorer.md`, `codex-reviewer.md`).
-- **Legacy Custom Profiles:** Markdown files with harness prefixes declaring external backends.
-- **Legacy Seed Markers:** `.pi-flow-defaults-seeded-v1`, `v2`, and `v3`.
-- **Old Harness Registry:** `pi-flow-external/harnesses.json`.
-
-### Safety Guarantees:
-- The purge tool **never** deletes current `settings.json`, `roles/`, `overrides/`, or active run records.
-- Nothing is preselected; you toggle each file individually and confirm.
-- Downgrading after a purge requires your own backup of the deleted files.
 
 ---
 

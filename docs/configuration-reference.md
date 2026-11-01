@@ -23,7 +23,7 @@ Default: <agent>
   Recent runs…                     → the same navigator as /external runs
   Advanced…                        → Global default… · Default access · Default spending cap (USD) · Concurrent runs ·
                                      Run timeout · Retained completed runs · Configuration details · Edit settings file… ·
-                                     Diagnostics (checks installation/sign-in)… · Legacy selectors… · Purge old files…
+                                     Diagnostics (checks installation/sign-in)… · Legacy selectors…
   Close
 ```
 
@@ -178,12 +178,11 @@ When setting configuration via the CLI, flags map to settings schema attributes 
 | `/external runs` | Browse session runs, child logs, diagnostics, and cancellation. |
 | `/external runs summary` | Summarize durable run records on disk. |
 | `/external runs --prune` | Clean up eligible completed run records beyond retention limits. |
-| `/external [danger]purge-old-files` | Preview and delete legacy v1–v4 migration remnants. |
 
 ---
 
 ## Related Documentation
 
 - **[Harness Reference](harness-reference.md):** Deep CLI flags, sandbox enforcement, and backend constraints.
-- **[Migration Guide (v4 → v5)](migration-v4-to-v5.md):** Upgrading from settings v4 to v5 and running safe file purges.
+- **[Migration Guide (v4 → v5)](migration-v4-to-v5.md):** Upgrading from settings v4 to v5.
 - **[Troubleshooting](troubleshooting.md):** Resolving configuration conflicts and error diagnostics.

@@ -293,20 +293,20 @@ describe("delegation transparency rendering", () => {
 describe("delegation roster lane disclosure", () => {
   it("shows a compact role catalog with restricted and exact-only availability", () => {
     const profiles = new Map([
-      ["claude-implementer", {
-        name: "claude-implementer",
+      ["claude/implementer", {
+        name: "claude/implementer", role: "implementer", harness: "claude", configVersion: 5 as const,
         description: "Code implementation through Claude Code.",
         backend: "claude" as const,
         permission: "danger" as const,
       }],
-      ["agy-reviewer", {
-        name: "agy-reviewer",
+      ["agy/reviewer", {
+        name: "agy/reviewer", role: "reviewer", harness: "agy", configVersion: 5 as const,
         description: "Code review through Antigravity.",
         backend: "agy" as const,
         permission: "readonly" as const,
       }],
-      ["claude-reviewer", {
-        name: "claude-reviewer",
+      ["claude/reviewer", {
+        name: "claude/reviewer", role: "reviewer", harness: "claude", configVersion: 5 as const,
         description: "Different reviewer instructions remain profile-specific.",
         backend: "claude" as const,
         permission: "danger" as const,

@@ -3,11 +3,10 @@ import { lstatSync, readdirSync, readFileSync, mkdirSync, writeFileSync, linkSyn
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { CONFIG_NAME, cliHarness, objectRecord, executionProblems, reasoningLevels, type HarnessSettings, type ExactSettings, type BindingSettings } from "./config-v5.ts";
-import { planConfigUpgrade } from "./config-upgrade.ts";
 import { parseSubagentProfileContent, opencodeProfileProblem } from "./profiles.ts";
 import type { HarnessConfig } from "./harnesses.ts";
 import type { SubagentProfile } from "./types.ts";
-import { externalSettingsPath, parseSettings, saveExternalSettings } from "./settings.ts";
+import { externalSettingsPath, loadExternalSettings, parseSettings, PRE_V4_MESSAGE, saveExternalSettings } from "./settings.ts";
 import { EXTERNAL_HARNESSES } from "./types.ts";
 
 export interface V5UpgradeFile {
@@ -95,10 +94,7 @@ function plan(root: string): V5UpgradePlan {
   const settingsPath = externalSettingsPath(root);
   const bytes = read(root, settingsPath);
   if (bytes === undefined) {
-    const legacy = planConfigUpgrade(root);
-    if (legacy.status === "ready" || legacy.status === "blocked") {
-      return inactive(root, "blocked", ["Pre-v4 configuration must first be converted to v4; v5 conversion is a separate step.", ...legacy.diagnostics]);
-    }
+    if (loadExternalSettings(root).upgradeRequired) return inactive(root, "blocked", [PRE_V4_MESSAGE]);
     if (entries(root, join(root, "pi-flow-external", "overrides")).some(name => name.endsWith(".md"))) {
       return inactive(root, "blocked", [`Legacy overrides exist without a version 4 settings file at ${settingsPath}.`]);
     }
@@ -108,7 +104,7 @@ function plan(root: string): V5UpgradePlan {
   const raw: unknown = JSON.parse(bytes.toString("utf8"));
   if (!objectRecord(raw)) throw new Error(`${settingsPath} must be a JSON object.`);
   if (raw.version !== 4 && raw.version !== 5) {
-    throw new Error(`Settings version ${JSON.stringify(raw.version)} cannot be converted by the v4 to v5 step. Pre-v4 settings must first use the existing v4 conversion; future versions are refused.`);
+    throw new Error([1, 2, 3].includes(raw.version as number) ? PRE_V4_MESSAGE : `Settings version ${JSON.stringify(raw.version)} cannot be converted; future versions are refused.`);
   }
   validateSettings(raw);
   if (raw.version === 5) return inactive(root, "current");

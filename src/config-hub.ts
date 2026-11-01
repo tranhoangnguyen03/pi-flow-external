@@ -6,7 +6,6 @@ import { loadExternalSettings, resolveCtxDefaultHarness } from './settings.ts';
 import { roleDefinition } from './default-roles.ts';
 import { BACKEND_LABELS } from './defaults.ts';
 import { planV5Upgrade } from './config-v5-upgrade.ts';
-import { planConfigUpgrade } from './config-upgrade.ts';
 import { diagnoseCli } from './doctor.ts';
 import {
   applyRoleReset, compileInstructionMarkdown, createPiHarness, createRole,
@@ -329,25 +328,22 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
     };
     const advanced=async()=>{
       const fields:[keyof ExternalSettings,string][]=[['defaultPermission','Default access'],['defaultMaxBudgetUsd','Default spending cap (USD)'],['maxConcurrentSubagents','Concurrent runs'],['subagentTimeoutMs','Run timeout (milliseconds; 0 disables)'],['maxRunRecords','Retained completed runs (0 keeps all)']];
-      while(true){const choice=await select('External › Advanced',['Global default…',...fields.map(([key,label])=>`${label} · ${key==='defaultPermission'?({readonly:'Read-only',edit:'Can edit files',danger:'Full access'}[settings().defaultPermission]):settings()[key]??'No cap'}`),'Configuration details','Edit settings file…','Diagnostics (checks installation/sign-in)…','Legacy selectors…','Purge old files…']);if(!choice)return;
+      while(true){const choice=await select('External › Advanced',['Global default…',...fields.map(([key,label])=>`${label} · ${key==='defaultPermission'?({readonly:'Read-only',edit:'Can edit files',danger:'Full access'}[settings().defaultPermission]):settings()[key]??'No cap'}`),'Configuration details','Edit settings file…','Diagnostics (checks installation/sign-in)…','Legacy selectors…']);if(!choice)return;
         await attempt(async()=>{
           const field=fields.find(([,label])=>choice.startsWith(label+' ·'));if(field){await globalField(...field);return;}
           if(choice==='Global default…')await defaultMenu();
           else if(choice==='Legacy selectors…'){const exact=settings().exact??{};const name=await select('Legacy selectors — edit/remove through settings file',Object.keys(exact));if(name)await show(name,JSON.stringify(exact[name],null,2));}
-          else await command(choice==='Configuration details'?'config text':choice==='Edit settings file…'?'config edit':choice.startsWith('Diagnostics')?'doctor':'[danger]purge-old-files');
+          else await command(choice==='Configuration details'?'config text':choice==='Edit settings file…'?'config edit':'doctor');
         });
       }
     };
     while(true){
       const loaded=loadExternalSettings(dir);const catalog=snapshot();
       if(loaded.blocked||loaded.settings.version!==5||catalog.blocked){
-        const convertible=planV5Upgrade(dir).status==='ready'||planConfigUpgrade(dir).status==='ready';
+        const convertible=planV5Upgrade(dir).status==='ready';
         const choice=await ctx.ui.select('External › Settings need attention',[...(convertible?['Preview format update…']:[]),'Edit settings file…','Show problem and file location','Close']);if(!choice||choice==='Close')return;
         if(choice==='Show problem and file location'){await show('Settings problem',`${loaded.path}\n${[...loaded.diagnostics,...catalog.diagnostics].join('\n')}\nDelegation is paused. No fallback settings are used here. Future-format files need a compatible extension version; they are never downgraded here.`);continue;}
-        await attempt(async()=>{if(choice==='Edit settings file…')await command('config edit');else{
-          const before=loadExternalSettings(dir);await command('config convert');
-          if(before.settings.version!==4 && loadExternalSettings(dir).settings.version===4)await command('config convert');
-        }});continue;
+        await attempt(async()=>{await command(choice==='Edit settings file…'?'config edit':'config convert');});continue;
       }
       const s=loaded.settings;const def=effectiveDefault();const names=registeredHarnesses(s);
       const rows=names.map(n=>`${agentLabel(n)}${n===def.harness?' · Default':''}${harnessDisabled(s,n)?' · Off':''} · ${inherited(n,'model')}${s.harnessSettings?.[n]?.thinking?` · ${inherited(n,'effort')}`:''}`);

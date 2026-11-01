@@ -88,7 +88,7 @@ before merging: all six direct backends are mandatory (`agy`, `claude`,
 `codex`, `grok`, `muse`, `opencode`), plus their workflow receipts, and one named Pi
 harness direct plus workflow receipt when a real harness is registered. Add the routing smoke when
 discovery, coordinator guidance, or slash commands changed, the configuration
-surface check and task-based modal/RPC/headless checks when settings, roles, upgrade, or purge changed, and the nested
+surface check and task-based modal/RPC/headless checks when settings, roles, or conversion changed, and the nested
 timeout scenario when nested detection or timeout behavior changed. An
 auth-blocked lane is not a pass.
 
@@ -112,8 +112,7 @@ notes, must include the README upgrade notice:
   - `/external role override <role> <harness>` → `/external config role edit <role> --harness NAME`
   - Former `/external settings`, `/external profiles`, `/external profile create`, and `/pi-flow-profile create` remain removed.
 - The guided configuration hub modal in TUI, native dialogs in RPC, and text overview/configuration in headless/no-UI mode.
-- One-time conversion through `/external config convert` (staged pre-v4 to v4, then v4 to v5): originals kept, `settings.v4.backup.json` preserved, instruction overrides landing in nested `overrides/<harness>/<role>.md` directories with `description` frontmatter only, and legacy exact selectors mapped to `exact` in `settings.json`.
-- `/external [danger]purge-old-files` deletes only the legacy paths you select (customized copies included); downgrade after purge needs the user's own backup. Do not claim side-by-side old and new layouts.
+- One-time conversion through `/external config convert` (v4 to v5; pre-v4 installations are pointed at the last converting release): originals kept, `settings.v4.backup.json` preserved, instruction overrides landing in nested `overrides/<harness>/<role>.md` directories with `description` frontmatter only, and legacy exact selectors mapped to `exact` in `settings.json`.
 
 The version bump and CHANGELOG text are owned by the release PR; this file only states the contract.
 

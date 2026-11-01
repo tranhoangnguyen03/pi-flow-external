@@ -59,6 +59,10 @@ const KNOWN_SETTING_KEYS = [
 ];
 
 const PERMISSION_TIERS: PermissionTier[] = ["readonly", "edit", "danger"];
+
+/** The last release that converts pre-v4 installations. This release converts only settings version 4. */
+export const PRE_V4_CONVERSION_RELEASE = "@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2";
+export const PRE_V4_MESSAGE = `Pre-v4 configuration found. This release converts only settings version 4: install ${PRE_V4_CONVERSION_RELEASE}, run /external config convert until settings are version 5, then upgrade again.`;
 export function externalSettingsPath(agentDir: string): string {
   return join(agentDir, "pi-flow-external", "settings.json");
 }
@@ -97,7 +101,7 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
   const record = value as Record<string, unknown>;
   const diagnostics: string[] = [];
   if (record.version !== 4 && record.version !== 5) {
-    diagnostics.push("Settings require version 5. Run /external config convert for an older installation.");
+    diagnostics.push([1, 2, 3].includes(record.version as number) ? PRE_V4_MESSAGE : "Settings require version 5. Run /external config convert for a version 4 installation.");
   }
   for (const key of Object.keys(record)) {
     if (key === "piCapabilitySets") {
@@ -221,7 +225,7 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
             return EXTERNAL_HARNESSES.includes(frontmatter.backend as ExternalHarness) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && (frontmatter.harness === "pi-*" || name.startsWith(`${frontmatter.harness}-`)));
           } catch { return /^(agy|claude|codex|grok|muse)-/.test(name); }
         }));
-        return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? ["Legacy configuration found. Run /external config convert."] : [] };
+        return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? [PRE_V4_MESSAGE] : [] };
       } catch (probeError) {
         return { path, settings: defaults(), blocked: true, diagnostics: [`Could not inspect legacy configuration: ${String(probeError)}`] };
       }

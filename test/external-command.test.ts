@@ -84,7 +84,7 @@ describe("/external command", () => {
           "doctor", "config", "config text", "config edit", "config convert",
           ...verbs("harness", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "default", "test", "assist"]),
           ...verbs("role", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "assist"]),
-          "[danger]purge-old-files", "workflows", "runs", "runs summary", "runs --prune", "help",
+          "workflows", "runs", "runs summary", "runs --prune", "help",
         ]);
         expect(command?.getArgumentCompletions("config role inspect rev")?.map((item) => item.value)).toEqual(["config role inspect reviewer"]);
 
@@ -484,141 +484,39 @@ describe("/external command", () => {
     }
   });
 
-  it("settings convert previews and applies the one-time v4 conversion", async () => {
+  it("settings convert previews, cancels without writing, applies v4 to v5, and refuses pre-v4 files with the converting release", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-flow-command-convert-"));
-    mkdirSync(join(root, "subagents"), { recursive: true });
-    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
-    writeFileSync(join(root, "pi-flow-external", "settings.json"), JSON.stringify({ version: 2, defaultHarness: "claude" }));
-    writeFileSync(
-      join(root, "subagents", "claude-security-reviewer.md"),
-      "---\ndescription: Custom review.\nbackend: claude\n---\nCheck diffs.\n",
-    );
+    const settingsPath = join(root, "pi-flow-external", "settings.json");
+    mkdirSync(join(root, "pi-flow-external", "overrides"), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ version: 4, defaultHarness: "claude", disabledProfiles: ["unknown-name"] }));
+    writeFileSync(join(root, "pi-flow-external", "overrides", "claude-security.md"), "---\ndescription: Custom review.\nbackend: claude\n---\nCheck diffs.\n");
     try {
       await withAgentDir(root, async () => {
         let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
         const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const options = commandOptions({ settings: settingsV4(root) });
-        registerExternalCommand(pi as never, options as never);
-
+        registerExternalCommand(pi as never, commandOptions({ settings: settingsV4(root) }) as never);
         const notices: string[] = [];
-        const confirm = vi.fn(async () => true);
+        const confirm = vi.fn(async () => false);
         const ctx = { cwd: root, isProjectTrusted: () => false, hasUI: true, ui: { notify: (message: string) => notices.push(message), confirm } };
-        await command?.handler("config convert", ctx);
-        expect(confirm).toHaveBeenCalledOnce();
-        expect(notices.at(-1)).toContain("Conversion applied");
-        expect(notices.at(-1)).toContain("Values apply from the next invocation; frozen workflows keep their prior snapshot");
-        expect(notices.at(-1)).not.toContain("parent syncs");
 
-        // Activation wrote v4; the custom profile was raw-copied; the original stays as recovery.
-        expect(JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8")).version).toBe(4);
-        expect(existsSync(join(root, "pi-flow-external", "overrides", "claude-security-reviewer.md"))).toBe(true);
-        expect(existsSync(join(root, "subagents", "claude-security-reviewer.md"))).toBe(true);
-
-        // v5 previews disclose retained unresolved exclusions before confirmation.
-        const settingsPath = join(root, 'pi-flow-external/settings.json');
-        writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, 'utf8')), disabledProfiles: ['unknown-name'], disabledHarnesses: ['pi-gone'] }));
-        await command?.handler("config convert", ctx);
-        expect(confirm.mock.calls.at(-1)).toEqual(expect.arrayContaining([expect.stringContaining('Retained unresolved disabled identity unknown-name')]));
-        expect(notices.at(-1)).toContain("Converted to v5");
-        await command?.handler("config convert", ctx);
-        expect(notices.at(-1)).toContain("already version 5");
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("settings convert cancels without writing anything", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-convert-cancel-"));
-    mkdirSync(join(root, "subagents"), { recursive: true });
-    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
-    writeFileSync(join(root, "pi-flow-external", "settings.json"), JSON.stringify({ version: 2 }));
-    writeFileSync(
-      join(root, "subagents", "claude-security-reviewer.md"),
-      "---\ndescription: Custom review.\nbackend: claude\n---\nCheck diffs.\n",
-    );
-    try {
-      await withAgentDir(root, async () => {
-        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
-        const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const options = commandOptions({ settings: settingsV4(root) });
-        registerExternalCommand(pi as never, options as never);
-
-        const notices: string[] = [];
-        const ctx = { cwd: root, isProjectTrusted: () => false, hasUI: true, ui: { notify: (message: string) => notices.push(message), confirm: vi.fn(async () => false) } };
         await command?.handler("config convert", ctx);
         expect(notices.at(-1)).toContain("cancelled");
-        expect(JSON.parse(readFileSync(join(root, "pi-flow-external", "settings.json"), "utf8")).version).toBe(2);
-        expect(existsSync(join(root, "pi-flow-external", "overrides", "claude-security-reviewer.md"))).toBe(false);
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+        expect(JSON.parse(readFileSync(settingsPath, "utf8")).version).toBe(4);
+        expect(existsSync(join(root, "pi-flow-external", "overrides", "claude", "security.md"))).toBe(false);
 
-  it("purge-old-files selects inventory entries individually and deletes only the selection", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-purge-"));
-    mkdirSync(join(root, "subagents"), { recursive: true });
-    mkdirSync(join(root, "pi-flow-external"), { recursive: true });
-    writeFileSync(join(root, "pi-flow-external", "settings.json"), JSON.stringify({ version: 4, defaultHarness: "agy" }));
-    const keep = join(root, "subagents", "claude-security-reviewer.md");
-    const drop = join(root, "subagents", "codex-security-reviewer.md");
-    writeFileSync(keep, "---\ndescription: Keep.\nbackend: claude\n---\nKeep me.\n");
-    writeFileSync(drop, "---\ndescription: Drop.\nbackend: codex\n---\nDrop me.\n");
-    try {
-      await withAgentDir(root, async () => {
-        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
-        const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const options = commandOptions({ settings: settingsV4(root) });
-        registerExternalCommand(pi as never, options as never);
+        confirm.mockResolvedValue(true);
+        await command?.handler("config convert", ctx);
+        expect(confirm.mock.calls.at(-1)).toEqual(expect.arrayContaining([expect.stringContaining("Retained unresolved disabled identity unknown-name")]));
+        expect(notices.at(-1)).toContain("Converted to v5");
+        expect(existsSync(join(root, "pi-flow-external", "overrides", "claude", "security.md"))).toBe(true);
+        expect(existsSync(join(root, "pi-flow-external", "overrides", "claude-security.md"))).toBe(true);
+        await command?.handler("config convert", ctx);
+        expect(notices.at(-1)).toContain("already version 5");
 
-        const notices: string[] = [];
-        let selections = 0;
-        const ctx = {
-          cwd: root,
-          isProjectTrusted: () => false,
-          hasUI: true,
-          ui: {
-            notify: (message: string) => notices.push(message),
-            select: vi.fn(async (_title: string, choices: string[]) => {
-              selections++;
-              // Toggle only the codex entry, then delete the selection of one.
-              if (selections === 1) return choices.find((choice) => choice.includes("codex-security-reviewer.md"));
-              return choices.find((choice) => choice.startsWith("Delete "));
-            }),
-            confirm: vi.fn(async () => true),
-          },
-        };
-        await command?.handler("[danger]purge-old-files", ctx);
-        expect(notices.at(-1)).toContain("Deleted: 1");
-        expect(existsSync(drop)).toBe(false);
-        expect(existsSync(keep)).toBe(true);
-        expect(readFileSync(keep, "utf8")).toContain("Keep me.");
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("purge-old-files without v4 settings is blocked and deletes nothing", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-flow-command-purge-blocked-"));
-    const legacy = join(root, "subagents", "claude-reviewer.md");
-    mkdirSync(join(root, "subagents"), { recursive: true });
-    writeFileSync(legacy, "keep me");
-    try {
-      await withAgentDir(root, async () => {
-        let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
-        const pi = { exec: vi.fn(), registerCommand: (_name: string, options: typeof command) => { command = options; } };
-        const options = commandOptions({ settings: settingsV4(root) });
-        registerExternalCommand(pi as never, options as never);
-
-        const notices: string[] = [];
-        const ctx = { cwd: root, isProjectTrusted: () => false, hasUI: true, ui: { notify: (message: string) => notices.push(message), select: vi.fn(), confirm: vi.fn() } };
-        await command?.handler("[danger]purge-old-files", ctx);
-        expect(notices.at(-1)).toContain("blocked");
-        expect((ctx.ui.select as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
-        expect((ctx.ui.confirm as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
-        expect(existsSync(legacy)).toBe(true);
+        writeFileSync(settingsPath, JSON.stringify({ version: 2 }));
+        await command?.handler("config convert", ctx);
+        expect(notices.at(-1)).toMatch(/Pre-v4 configuration.*pi-flow-external@5\.5\.0-external\.2/);
+        expect(JSON.parse(readFileSync(settingsPath, "utf8")).version).toBe(2);
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

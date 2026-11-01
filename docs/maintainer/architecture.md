@@ -64,11 +64,11 @@ Listing has a 10-second bound and terminal cancellation. Names can be humanized 
 
 Guided/direct creation is offline. `src/profile-creator.ts` owns the separate assisted interviews; the Pi finalizer confirms and smoke-tests with rollback on failure. Explicit Pi tests confirm cost and model, use an empty temporary workspace with readonly curated tools, wait for the shared concurrency slot, are bounded to 60 seconds and retain no normal run receipt. Terminal Esc can abort waiting/running tests. CLI checks inspect installation/reported sign-in only, not model access.
 
-### Conversion and purge
+### Conversion
 
-`src/config-upgrade.ts` handles pre-v4 conversion and legacy purge inventory. `src/config-v5-upgrade.ts` handles the separately confirmed v4 → v5 step: validate sources/collisions, preserve immutable `settings.v4.backup.json`, install nested instruction copies, revalidate, then activate v5 through the canonical writer. Originals remain. Identical interrupted copies may be reused; differing copies block. Nonstandard/ambiguous selectors remain explicit compatibility records. Conversion does not consolidate repeated pins or delete copied bodies. Unenforced legacy CLI tools metadata is omitted with a source note; Pi tools are preserved. Unsupported effort blocks with source-specific repair guidance. Preview notes disclose frozen effective Pi exact pins and retained exclusions. The shared settings writer prevents editor version changes; only the converter's verified activation can switch v4 to v5.
+`src/config-v5-upgrade.ts` handles the explicitly confirmed v4 → v5 step: validate sources/collisions, preserve immutable `settings.v4.backup.json`, install nested instruction copies, revalidate, then activate v5 through the canonical writer. Originals remain. Identical interrupted copies may be reused; differing copies block. Nonstandard/ambiguous selectors remain explicit compatibility records. Unenforced legacy CLI tools metadata is omitted with a source note; Pi tools are preserved. Unsupported effort blocks with source-specific repair guidance. The shared settings writer prevents editor version changes; only the converter's verified activation can switch v4 to v5.
 
-Recovery offers conversion only for supported inputs; malformed/future settings require repair or an updated extension, not a fabricated runnable fallback. `/external [danger]purge-old-files` is separately previewed, selected and confirmed; it never deletes current settings, native profiles or receipts. Downgrade after purge requires the user's backup.
+Pre-v4 installations (settings v1–v3, `harnesses.json`, seed markers, extension profiles under `subagents/`) are detected and blocked with a message naming the last release that converts them (`PRE_V4_CONVERSION_RELEASE` in `src/settings.ts`). There is no purge command. Malformed/future settings require repair or an updated extension, never a fabricated runnable fallback.
 
 ## 4. Launch, adapters and authority
 
