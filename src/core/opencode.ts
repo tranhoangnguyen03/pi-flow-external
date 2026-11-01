@@ -210,6 +210,8 @@ export function verifyOpencodeTurn(
  * run timeout.
  */
 async function exportOpencodeSession(sessionId: string, cwd: string, signal: AbortSignal | undefined): Promise<Record<string, unknown>> {
+  // The run has already started; a cancellation here is not "before prompt start".
+  if (signal?.aborted) throw new Error("Subagent aborted");
   const { code, stderr, stdout = "" } = await runCliProcess({
     label: "opencode session export",
     command: OPENCODE_COMMAND,
