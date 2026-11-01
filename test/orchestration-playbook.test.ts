@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
-import { buildCoordinatorPrompt, formatUsagePlaybook, usageWorkflowScript } from "../src/prompts.ts";
+import { ORCHESTRATOR_MODE_PROMPT, formatUsagePlaybook, usageWorkflowScript } from "../src/prompts.ts";
 import {
   ChildRunError,
   parseWorkflowScript,
@@ -49,9 +49,8 @@ describe("installed orchestration skill", () => {
 
 
 describe("agent-first help contracts", () => {
-  it("keeps ambient orientation within its deliberate size budget", () => {
-    const prompt = buildCoordinatorPrompt(new Map(), "codex", ["codex"]);
-    expect(prompt.length).toBeLessThan(3200);
+  it("keeps the opt-in orchestration nudge compact", () => {
+    expect(ORCHESTRATOR_MODE_PROMPT.length).toBeLessThan(1000);
   });
 
   it("provides runnable workflow examples without forcing a long usage manual", () => {

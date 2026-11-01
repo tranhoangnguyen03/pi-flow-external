@@ -501,7 +501,7 @@ setInterval(() => {}, 1000);
   });
 
 
-  it("injects the coordinator prompt into the root agent's system prompt", async () => {
+  it("keeps the normal system prompt free of Flow instructions while exposing delegation tools", async () => {
     const { session, registration } = await createSession();
     let rootContext: Context | undefined;
 
@@ -514,8 +514,8 @@ setInterval(() => {}, 1000);
 
     await session.prompt("Just say noted.");
 
-    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).toContain("# External delegation");
-    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).toContain("Harnesses: agy (default), claude, codex, grok, muse, opencode.");
+    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).not.toContain("# External delegation");
+    expect(getCurrentSystemPrompt(rootContext?.messages ?? [])).not.toContain("# Orchestrator Mode");
     expect(getToolNames(rootContext)).toContain("external_delegate");
     expect(getToolNames(rootContext)).toContain("external_help");
     expect(getToolNames(rootContext)).toContain("external_runs");
@@ -535,19 +535,18 @@ setInterval(() => {}, 1000);
     mkdirSync(join(cwd, ".pi", "pi-flow-external"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "pi-flow-external", "settings.json"), JSON.stringify({ defaultHarness: "codex" }));
 
-    // Trusted session: the coordinator prompt names the project default, and a
-    // claude-only role resolved without an explicit harness fails against the
-    // project default instead of the global agy default.
+    // Trusted session: role guidance names the project default on demand,
+    // and a claude-only role without an explicit harness fails against it.
     const trusted = await createSession({ projectTrusted: true });
-    let trustedPrompt = "";
-    trusted.registration.setResponses([
-      (context) => {
-        trustedPrompt = getCurrentSystemPrompt(context.messages);
-        return fauxAssistantMessage("noted");
-      },
-    ]);
-    await trusted.session.prompt("Just say noted.");
-    expect(trustedPrompt).toContain("Harnesses: agy, claude, codex (default), grok, muse, opencode.");
+    const trustedHelp = trusted.session.getToolDefinition("external_help") as any;
+    const helpResult = await trustedHelp.execute(
+      "project-default-help",
+      { topic: "roles" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model: trusted.model, modelRegistry: trusted.modelRegistry, projectTrusted: true }),
+    );
+    expect(helpResult.content[0].text).toContain("Default harness: codex.");
     const trustedAgent = trusted.session.getToolDefinition("external_delegate") as any;
     const trustedResult = await trustedAgent.execute(
       "project-default",

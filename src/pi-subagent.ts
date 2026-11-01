@@ -20,21 +20,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
-import {
-  AGENT_PROMPT_SNIPPET,
-  buildCoordinatorPrompt,
-} from "./prompts.ts";
+import { AGENT_PROMPT_SNIPPET, ORCHESTRATOR_MODE_PROMPT } from "./prompts.ts";
+import { isOrchestratorMode, updateOrchestratorModeStatus, ORCHESTRATOR_MODE_STATUS_KEY } from "./orchestrator-mode.ts";
 import { createExternalHelpTool } from "./external-help.ts";
 import { createExternalRunsTool } from "./external-runs.ts";
 import {
-  disabledHarnessMessage,
   filterExternalAgentProfiles,
   getSubagentProfiles,
   loadExternalCatalog,
   resolveExternalProfile,
   selectorHarness,
 } from "./profiles.ts";
-import { getConfiguredHarnessNames, loadHarnessConfigs } from "./harnesses.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { describeMissingModel, filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
@@ -1005,7 +1001,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       if (activeSessionId) scheduleWakeFlush(activeSessionId);
     });
 
-    pi.on("session_tree", (_event, ctx) => restoreRenamedLaunchers(pi, ctx));
+    pi.on("session_tree", (_event, ctx) => {
+      restoreRenamedLaunchers(pi, ctx);
+      updateOrchestratorModeStatus(ctx);
+    });
     pi.on("session_start", (_event, ctx) => {
       restoreRenamedLaunchers(pi, ctx);
       const sessionId = ctx.sessionManager.getSessionId();
@@ -1023,6 +1022,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         ctx.ui.setStatus(STATUS_KEY, undefined);
         ctx.ui.setStatus(BG_STATUS_KEY, undefined);
       }
+      updateOrchestratorModeStatus(ctx);
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
@@ -1038,6 +1038,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const cleanup = await rootState.registry.shutdownSession(sessionId);
       if (ctx.hasUI) {
         ctx.ui.setStatus(BG_STATUS_KEY, undefined);
+        ctx.ui.setStatus(ORCHESTRATOR_MODE_STATUS_KEY, undefined);
       }
       if (cleanup.pending.length && ctx.hasUI) {
         const shown = cleanup.pending.slice(0, 10);
@@ -1047,21 +1048,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("before_agent_start", (event, ctx) => {
       if (!activeSessionId) rememberSessionContext(ctx);
-      const tools = pi.getAllTools();
-      if (!tools.some((tool) => tool.name === EXTERNAL_DELEGATE_TOOL)) {
-        return;
-      }
-      // No per-turn counter reset: the shared ConcurrencyLimiter takes a slot
-      // synchronously in execute() before the first await and releases it in the
-      // finally. Acquisition is synchronous and release always runs, so the
-      // in-flight count stays accurate across turns without a reset.
-      const catalog = loadExternalCatalog(getAgentDir());
-      const profiles = catalog.profiles;
-      const harnessConfigs = catalog.harnessConfigs;
-      const defaultHarness = resolveCtxDefaultHarness(rootState.defaultHarness, ctx).harness;
-      const configuredHarnessNames = [...EXTERNAL_HARNESSES, ...harnessConfigs.keys()].filter((name) => !catalog.disabledHarnesses.has(name));
-      const diagnostics = [...catalog.diagnostics, ...(catalog.disabledHarnesses.has(defaultHarness) ? [disabledHarnessMessage(defaultHarness, true)] : [])];
-      return { systemPrompt: `${event.systemPrompt}\n\n${catalog.blocked ? `External delegation blocked: ${catalog.diagnostics.join(" ")}` : buildCoordinatorPrompt(profiles, defaultHarness, configuredHarnessNames)}${!catalog.blocked && diagnostics.length ? `\nConfiguration diagnostics: ${diagnostics.join(" ")}` : ""}` };
+      if (!isOrchestratorMode(ctx)) return;
+      if (!pi.getAllTools().some((tool) => tool.name === EXTERNAL_DELEGATE_TOOL)) return;
+      return { systemPrompt: `${event.systemPrompt}\n\n${ORCHESTRATOR_MODE_PROMPT}` };
     });
   };
 }
