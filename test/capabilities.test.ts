@@ -1,18 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  agyUsageToSubagentUsage,
   buildAgyArgs,
-  extractAgyTerminalResult,
   isTransientAgyFailure,
 } from "../src/core/agy.ts";
 import {
   BACKEND_CAPABILITIES,
   buildCapabilityRecord,
-  buildCapabilityRecords,
   buildPermissionTierCapabilities,
   buildPiCapabilityResources,
   formatBackendPermissionHelp,
@@ -20,33 +13,21 @@ import {
 } from "../src/core/capabilities.ts";
 import {
   buildClaudeArgs,
-  claudeUsageToSubagentUsage,
-  extractClaudeSessionId,
 } from "../src/core/claude.ts";
 import {
   buildCodexArgs,
-  codexUsageToSubagentUsage,
-  extractCodexSessionId,
 } from "../src/core/codex.ts";
 import {
   buildGrokArgs,
-  extractGrokSessionId,
-  grokUsageToSubagentUsage,
 } from "../src/core/grok.ts";
 import {
   buildMuseArgs,
-  extractMuseSessionId,
-  museHasNestedAgentActivity,
 } from "../src/core/muse.ts";
 import {
   buildOpencodeArgs,
-  checkOpencodeResumable,
-  spawnOpencodeSubagent,
-  verifyOpencodeTurn,
 } from "../src/core/opencode.ts";
 import {
   PARENT_CONTEXT_MAX_BYTES,
-  prepareParentContext,
 } from "../src/core/parent-context.ts";
 import {
   buildPermissionArgs,
@@ -54,16 +35,8 @@ import {
   resolvePermission,
   unsupportedPermissionReason,
 } from "../src/core/permissions.ts";
-import { getSubagentUsage } from "../src/core/progress.ts";
-import { resolveResume } from "../src/core/resume.ts";
-import { createRunRecord } from "../src/core/run-record.ts";
-import {
-  createPiChildResourceLoader,
-  hasNestedAgentActivity,
-} from "../src/core/spawn.ts";
-import { loadExternalCatalog, resolveExternalProfile } from "../src/profiles.ts";
+import { hasNestedAgentActivity } from "../src/core/spawn.ts";
 import type { SubagentBackend, SubagentProfile } from "../src/types.ts";
-import { createStructuredOutputTool } from "../src/workflow/structured-output.ts";
 
 const ALL_BACKENDS: readonly SubagentBackend[] = [
   "claude",
@@ -85,452 +58,66 @@ function profile(backend: SubagentBackend): SubagentProfile {
 }
 
 describe("BACKEND_CAPABILITIES adapter conformance", () => {
-  const tempDirs: string[] = [];
-  afterEach(() => {
-    vi.restoreAllMocks();
-    while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  function makeTempDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), "pi-flow-cap-test-"));
-    tempDirs.push(dir);
-    return dir;
-  }
-
-  it.each(ALL_BACKENDS)("matches workflowChildSchema support and mechanism for %s against adapter behavior", async (backend) => {
-    const cap = BACKEND_CAPABILITIES[backend].workflowChildSchema;
-    const sampleSchema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
-
-    switch (backend) {
-      case "claude": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
+  // One check per published claim. Each backend's own test file owns the full
+  // behavior (resume lifecycle, cost conversion, retries, refusal paths).
+  it("matches every static per-backend claim to the adapter that implements it", () => {
+    const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
+    const args = {
+      claude: (extra: object) => buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, ...extra }),
+      codex: (extra: object) => buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, ...extra }),
+      agy: (extra: object) => buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, ...extra }),
+      grok: (extra: object) => buildGrokArgs({ profile: profile("grok"), ...extra }),
+      muse: (extra: object) => buildMuseArgs({ promptFilePath: "/tmp/p", workspace: "/tmp", profile: profile("muse"), thinkingLevel: "low", ...extra }),
+      opencode: (extra: object) => buildOpencodeArgs({ profile: profile("opencode"), ...extra }),
+    };
+    const schemaOption = { claude: { outputSchema: schema }, agy: { outputSchema: schema }, grok: { outputSchema: schema },
+      codex: { outputSchemaPath: "/tmp/schema.json" }, muse: { schemaFilePath: "/tmp/schema.json" } } as const;
+    const resumeOption = { claude: { resumeSessionId: "sess-1" }, codex: { resumeSessionId: "sess-1" }, agy: { resumeConversationId: "sess-1" },
+      grok: { resumeSessionId: "sess-1" }, muse: { resumeSessionId: "sess-1" }, opencode: { resumeSessionId: "sess-1" } } as const;
+    const nested = {
+      claude: { type: "assistant", message: { content: [{ type: "tool_use", name: "Agent" }] } },
+      codex: { type: "item.completed", item: { type: "collab_tool_call" } },
+      agy: { event: "step_update", step_update: { step_type: "subagent", subagent_info: { id: "sub-1" } } },
+      grok: { type: "assistant", message: { content: [{ type: "tool_use", name: "spawn_subagent" }] } },
+      muse: { payload_type: "task.lifecycle.started", payload: { task_kind: "reminder.agent.skills" } },
+      opencode: { type: "tool_use", sessionID: "s1", part: { sessionID: "s1", tool: "subagent" } },
+      pi: { type: "tool_execution_start", toolName: "external_delegate" },
+    } as const;
+    const costKind = { claude: "native", grok: "native", pi: "native", codex: "estimated", opencode: "partial", agy: "unknown", muse: "unknown" };
+    for (const backend of ALL_BACKENDS) {
+      const cap = BACKEND_CAPABILITIES[backend];
+      const build = backend === "pi" ? undefined : args[backend];
+      // Structured output: the advertised flag appears only when a schema is requested.
+      if (backend === "pi") expect(cap.workflowChildSchema).toEqual({ support: "supported", mechanism: "injected_tool" });
+      else if (backend === "opencode") expect(cap.workflowChildSchema.support).toBe("unsupported");
+      else {
+        const flag = backend === "codex" || backend === "muse" ? "--output-schema" : "--json-schema";
+        expect(build!(schemaOption[backend]), backend).toContain(flag);
+        expect(build!({}), backend).not.toContain(flag);
       }
-      case "agy": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
+      // Resume: the advertised mechanism is the switch the adapter emits.
+      if (backend === "pi") expect(cap.resume.support).toBe("unsupported");
+      else {
+        const resumed = build!(resumeOption[backend]).join(" ");
+        expect(resumed, backend).toContain("sess-1");
+        for (const word of cap.resume.mechanism!.split(" ")) expect(resumed, backend).toContain(word);
       }
-      case "grok": {
-        expect(cap).toEqual({ support: "supported", mechanism: "cli_flag" });
-        const withSchema = buildGrokArgs({ profile: profile("grok"), outputSchema: sampleSchema });
-        expect(withSchema).toContain("--json-schema");
-        expect(withSchema).toContain(JSON.stringify(sampleSchema));
-        const withoutSchema = buildGrokArgs({ profile: profile("grok") });
-        expect(withoutSchema).not.toContain("--json-schema");
-        break;
-      }
-      case "codex": {
-        expect(cap).toEqual({ support: "supported", mechanism: "schema_file" });
-        const withSchema = buildCodexArgs({
-          prompt: "p",
-          profile: profile("codex"),
-          thinkingLevel: undefined,
-          outputSchemaPath: "/tmp/schema.json",
-        });
-        expect(withSchema).toContain("--output-schema");
-        expect(withSchema).toContain("/tmp/schema.json");
-        const withoutSchema = buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined });
-        expect(withoutSchema).not.toContain("--output-schema");
-        break;
-      }
-      case "muse": {
-        expect(cap).toEqual({ support: "supported", mechanism: "schema_file" });
-        const withSchema = buildMuseArgs({
-          promptFilePath: "/tmp/prompt.txt",
-          schemaFilePath: "/tmp/schema.json",
-          workspace: "/tmp",
-          profile: profile("muse"),
-          thinkingLevel: "low",
-        });
-        expect(withSchema).toContain("--output-schema");
-        expect(withSchema).toContain("/tmp/schema.json");
-        const withoutSchema = buildMuseArgs({
-          promptFilePath: "/tmp/prompt.txt",
-          workspace: "/tmp",
-          profile: profile("muse"),
-          thinkingLevel: "low",
-        });
-        expect(withoutSchema).not.toContain("--output-schema");
-        break;
-      }
-      case "opencode": {
-        expect(cap).toEqual({ support: "unsupported", mechanism: "none" });
-        const res = await spawnOpencodeSubagent({
-          toolCallId: "cap-opencode-schema",
-          description: "Schema check",
-          prompt: "Check schema rejection",
-          profile: profile("opencode"),
-          ctx: { cwd: "/tmp" } as never,
-          signal: undefined,
-          progressEnabled: false,
-          onProgress: undefined,
-          onUsage: () => {},
-          outputSchema: sampleSchema,
-        });
-        expect(res.details.status).toBe("error");
-        expect(res.details.error).toMatch(/structured workflow output is unsupported on opencode/i);
-        break;
-      }
-      case "pi": {
-        expect(cap).toEqual({ support: "supported", mechanism: "injected_tool" });
-        const capture = { value: undefined, called: false, count: 0, duplicateCall: false };
-        const tool = createStructuredOutputTool(sampleSchema, capture);
-        expect(tool.name).toBe("structured_output");
-        break;
-      }
+      // Budget: only Claude passes a cap to its CLI.
+      expect(cap.budget, backend).toBe(backend === "claude" ? "enforced" : "not_enforced");
+      if (build) expect(build({ maxBudgetUsd: 4.25 }).join(" ").includes("--max-budget-usd 4.25"), backend).toBe(backend === "claude");
+      // Retries: only agy retries, and only infrastructure failures.
+      expect(cap.retries.extension, backend).toBe(backend === "agy" ? "once_on_infrastructure" : "none");
+      // Nested activity detection drives the one-time deadline extension.
+      expect(hasNestedAgentActivity(nested[backend], backend), backend).toBe(cap.nestedAgentDetection);
+      expect(cap.cost.kind, backend).toBe(costKind[backend]);
     }
+    expect(isTransientAgyFailure("read ECONNRESET")).toBe(true);
+    expect(isTransientAgyFailure("Task failed: syntax error in output")).toBe(false);
   });
 
-  it.each(ALL_BACKENDS)("matches resume support, mechanism, and conditions for %s against adapter and resolveResume behavior", async (backend) => {
-    const cap = BACKEND_CAPABILITIES[backend].resume;
-    const runsDir = makeTempDir();
-
-    if (backend === "pi") {
-      expect(cap.support).toBe("unsupported");
-      expect(cap.mechanism).toBeUndefined();
-      const record = createRunRecord({
-        directory: runsDir,
-        metadata: { description: "Pi run", backend: "pi", profile: "pi-test/worker" },
-      });
-      await record.finish({ backend: "pi", profile: "pi-test/worker", status: "done", result: "ok" });
-      const resolved = await resolveResume(runsDir, record.runId, "pi");
-      expect(resolved.session).toBeUndefined();
-      expect(resolved.error).toMatch(/no session id to resume/i);
-      return;
-    }
-
-    expect(cap.support).toBe("supported");
-    expect(cap.mechanism).toBeTruthy();
-
-    const record = createRunRecord({
-      directory: runsDir,
-      metadata: { description: "CLI run", backend, profile: `${backend}/worker` },
-    });
-    await record.finish({
-      backend,
-      profile: `${backend}/worker`,
-      status: "done",
-      result: "ok",
-      sessionId: "sess-conformance-1",
-    });
-    const resolved = await resolveResume(runsDir, record.runId, backend);
-    expect(resolved.error).toBeUndefined();
-    expect(resolved.session).toEqual({
-      runId: record.runId,
-      sessionId: "sess-conformance-1",
-      backend,
-    });
-
-    switch (backend) {
-      case "claude":
-        expect(cap.mechanism).toBe("--resume");
-        expect(buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--resume", "sess-1"]),
-        );
-        expect(extractClaudeSessionId({ type: "result", session_id: "sess-1" })).toBe("sess-1");
-        break;
-      case "codex":
-        expect(cap.mechanism).toBe("exec resume");
-        expect(buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, resumeSessionId: "thread-1" })).toEqual(
-          expect.arrayContaining(["exec", "resume", "thread-1"]),
-        );
-        expect(extractCodexSessionId({ type: "thread.started", thread_id: "thread-1" })).toBe("thread-1");
-        break;
-      case "agy":
-        expect(cap.mechanism).toBe("--conversation");
-        expect(buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, resumeConversationId: "conv-1" })).toEqual(
-          expect.arrayContaining(["--conversation", "conv-1"]),
-        );
-        expect(extractAgyTerminalResult({ event: "result", result: { conversation_id: "conv-1" } })?.conversationId).toBe("conv-1");
-        break;
-      case "grok":
-        expect(cap.mechanism).toBe("--resume");
-        expect(buildGrokArgs({ profile: profile("grok"), resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--resume", "sess-1"]),
-        );
-        expect(extractGrokSessionId({ session_id: "sess-1" })).toBe("sess-1");
-        break;
-      case "muse":
-        expect(cap.mechanism).toBe("--session-id");
-        expect(
-          buildMuseArgs({
-            promptFilePath: "/tmp/p",
-            workspace: "/tmp",
-            profile: profile("muse"),
-            thinkingLevel: "low",
-            resumeSessionId: "sess-1",
-          }),
-        ).toEqual(expect.arrayContaining(["--session-id", "sess-1"]));
-        expect(extractMuseSessionId({ stream: { kind: "session", id: "sess-1" } })).toBe("sess-1");
-        break;
-      case "opencode":
-        expect(cap.mechanism).toBe("--session");
-        expect(buildOpencodeArgs({ profile: profile("opencode"), resumeSessionId: "sess-1" })).toEqual(
-          expect.arrayContaining(["--session", "sess-1"]),
-        );
-        expect(() =>
-          checkOpencodeResumable(
-            { info: { id: "sess-1", permissions: [{ action: "*", effect: "allow" }] }, messages: [] },
-            "sess-1",
-            "readonly",
-          ),
-        ).toThrow(/carries its own permission rules/);
-        expect(() =>
-          checkOpencodeResumable(
-            { info: { id: "sess-1", agent: "pi-flow-readonly-0123456789ab" }, messages: [] },
-            "sess-1",
-            "danger",
-          ),
-        ).toThrow(/last run at a restricted tier/);
-        break;
-    }
-  });
-
-  it.each(ALL_BACKENDS)("matches budget enforcement for %s against CLI arg builders", (backend) => {
-    const budget = BACKEND_CAPABILITIES[backend].budget;
-    if (backend === "claude") {
-      expect(budget).toBe("enforced");
-      const withBudget = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, maxBudgetUsd: 4.25 });
-      expect(withBudget).toEqual(expect.arrayContaining(["--max-budget-usd", "4.25"]));
-      const zeroBudget = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, maxBudgetUsd: 0 });
-      expect(zeroBudget).not.toContain("--max-budget-usd");
-    } else {
-      expect(budget).toBe("not_enforced");
-      const args =
-        backend === "codex"
-          ? buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined })
-          : backend === "agy"
-            ? buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined })
-            : backend === "grok"
-              ? buildGrokArgs({ profile: profile("grok") })
-              : backend === "muse"
-                ? buildMuseArgs({ promptFilePath: "/tmp/p", workspace: "/tmp", profile: profile("muse"), thinkingLevel: "low" })
-                : backend === "opencode"
-                  ? buildOpencodeArgs({ profile: profile("opencode") })
-                  : [];
-      expect(args.join(" ")).not.toMatch(/budget/i);
-    }
-  });
-
-  it.each(ALL_BACKENDS)("matches cost reporting kind for %s against each backend usage converter", (backend) => {
-    const cost = BACKEND_CAPABILITIES[backend].cost;
-    switch (backend) {
-      case "claude": {
-        expect(cost.kind).toBe("native");
-        const tokens = { inputTokens: 100, cacheReadInputTokens: 20, cacheCreationInputTokens: 10, outputTokens: 50 };
-        const known = claudeUsageToSubagentUsage(tokens, 0.05);
-        expect(known).toMatchObject({ cost: 0.05, costKnown: true, costEstimated: false });
-        const unknown = claudeUsageToSubagentUsage(tokens, undefined);
-        expect(unknown).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "grok": {
-        expect(cost.kind).toBe("native");
-        const tokens = { inputTokens: 100, cacheReadInputTokens: 20, cacheCreationInputTokens: 10, outputTokens: 50 };
-        const known = grokUsageToSubagentUsage(tokens, 0.05);
-        expect(known).toMatchObject({ cost: 0.05, costKnown: true, costEstimated: false });
-        const unknown = grokUsageToSubagentUsage(tokens, undefined);
-        expect(unknown).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "codex": {
-        expect(cost.kind).toBe("estimated");
-        const tokens = { inputTokens: 1_000, cachedInputTokens: 200, outputTokens: 500, reasoningOutputTokens: 100 };
-        const mapped = codexUsageToSubagentUsage("gpt-5.4", tokens);
-        expect(mapped.cost).toBeGreaterThan(0);
-        expect(mapped.costKnown).toBe(true);
-        expect(mapped.costEstimated).toBe(true);
-        const unmapped = codexUsageToSubagentUsage("unmapped-custom-model", tokens);
-        expect(unmapped).toMatchObject({ cost: 0, costKnown: false, costEstimated: false });
-        break;
-      }
-      case "opencode": {
-        expect(cost.kind).toBe("partial");
-        const completeExport = {
-          info: { id: "s1", outcome: "succeeded" },
-          messages: [
-            { id: "u1", type: "user", text: "prompt" },
-            {
-              id: "a1",
-              type: "assistant",
-              finish: "stop",
-              time: { completed: 1 },
-              tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
-              cost: 0.01,
-              content: [{ type: "text", text: "done" }],
-            },
-            { id: "i1", type: "idle", outcome: "succeeded" },
-          ],
-        };
-        const complete = verifyOpencodeTurn(completeExport, { sessionId: "s1", prompt: "prompt" });
-        expect(complete.usage).toMatchObject({ cost: 0.01, costKnown: true, costEstimated: false });
-
-        const subagentExport = {
-          ...completeExport,
-          messages: [
-            completeExport.messages[0],
-            {
-              ...completeExport.messages[1],
-              content: [
-                { type: "tool", name: "subagent" },
-                { type: "text", text: "done" },
-              ],
-            },
-            completeExport.messages[2],
-          ],
-        };
-        const withSubagent = verifyOpencodeTurn(subagentExport, { sessionId: "s1", prompt: "prompt" });
-        expect(withSubagent.usage.costKnown).toBe(false);
-        expect(withSubagent.usage.costEstimated).toBe(false);
-        break;
-      }
-      case "agy": {
-        expect(cost.kind).toBe("unknown");
-        const usage = agyUsageToSubagentUsage({
-          inputTokens: 100,
-          outputTokens: 50,
-          thinkingTokens: 10,
-          cacheReadTokens: 20,
-          totalTokens: 160,
-        });
-        expect(usage.cost).toBe(0);
-        expect(usage.costKnown).toBe(false);
-        expect(usage.costEstimated).not.toBe(true);
-        break;
-      }
-      case "muse": {
-        expect(cost.kind).toBe("unknown");
-        expect(cost.conditions[0]).toMatch(/costKnown is always false/);
-        break;
-      }
-      case "pi": {
-        expect(cost.kind).toBe("native");
-        const usage = getSubagentUsage({
-          getSessionStats: () => ({
-            tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 },
-            cost: 0.025,
-          }),
-          messages: [],
-        });
-        expect(usage.cost).toBe(0.025);
-        expect(usage.costKnown).toBe(true);
-        expect(usage.costEstimated).not.toBe(true);
-        break;
-      }
-    }
-  });
-
-  it.each(ALL_BACKENDS)("matches retry policy for %s against the agy-only infrastructure classifier", (backend) => {
-    const retries = BACKEND_CAPABILITIES[backend].retries;
-    if (backend === "agy") {
-      expect(retries).toEqual({ extension: "once_on_infrastructure", native: "unknown" });
-      expect(isTransientAgyFailure("authentication failed: token expired")).toBe(true);
-      expect(isTransientAgyFailure("eligibility check failed")).toBe(true);
-      expect(isTransientAgyFailure("read ECONNRESET")).toBe(true);
-      expect(isTransientAgyFailure("Task failed: syntax error in output")).toBe(false);
-    } else {
-      expect(retries.extension).toBe("none");
-      if (backend === "pi") expect(retries.native).toBe("none");
-      else if (backend === "muse" || backend === "opencode") expect(retries.native).toBe("internal");
-      else expect(retries.native).toBe("unknown");
-    }
-  });
-
-  it.each([
-    [
-      "claude",
-      true,
-      { type: "assistant", message: { content: [{ type: "tool_use", name: "Agent" }] } },
-      { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } },
-    ],
-    [
-      "codex",
-      true,
-      { type: "item.completed", item: { type: "collab_tool_call" } },
-      { type: "item.completed", item: { type: "command_execution" } },
-    ],
-    [
-      "agy",
-      true,
-      { event: "step_update", step_update: { step_type: "subagent", subagent_info: { id: "sub-1" } } },
-      { event: "step_update", step_update: { step_type: "tool", tool_name: "read_file" } },
-    ],
-    [
-      "grok",
-      true,
-      { type: "assistant", message: { content: [{ type: "tool_use", name: "spawn_subagent" }] } },
-      { type: "assistant", message: { content: [{ type: "tool_use", name: "read" }] } },
-    ],
-    [
-      "muse",
-      false,
-      { payload_type: "task.lifecycle.started", payload: { task_kind: "reminder.agent.skills" } },
-      { payload_type: "tool.result", payload: {} },
-    ],
-    [
-      "opencode",
-      true,
-      { type: "tool_use", sessionID: "s1", part: { sessionID: "s1", tool: "subagent" } },
-      { type: "tool_use", sessionID: "s1", part: { sessionID: "s1", tool: "read" } },
-    ],
-    [
-      "pi",
-      false,
-      { type: "tool_execution_start", toolName: "external_delegate" },
-      { type: "tool_execution_start", toolName: "read" },
-    ],
-  ] as const)(
-    "matches nestedAgentDetection for %s (%s) against hasNestedAgentActivity",
-    (backend, expected, nestedCandidate, nonNestedEvent) => {
-      expect(BACKEND_CAPABILITIES[backend].nestedAgentDetection).toBe(expected);
-      expect(hasNestedAgentActivity(nestedCandidate, backend)).toBe(expected);
-      expect(hasNestedAgentActivity(nonNestedEvent, backend)).toBe(false);
-      if (backend === "muse") {
-        expect(museHasNestedAgentActivity(nestedCandidate)).toBe(false);
-      }
-    },
-  );
-
-  it.each([
-    { thinking: "high", roles: { worker: { model: "anthropic/claude-sonnet-4-5" } } },
-    { model: "anthropic/claude-sonnet-4-5#high", thinking: "high", roles: { worker: { thinking: "native" } } },
-  ])("keeps OpenCode enabled when a binding overrides conflicting defaults: %j", (opencode) => {
-    const agentDir = makeTempDir();
-    mkdirSync(join(agentDir, "pi-flow-external"));
-    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 5, harnesses: { opencode } }));
-    const catalog = loadExternalCatalog(agentDir);
-    expect(catalog.blocked).toBe(false);
-    expect(resolveExternalProfile(catalog.profiles, { harness: "opencode", role: "worker" }, "opencode").configurationError).toBeUndefined();
-    expect(() => resolveExternalProfile(catalog.profiles, { harness: "opencode", role: "explorer" }, "opencode")).toThrow(/OpenCode/);
-    expect(buildCapabilityRecords({ agentDir, harness: "opencode" })[0]!.configuration).toMatchObject({
-      state: "built_in",
-      enabled: true,
-    });
-  });
-
-  it.runIf(typeof process.geteuid === "function").each([0, 501])("matches Claude permission help to launch flags under effective UID %s", (effectiveUid) => {
-    const runtime = process as NodeJS.Process & { geteuid: () => number };
-    vi.spyOn(runtime, "geteuid").mockReturnValue(effectiveUid);
-    for (const override of [undefined, effectiveUid === 0 ? 501 : 0]) {
-      const options = override === undefined ? {} : { effectiveUid: override };
-      const args = buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, ...options });
-      const permissionArgs = buildPermissionArgs("danger", "claude", { effectiveUid: override ?? effectiveUid });
-      expect(args).toEqual(expect.arrayContaining(permissionArgs));
-      expect(formatBackendPermissionHelp("claude", options)).toContain(`danger uses ${permissionArgs.join(" ")}`);
-    }
-  });
-
-  it("derives per-tier permissions, platform/UID conditions, context limits, and Pi resources from canonical helpers", async () => {
+  it("derives permission, context and Pi resource claims from canonical helpers", () => {
     for (const backend of ALL_BACKENDS) {
       const tiers = buildPermissionTierCapabilities(backend, { effectiveUid: 501, platform: "linux" });
       for (const tier of PERMISSION_TIERS) {
@@ -565,47 +152,15 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     expect(piHelp).not.toContain("read/bash/edit/write/grep/find/ls");
     expect(piHelp).not.toContain("external CLI");
 
-    // Pi resources match createPiChildResourceLoader
-    const cwd = makeTempDir();
-    const agentDir = makeTempDir();
-    // Create user skill and project skill fixtures to verify skill discovery boundary
-    mkdirSync(join(agentDir, "skills", "user-skill"), { recursive: true });
-    writeFileSync(join(agentDir, "skills", "user-skill", "SKILL.md"), "---\nname: user-skill\ndescription: user skill\n---\n");
-    mkdirSync(join(cwd, ".pi", "skills", "project-skill"), { recursive: true });
-    writeFileSync(join(cwd, ".pi", "skills", "project-skill", "SKILL.md"), "---\nname: project-skill\ndescription: project skill\n---\n");
-
+    // The real Pi resource loader and trust boundary are exercised in
+    // pi-runtime.test.ts. Here we check the advertised capability only.
     for (const [preset, projectTrusted, expectedSkills] of [
-      ["minimal", false, "none"],
-      ["minimal", true, "none"],
-      ["skills", false, "user"],
-      ["skills", true, "user_and_project"],
+      ["minimal", false, "none"], ["minimal", true, "none"],
+      ["skills", false, "user"], ["skills", true, "user_and_project"],
     ] as const) {
-      const resources = buildPiCapabilityResources(preset, projectTrusted);
-      expect(resources).toEqual({
-        skills: expectedSkills,
-        extensions: "none",
-        promptTemplates: "none",
-        themes: "none",
+      expect(buildPiCapabilityResources(preset, projectTrusted)).toEqual({
+        skills: expectedSkills, extensions: "none", promptTemplates: "none", themes: "none",
       });
-      const settingsManager = SettingsManager.inMemory();
-      const loader = createPiChildResourceLoader({
-        cwd,
-        agentDir,
-        settingsManager,
-        projectTrusted,
-        preset,
-      });
-      await loader.reload();
-      const loadedSkills = loader.getSkills().skills.map((s) => s.name);
-      if (expectedSkills === "none") {
-        expect(loadedSkills).toEqual([]);
-      } else if (expectedSkills === "user") {
-        expect(loadedSkills).toEqual(["user-skill"]);
-      } else {
-        expect(loadedSkills.sort()).toEqual(["project-skill", "user-skill"]);
-      }
-      expect(loader.getPrompts().prompts).toEqual([]);
-      expect(loader.getThemes().themes).toEqual([]);
     }
 
     // Context ceiling is shared with prepareParentContext
@@ -619,13 +174,6 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
       maxBytes: PARENT_CONTEXT_MAX_BYTES,
       resumeConflict: true,
     });
-    const oversized = "x".repeat(PARENT_CONTEXT_MAX_BYTES + 1);
-    expect(() =>
-      prepareParentContext(
-        "task",
-        { mode: "full" },
-        [{ role: "user", content: [{ type: "text", text: oversized }], timestamp: 0 }] as never,
-      ),
-    ).toThrow(/over 1 MiB/);
+
   });
 });

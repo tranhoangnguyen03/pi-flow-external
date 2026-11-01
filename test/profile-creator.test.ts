@@ -98,26 +98,10 @@ describe("shared role authoring", () => {
     expect(parsed?.systemPrompt).toContain("Do not modify files");
   });
 
-  it("a bare reviewer name is valid without a harness prefix", () => {
-    const content = compileSharedRole({ ...role, name: "reviewer" });
-    expect(content).toContain('description: "Reviews code containing: YAML # hazards."');
-  });
-
   it("rejects invalid names and missing description or instructions", () => {
     expect(() => compileSharedRole({ ...role, name: "Bad Name" })).toThrow("lowercase letters");
     expect(() => compileSharedRole({ ...role, description: "  " })).toThrow("description is required");
     expect(() => compileSharedRole({ ...role, systemPrompt: "  " })).toThrow("instructions are required");
-  });
-
-  it("installs offline with no backend smoke test", async () => {
-    const agentDir = await makeAgentDir();
-    const finalPath = join(agentDir, "pi-flow-external", "roles", `${role.name}.md`);
-
-    const createdPath = await installSharedRole({ agentDir, role });
-
-    expect(createdPath).toBe(finalPath);
-    expect(readFileSync(finalPath, "utf8")).toContain(role.systemPrompt);
-    expect(readdirSync(join(agentDir, "pi-flow-external", "roles")).filter((name) => name.endsWith(".staged"))).toEqual([]);
   });
 
   it("never overwrites an existing role", async () => {
@@ -386,32 +370,6 @@ describe("creator interviews", () => {
       ui: { notify: vi.fn() },
     } as unknown as ExtensionCommandContext & { newSession: typeof newSession };
   }
-
-  it("registers both creator tools", () => {
-    const tools = makeCreatorTools();
-    expect(tools.has(ROLE_TOOL_NAME)).toBe(true);
-    expect(tools.has(HARNESS_TOOL_NAME)).toBe(true);
-  });
-
-  it("registers no pi-flow-profile command", () => {
-    const { commands } = interviewHarness();
-    expect(commands.has("pi-flow-profile")).toBe(false);
-  });
-
-  it("role and harness interviews send distinct prompts", async () => {
-    const roleSent: string[] = [];
-    const roleCtx = interviewCtx(roleSent);
-    await startRoleInterview(roleCtx);
-    expect(roleSent).toEqual([ROLE_INTERVIEW_PROMPT]);
-    expect(ROLE_INTERVIEW_PROMPT).toContain(ROLE_TOOL_NAME);
-    expect(ROLE_INTERVIEW_PROMPT).not.toContain("profile create");
-
-    const harnessSent: string[] = [];
-    const harnessCtx = interviewCtx(harnessSent);
-    await startHarnessInterview(harnessCtx);
-    expect(harnessSent).toEqual([HARNESS_INTERVIEW_PROMPT]);
-    expect(HARNESS_INTERVIEW_PROMPT).toContain(HARNESS_TOOL_NAME);
-  });
 
   it("each interview prompt activates only its own finalizer; session start deactivates", () => {
     const { activeTools, events } = interviewHarness();

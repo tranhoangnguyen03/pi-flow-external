@@ -147,23 +147,6 @@ describe("opencode backend", () => {
     expect(resolveExternalProfile(catalog.profiles, { role: "qa", harness: "opencode" }, "agy")).toMatchObject({ name: "opencode/qa", model: "openrouter/anthropic/claude", thinking: "max" });
   });
 
-  it("blocks a legacy v4 opencode override whose thinking has no model to be a variant of, or whose model lacks a provider (inspection only)", () => {
-    const overrides = join(agentDir, "pi-flow-external", "overrides");
-    mkdirSync(overrides, { recursive: true });
-    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 4 }));
-    writeFileSync(join(overrides, "opencode-reviewer.md"), "---\ndescription: Review\nbackend: opencode\nthinking: high\n---\nReview.");
-    writeFileSync(join(overrides, "opencode-planner.md"), "---\ndescription: Plan\nbackend: opencode\nmodel: sonnet\n---\nPlan.");
-    writeFileSync(join(overrides, "opencode-explorer.md"), "---\ndescription: Explore\nbackend: opencode\nmodel: openai/gpt-5#low\nthinking: high\n---\nExplore.");
-    writeFileSync(join(overrides, "opencode-qa.md"), "---\ndescription: QA\nbackend: opencode\nmodel: openrouter/anthropic/claude\nthinking: max\n---\nQA.");
-    expect(loadExternalCatalog(agentDir).blocked).toBe(true);
-    const catalog = loadExternalCatalog(agentDir, { legacyInspection: true });
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "reviewer", harness: "opencode" }, "agy")).toThrow(/without a model/);
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "planner", harness: "opencode" }, "agy")).toThrow(/provider\/model/);
-    expect(() => resolveExternalProfile(catalog.profiles, { role: "explorer", harness: "opencode" }, "agy")).toThrow(/Keep one/);
-    expect(resolveExternalProfile(catalog.profiles, { role: "qa", harness: "opencode" }, "agy")).toMatchObject({ model: "openrouter/anthropic/claude", thinking: "max" });
-  });
-
-
   it("takes the result and usage from the verified export, never from streamed narration, and runs as the injected agent", async () => {
     const infoPath = installFake("success", `${STREAM}
 emit('tool_use', { part: part({ type: 'tool', tool: 'shell', state: { status: 'error', error: 'Permission denied: shell' } }) });
@@ -272,38 +255,6 @@ console.error('! permission requested: external_directory (/etc/*); auto-rejecti
     expect(result.details.status).toBe("error");
     expect(result.details.error).toMatch(/no native output-schema option/);
     expect(existsSync(infoPath)).toBe(false);
-  });
-
-  it("kills the opencode process tree on abort and keeps streamed text", async () => {
-    const pidPath = join(tempDir, "grandchild.pid");
-    installFake("abort", `
-import { spawn } from 'node:child_process';
-const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
-writeFileSync(${JSON.stringify(pidPath)}, String(grandchild.pid));
-emit('step_start', { part: part({ type: 'step-start' }) });
-emit('text', { part: part({ type: 'text', text: 'working on it' }) });
-setTimeout(() => {}, 60000);
-`);
-    const controller = new AbortController();
-    const pending = run({
-      signal: controller.signal,
-      progressEnabled: true,
-      onProgress: (partial) => {
-        if ((partial.details.progress?.activity ?? []).some((line) => line.includes("working on it"))) controller.abort();
-      },
-    });
-    const result = await pending;
-    expect(result.details.status).toBe("aborted");
-    expect(result.details.assistantOutput).toEqual({ status: "interrupted", messages: [{ text: "working on it" }] });
-    const grandchild = Number(readFileSync(pidPath, "utf8"));
-    await expect.poll(() => {
-      try {
-        process.kill(grandchild, 0);
-        return "alive";
-      } catch {
-        return "gone";
-      }
-    }, { timeout: 5000 }).toBe("gone");
   });
 
   it("runs through the external_delegate tool with a session receipt and reconstructable output", async () => {

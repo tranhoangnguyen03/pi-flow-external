@@ -64,11 +64,11 @@ Listing has a 10-second bound and terminal cancellation. Names can be humanized 
 
 Guided/direct creation is offline. `src/profile-creator.ts` owns the separate assisted interviews; the Pi finalizer confirms and smoke-tests with rollback on failure. Explicit Pi tests confirm cost and model, use an empty temporary workspace with readonly curated tools, wait for the shared concurrency slot, are bounded to 60 seconds and retain no normal run receipt. Terminal Esc can abort waiting/running tests. CLI checks inspect installation/reported sign-in only, not model access.
 
-### Conversion and purge
+### Conversion
 
-`src/config-upgrade.ts` handles pre-v4 conversion and legacy purge inventory. `src/config-v5-upgrade.ts` handles the separately confirmed v4 → v5 step: validate sources/collisions, preserve immutable `settings.v4.backup.json`, install nested instruction copies, revalidate, then activate v5 through the canonical writer. Originals remain. Identical interrupted copies may be reused; differing copies block. Nonstandard/ambiguous selectors remain explicit compatibility records. Conversion does not consolidate repeated pins or delete copied bodies. Unenforced legacy CLI tools metadata is omitted with a source note; Pi tools are preserved. Unsupported effort blocks with source-specific repair guidance. Preview notes disclose frozen effective Pi exact pins and retained exclusions. The shared settings writer prevents editor version changes; only the converter's verified activation can switch v4 to v5.
+`src/config-v5-upgrade.ts` handles the explicitly confirmed v4 → v5 step: validate sources/collisions, preserve immutable `settings.v4.backup.json`, install nested instruction copies, revalidate, then activate v5 through the canonical writer. Originals remain. Identical interrupted copies may be reused; differing copies block. Nonstandard/ambiguous selectors remain explicit compatibility records. Unenforced legacy CLI tools metadata is omitted with a source note; Pi tools are preserved. Unsupported effort blocks with source-specific repair guidance. The shared settings writer prevents editor version changes; only the converter's verified activation can switch v4 to v5.
 
-Recovery offers conversion only for supported inputs; malformed/future settings require repair or an updated extension, not a fabricated runnable fallback. `/external [danger]purge-old-files` is separately previewed, selected and confirmed; it never deletes current settings, native profiles or receipts. Downgrade after purge requires the user's backup.
+Pre-v4 installations (settings v1–v3, `harnesses.json`, seed markers, extension profiles under `subagents/`) are detected and blocked with a message naming the last release that converts them (`PRE_V4_CONVERSION_RELEASE` in `src/settings.ts`). There is no purge command. Malformed/future settings require repair or an updated extension, never a fabricated runnable fallback.
 
 ## 4. Launch, adapters and authority
 
@@ -78,9 +78,9 @@ external_delegate selection ─┐
 Workflow frozen catalog ─────┘                                      └─ evidence/progress
 ```
 
-`src/pi-subagent.ts` registers tools and owns the session limiter, runtime flags, coordinator guidance and shutdown. `src/core/spawn.ts` handles effective permissions, resume, timeout, records, backend dispatch and terminal mapping. `src/core/permissions.ts` owns tier mapping and Pi tool allow-lists. Queue time is excluded from the normal run timeout; confirmed nested activity may extend it once, capped at twice the base. Process cancellation uses the CLI process-tree helpers; Pi cancellation is cooperative.
+`src/pi-subagent.ts` registers tools and owns the session limiter, runtime flags, coordinator guidance and shutdown. `src/core/spawn.ts` handles effective permissions, resume, timeout, records, backend dispatch and terminal mapping. `src/core/permissions.ts` owns tier mapping and Pi tool allow-lists. Queue time is excluded from the normal run timeout; confirmed nested activity may extend it once, capped at twice the base. Every CLI child runs through `src/core/cli-process.ts` (detached process group, whole-tree kill on abort, oversized-output kill, bounded stderr); Pi cancellation is cooperative.
 
-Adapters are `src/core/{claude,codex,agy,grok,muse,opencode}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in AGENTS.md; important distinctions are:
+Adapters are `src/core/{claude,codex,agy,grok,muse,opencode}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in [contracts.md](contracts.md); important distinctions are:
 
 - Antigravity supports full/danger access only and refuses narrower tiers.
 - Codex/Grok use native sandbox axes; Grok readonly network isolation is Linux-only, and sandbox startup failures remain fail-closed.

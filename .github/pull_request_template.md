@@ -4,3 +4,9 @@
 - [ ] Otherwise: labelled `release:none`.
 
 CI enforces this. Merging a PR that bumps the version tags it, publishes to npm, and creates the GitHub release automatically. See [`docs/maintainer/releasing.md`](../docs/maintainer/releasing.md).
+
+## Testing
+
+- Which existing test owns the changed behavior? If you added a test, what distinct failure does it catch?
+- Which tests, fixtures or docs did this change make obsolete, and were they removed?
+- For affected external providers: real-provider check run, not applicable, or blocked? Never present a stub as a live result.

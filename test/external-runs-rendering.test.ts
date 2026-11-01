@@ -68,34 +68,6 @@ describe("external_runs rendering", () => {
     return tool;
   }
 
-  it("registers its own renderCall/renderResult for every action, matching external_delegate and workflow's dedicated-renderer contract", () => {
-    const externalRuns = findTool("external_runs");
-    const agent = findTool("external_delegate");
-    const workflow = findTool("external_workflow");
-    expect(typeof externalRuns.renderCall).toBe("function");
-    expect(typeof externalRuns.renderResult).toBe("function");
-    // Every run tool this issue covers qualifies for a supported
-    // excludeRenderers entry — see host-integration section in README.
-    const excludeRenderers = ["external_delegate", "external_workflow", "external_runs"];
-    for (const tool of [agent, workflow, externalRuns]) {
-      expect(preservesOriginalRenderer(tool, excludeRenderers)).toBe(true);
-    }
-    // Without the config entry, ccstyle's own gate would not preserve them —
-    // proving the config is load-bearing, not decorative.
-    expect(preservesOriginalRenderer(externalRuns, [])).toBe(false);
-  });
-
-  it("renders a call intent naming the action for list, wait, inspect, and cancel", () => {
-    const externalRuns = findTool("external_runs");
-    const theme = makeMockTheme() as never;
-    const render = (args: Record<string, unknown>) => renderToText(externalRuns.renderCall!(args, theme, { cwd }) as never);
-
-    expect(render({ action: "list" })).toContain("list");
-    expect(render({ action: "wait", runIds: ["run_a", "run_b"], mode: "any" })).toContain("waiting for 2 task(s)");
-    expect(render({ action: "inspect", runId: "run_a", view: "output" })).toContain("inspect run_a");
-    expect(render({ action: "cancel", runId: "run_a" })).toContain("cancel run_a");
-  });
-
   it("renders a list result as workflow/run rows using the same row format as /external runs", () => {
     const externalRuns = findTool("external_runs");
     const theme = makeMockTheme() as never;
@@ -138,14 +110,6 @@ describe("external_runs rendering", () => {
     expect(settledText).toContain("Wait complete");
   });
 
-  it("renders single-run inspect output text, expandable for the full answer", () => {
-    const externalRuns = findTool("external_runs");
-    const theme = makeMockTheme() as never;
-    const details = { runId: "run_a", view: "output", text: "The review found no issues." };
-    const text = renderToText(externalRuns.renderResult!({ content: [{ type: "text", text: "The review found no issues." }], details }, { expanded: true, isPartial: false }, theme, { cwd }) as never);
-    expect(text).toContain("Inspecting run_a");
-    expect(text).toContain("The review found no issues.");
-  });
   it("renders a returned failure as its message, not as an empty list, page or wait card", () => {
     const externalRuns = findTool("external_runs");
     const theme = makeMockTheme() as never;

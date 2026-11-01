@@ -2,6 +2,18 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.0.0-external.0] - 2026-11-01
+
+### Breaking
+- Pre-v4 installations are no longer converted. Settings v1–v3, `harnesses.json`, seed markers and extension profiles under `subagents/` are still detected and block delegation, with a message naming the last converting release. To upgrade such an installation: install `@tranhoangnguyen0310/pi-flow-external@5.5.0-external.2`, run `/external config convert` until settings are version 5, then upgrade. Version 4 → 5 conversion is unchanged.
+- `/external [danger]purge-old-files` is removed (and its Config Hub entry). Leftover legacy files are ignored; delete them manually if wanted. Command mapping: `/external [danger]purge-old-files` → no replacement.
+
+### Changed
+- All six CLI backends (and OpenCode's session export) now run through one shared process runner. Abort still kills the whole process tree, oversized output still fails the run, and stderr stays bounded; error messages are unchanged.
+- Removed the unreachable pre-v5 profile catalog code path. Delegation behavior for settings v5 is unchanged.
+
+### Compatibility
+- No change to permissions, result contracts, `external_runs`, workflows, or v5 settings. No live-provider run was performed for this release; the offline suite covers the refactored process runner.
 ## [5.6.0-external.0] - 2026-11-01
 
 ### Added

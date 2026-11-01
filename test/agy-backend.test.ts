@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { installFakeCli } from "./helpers/fake-cli.ts";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
 import {
   agyUsageToSubagentUsage,
@@ -134,10 +135,8 @@ describe("pi-subagent agy backend", () => {
     const binDir = join(tempDir, "bin-agy");
     const argsPath = join(tempDir, "agy-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\nthinking: high\n---\n\nAgy reviewer prompt.`);
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -148,9 +147,7 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'IN_PROGRESS', step_type: 'agent_response', text_delta: 'agy child ' } }));
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'DONE', step_type: 'agent_response', text_delta: 'done' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-test-session', status: 'SUCCESS', response: 'agy child done', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 25, cache_read_tokens: 200, total_tokens: 1075 } } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -222,15 +219,11 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
 
   it("uses structured terminal output and forwards every parsed backend event", async () => {
     const binDir = join(tempDir, "bin-agy-structured");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 console.log(JSON.stringify({ event: 'init', conversation_id: 'agy-structured-session', init: { permission_mode: 'always-proceed' } }));
 console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE', step_type: 'tool', tool_name: 'view_file' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-structured-session', status: 'SUCCESS', response: '{"answer":"fallback"}', structured_output: { answer: 'structured' }, usage: { input_tokens: 1200, output_tokens: 60, thinking_tokens: 30, cache_read_tokens: 300, total_tokens: 1290 } } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const backendEvents: unknown[] = [];
     const reportedUsage: unknown[] = [];
@@ -277,16 +270,12 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-st
 
   it("reports an actionable hint when the installed agy CLI rejects a flag", async () => {
     const binDir = join(tempDir, "bin-agy-old-flag");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 console.error("flag provided but not defined: -input-format");
 console.error("Usage of agy:");
 console.error("  --print Run a single prompt non-interactively");
 process.exit(2);
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnAgySubagent({
       toolCallId: "agy-old-flag",
@@ -309,14 +298,10 @@ process.exit(2);
 
   it("fails a clean exit that has no terminal result", async () => {
     const binDir = join(tempDir, "bin-agy-missing-result");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 console.log(JSON.stringify({ event: 'init', conversation_id: 'agy-missing-result' }));
 console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE', step_type: 'agent_response', text_delta: 'not terminal' } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnAgySubagent({
       toolCallId: "agy-missing-result",
@@ -346,10 +331,8 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
     const counterPath = join(tempDir, "agy-retry-count.txt");
     const argsPath = join(tempDir, "agy-retry-args");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -362,9 +345,7 @@ if (count === 1) {
 } else {
   console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry', status: 'SUCCESS', response: 'agy child done after retry', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1050 } } }));
 }
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -396,10 +377,8 @@ if (count === 1) {
     const binDir = join(tempDir, "bin-agy-no-retry");
     const counterPath = join(tempDir, "agy-no-retry-count.txt");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -407,9 +386,7 @@ const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync($
 writeFileSync(${JSON.stringify(counterPath)}, String(count));
 process.exitCode = 1;
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-no-retry', status: 'ERROR', response: '', error: 'provider unavailable', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -436,10 +413,8 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-no
     const binDir = join(tempDir, "bin-agy-retry-bounded");
     const counterPath = join(tempDir, "agy-retry-bounded-count.txt");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "agy-reviewer.md"), `---\ndescription: Reviews through Antigravity.\nbackend: agy\nmodel: default\n---\n\nAgy reviewer prompt.`);
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -447,9 +422,7 @@ const count = existsSync(${JSON.stringify(counterPath)}) ? Number(readFileSync($
 writeFileSync(${JSON.stringify(counterPath)}, String(count));
 process.exitCode = 1;
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-retry-bounded', status: 'ERROR', response: '', error: 'authentication failed or timed out', usage: { input_tokens: 5, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 5 } } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -473,15 +446,11 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-re
 
   it("prefers the agy terminal failure over the exit code", async () => {
     const binDir = join(tempDir, "bin-agy-error-result");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 process.exitCode = 1;
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer-1', step_type: 'agent_response', text_delta: 'useful partial finding' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-error-result', status: 'ERROR', response: '', error: 'provider unavailable', usage: { input_tokens: 20, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 20 } } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnAgySubagent({
       toolCallId: "agy-error-result",
@@ -506,96 +475,13 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-er
     });
   });
 
-  it("fails clearly when agy emits an oversized newline-terminated stdout line", async () => {
-    const binDir = join(tempDir, "bin-agy-oversize");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
-console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
-console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'must not pass' } }));
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    const result = await spawnAgySubagent({
-      toolCallId: "agy-oversize",
-      description: "Agy oversize",
-      prompt: "Trigger oversize stdout.",
-      profile: { name: "agy-oversize", description: "Test.", backend: "agy" },
-      thinkingLevel: undefined,
-      ctx: { cwd } as ExtensionContext,
-      signal: undefined,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("agy emitted a stdout line over");
-  });
-
-  it("kills an agy child if abort lands after process spawn", async () => {
-    const binDir = join(tempDir, "bin-agy-abort-race");
-    const markerPath = join(tempDir, "agy-child-completed");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-setTimeout(() => {
-  writeFileSync(${JSON.stringify(markerPath)}, 'completed');
-  console.log('should not complete');
-}, 700);
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    let abortedChecks = 0;
-    const signal = {
-      get aborted() {
-        abortedChecks += 1;
-        return abortedChecks >= 2;
-      },
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    } as unknown as AbortSignal;
-
-    const result = await spawnAgySubagent({
-      toolCallId: "agy-abort-race",
-      description: "Agy abort race",
-      prompt: "This should be aborted before the prompt is sent.",
-      profile: {
-        name: "agy-race",
-        description: "Agy abort race profile.",
-        backend: "agy",
-        systemPrompt: "Agy race prompt.",
-      },
-      thinkingLevel: "medium",
-      ctx: { cwd } as ExtensionContext,
-      signal,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("aborted");
-    expect(result.details.backend).toBe("agy");
-    expect(result.details.error).toContain("aborted before prompt start");
-    expect(signal.addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(existsSync(markerPath)).toBe(false);
-  });
-
   it("rejects an unsupported agy tier before process launch and keeps the receipt", async () => {
     const binDir = join(tempDir, "bin-agy-unsupported");
     const markerPath = join(tempDir, "agy-unsupported-launched");
-    mkdirSync(binDir, { recursive: true });
-    const fakeAgyPath = join(binDir, "agy");
-    writeFileSync(fakeAgyPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 writeFileSync(${JSON.stringify(markerPath)}, 'launched');
-`);
-    chmodSync(fakeAgyPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
     const context = {
       mode: "recent" as const,
       requestedTurns: 2,

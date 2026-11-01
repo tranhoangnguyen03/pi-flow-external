@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   assistantOutput,
@@ -7,15 +6,10 @@ import {
   textResult,
   type AgentToolResult,
 } from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
-import { abortChildTree } from "./process-tree.ts";
+import { runCliProcess } from "./cli-process.ts";
 
 const CLAUDE_COMMAND = "claude";
 
@@ -363,13 +357,9 @@ export async function spawnClaudeSubagent(params: {
   const assistantMessages: Array<{ id?: string; text: string }> = [];
   let sessionId: string | undefined;
   let permissionDenials: number | undefined;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
   let eventError: string | undefined;
-  let oversizeError: string | undefined;
-  let child: ChildProcess | undefined;
-  let abortHandler: (() => void) | undefined;
 
   const publishUsage = (usage: ClaudeTokenUsage | undefined, costUsd: number | undefined) => {
     if (usage) {
@@ -453,93 +443,30 @@ export async function spawnClaudeSubagent(params: {
       resumeSessionId: params.resumeSessionId,
     });
 
-    const proc = spawn(CLAUDE_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-    proc.once("spawn", () => {
-      if (progress) progress.processStartedAt = Date.now();
-      try { params.onProcessStart?.(proc.pid); } catch { /* observation is best-effort */ }
-    });
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("claude stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChildTree(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChildTree(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // If claude exits before reading stdin, the process close/error path below
-      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChildTree(proc);
-        return;
-      }
-      for (const line of lines) {
-        const event = parseClaudeJsonLine(line);
-        if (event) {
-          handleEvent(event);
-        }
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseClaudeJsonLine(stdoutBuffer);
-          if (event) {
-            handleEvent(event);
-          }
-        }
-        resolve({ code, signal });
-      });
+    const closeResult = await runCliProcess({
+      label: "claude",
+      command: CLAUDE_COMMAND,
+      args,
+      cwd: params.ctx.cwd,
+      stdin: taskPrompt,
+      signal: params.signal,
+      onSpawn: (pid) => {
+        if (progress) progress.processStartedAt = Date.now();
+        params.onProcessStart?.(pid);
+      },
+      onLine: (line) => {
+        const event = parseClaudeJsonLine(line);
+        if (event) handleEvent(event);
+      },
     });
 
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
     if (eventError) {
       throw new Error(eventError);
     }
     if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       throw new Error(`claude exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
     }
     if (!sawTerminalEvent) {
@@ -576,7 +503,6 @@ export async function spawnClaudeSubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(assistantMessages, "interrupted", resultText);
@@ -605,8 +531,5 @@ export async function spawnClaudeSubagent(params: {
     });
   } finally {
     emitter.stop();
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-    }
   }
 }

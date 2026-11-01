@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -8,14 +7,9 @@ import {
   textResult,
   type AgentToolResult,
 } from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
-import { abortChildTree } from "./process-tree.ts";
+import { runCliProcess } from "./cli-process.ts";
 import { opencodeProfileProblem, selectorHarness } from "../profiles.ts";
 
 const OPENCODE_COMMAND = "opencode";
@@ -216,52 +210,30 @@ export function verifyOpencodeTurn(
  * run timeout.
  */
 async function exportOpencodeSession(sessionId: string, cwd: string, signal: AbortSignal | undefined): Promise<Record<string, unknown>> {
+  // The run has already started; a cancellation here is not "before prompt start".
   if (signal?.aborted) throw new Error("Subagent aborted");
-  const proc = spawn(OPENCODE_COMMAND, ["session", "export", "--standalone", sessionId], {
+  const { code, stderr, stdout = "" } = await runCliProcess({
+    label: "opencode session export",
+    command: OPENCODE_COMMAND,
+    args: ["session", "export", "--standalone", sessionId],
     cwd,
     env: { ...process.env, PWD: cwd },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: process.platform !== "win32",
+    signal,
+    rawStdout: true,
+    maxStdoutChars: MAX_EXPORT_CHARS,
   });
-  const stderr = createBoundedBuffer(MAX_STDERR_CHARS);
-  let stdout = "";
-  let oversize = false;
-  const abort = () => abortChildTree(proc);
-  signal?.addEventListener("abort", abort, { once: true });
-  try {
-    proc.stdout!.setEncoding("utf8");
-    proc.stderr!.setEncoding("utf8");
-    proc.stdout!.on("data", (chunk: string) => {
-      stdout += chunk;
-      if (stdout.length > MAX_EXPORT_CHARS && !oversize) {
-        oversize = true;
-        stdout = "";
-        abortChildTree(proc);
-      }
-    });
-    proc.stderr!.on("data", (chunk: string) => stderr.append(chunk));
-    const code = await new Promise<number | null>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", resolve);
-    });
-    if (signal?.aborted) throw new Error("Subagent aborted");
-    if (oversize) throw new Error(`opencode session export exceeded ${MAX_EXPORT_CHARS} chars`);
-    if (code !== 0) {
-      const detail = stderr.text().trim();
-      throw new Error(`opencode session export exited with code ${code}${detail ? `: ${detail}` : ""}`);
-    }
+  if (code !== 0) {
+    const detail = stderr.trim();
+    throw new Error(`opencode session export exited with code ${code}${detail ? `: ${detail}` : ""}`);
+  }
     let parsed: Record<string, unknown> | undefined;
     try {
       parsed = asRecord(JSON.parse(stdout));
     } catch {
       parsed = undefined;
     }
-    if (!parsed) throw new Error("opencode session export was not a JSON object");
-    return parsed;
-  } finally {
-    signal?.removeEventListener("abort", abort);
-    if (proc.exitCode === null && proc.signalCode === null) abortChildTree(proc);
-  }
+  if (!parsed) throw new Error("opencode session export was not a JSON object");
+  return parsed;
 }
 
 /**
@@ -379,10 +351,6 @@ export async function spawnOpencodeSubagent(params: {
   const allText: string[] = [];
   let permissionDenials = 0;
   let eventError: string | undefined;
-  let oversizeError: string | undefined;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
-  let child: ChildProcess | undefined;
-  let abortHandler: (() => void) | undefined;
 
   const handleEvent = (event: Record<string, unknown>) => {
     try {
@@ -434,93 +402,34 @@ export async function spawnOpencodeSubagent(params: {
       ? checkOpencodeResumable(await exportOpencodeSession(params.resumeSessionId, params.ctx.cwd, params.signal), params.resumeSessionId, permission)
       : undefined;
 
-    const proc = spawn(OPENCODE_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-
-    proc.once("spawn", () => {
-      if (progress) progress.processStartedAt = Date.now();
-      try {
-        params.onProcessStart?.(proc.pid);
-      } catch {
-        // observation is best-effort
-      }
-    });
-
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("opencode stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChildTree(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChildTree(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // Avoid unhandled EPIPE if the child exits before reading stdin.
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `opencode emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChildTree(proc);
-        return;
-      }
-      for (const line of lines) {
-        const event = parseOpencodeJsonLine(line);
-        if (event) handleEvent(event);
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseOpencodeJsonLine(stdoutBuffer);
-          if (event) handleEvent(event);
-        }
-        resolve({ code, signal });
-      });
+    const closeResult = await runCliProcess({
+      label: "opencode",
+      command: OPENCODE_COMMAND,
+      args,
+      cwd: params.ctx.cwd,
+      env,
+      stdin: taskPrompt,
+      signal: params.signal,
+      onSpawn: (pid) => {
+        if (progress) progress.processStartedAt = Date.now();
+        params.onProcessStart?.(pid);
+      },
+      onLine: (line) => {
+        const event = parseOpencodeJsonLine(line);
+        if (event) handleEvent(event);
+      },
     });
 
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) throw new Error("Subagent aborted");
-    if (oversizeError) throw new Error(oversizeError);
     if (eventError) throw new Error(eventError);
     if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       throw new Error(
         `opencode exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`,
       );
     }
-    if (AUTO_REJECT_NOTICE.test(stderrBuffer.text())) {
+    if (AUTO_REJECT_NOTICE.test(closeResult.stderr)) {
       throw new Error("opencode auto-rejected a permission request and interrupted the run");
     }
     if (!sessionId) throw new Error("opencode exited without reporting a session");
@@ -559,7 +468,6 @@ export async function spawnOpencodeSubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(allText.map((text) => ({ text })), "interrupted");
@@ -588,6 +496,5 @@ export async function spawnOpencodeSubagent(params: {
     });
   } finally {
     emitter.stop();
-    if (abortHandler) params.signal?.removeEventListener("abort", abortHandler);
   }
 }

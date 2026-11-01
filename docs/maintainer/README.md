@@ -15,9 +15,10 @@ These files are internal development documentation and are excluded from the pub
 
 ## Runbooks & Architecture
 
+- **[Detailed Product Contracts](contracts.md):** Per-area invariants (configuration, permissions per backend, receipts, `external_runs`, workflows) moved out of `AGENTS.md`.
 - **[Architecture Spec](architecture.md):** Implementation map, settings v5 resolution order, and boundary invariants.
 - **[Field Testing](field-testing.md):** Mandatory test execution lanes across all supported backends before release.
-- **[Playbook Verification](playbook-test-plan.md):** Traced mechanical tests and real-agent behavioral acceptance for every advertised pattern and shared recommendation.
+- **[Orchestration evaluation](orchestration-evaluation.md):** A few matched live-agent tasks when making claims about orchestration judgment or user outcomes. Product behavior remains covered by the runnable recipe and runtime suites.
 - **[Releasing](releasing.md):** Automated release pipeline, PR labels, OIDC trusted publishing, and npm checks.
 - **[Tool Schema Compatibility](tool-schema-compatibility.md):** Downstream client schema compatibility notes (#62).
 

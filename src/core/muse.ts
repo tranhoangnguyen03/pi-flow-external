@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,14 +9,9 @@ import {
   textResult,
   type AgentToolResult,
 } from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
 import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
 import { buildPermissionArgs } from "./permissions.ts";
-import { abortChildTree } from "./process-tree.ts";
+import { runCliProcess } from "./cli-process.ts";
 import { selectorHarness } from "../profiles.ts";
 
 const MUSE_COMMAND = "muse";
@@ -349,14 +343,10 @@ export async function spawnMuseSubagent(params: {
   let deltaText = "";
   const assistantMessages: Array<{ id?: string; text: string }> = [];
   const root: MuseRootIdentity = {};
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
   let sawTerminalEvent = false;
   let terminalSucceeded = false;
   let eventError: string | undefined;
-  let oversizeError: string | undefined;
-  let child: ChildProcess | undefined;
   let tempFiles: Awaited<ReturnType<typeof createMuseTempFiles>> | undefined;
-  let abortHandler: (() => void) | undefined;
 
   const handleEvent = (envelope: Record<string, unknown>) => {
     try {
@@ -421,95 +411,26 @@ export async function spawnMuseSubagent(params: {
       resumeSessionId: params.resumeSessionId,
     });
 
-    const proc = spawn(MUSE_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-
-    proc.once("spawn", () => {
-      if (progress) progress.processStartedAt = Date.now();
-      try {
-        params.onProcessStart?.(proc.pid);
-      } catch {
-        // observation is best-effort
-      }
-    });
-
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("muse stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChildTree(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChildTree(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // Avoid unhandled EPIPE if child exits before reading stdin
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS || lines.some((line) => line.length > MAX_STDOUT_LINE_CHARS)) {
-        oversizeError ??= `muse emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChildTree(proc);
-        return;
-      }
-      for (const line of lines) {
-        const envelope = parseMuseJsonLine(line);
-        if (envelope) {
-          handleEvent(envelope);
-        }
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
     emitter.emit();
     emitter.startHeartbeat();
-    proc.stdin.end();
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const envelope = parseMuseJsonLine(stdoutBuffer);
-          if (envelope) {
-            handleEvent(envelope);
-          }
-        }
-        resolve({ code, signal });
-      });
+    const closeResult = await runCliProcess({
+      label: "muse",
+      command: MUSE_COMMAND,
+      args,
+      cwd: params.ctx.cwd,
+      signal: params.signal,
+      onSpawn: (pid) => {
+        if (progress) progress.processStartedAt = Date.now();
+        params.onProcessStart?.(pid);
+      },
+      onLine: (line) => {
+        const envelope = parseMuseJsonLine(line);
+        if (envelope) handleEvent(envelope);
+      },
     });
 
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
     if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
+      const stderr = closeResult.stderr.trim();
       throw new Error(
         `muse exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`,
       );
@@ -547,7 +468,6 @@ export async function spawnMuseSubagent(params: {
       ...(progress ? { progress } : {}),
     });
   } catch (error) {
-    if (child) abortChildTree(child);
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
     const output = assistantOutput(assistantMessages, "interrupted", resultText || deltaText);
@@ -575,9 +495,6 @@ export async function spawnMuseSubagent(params: {
     });
   } finally {
     emitter.stop();
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-    }
     await tempFiles?.cleanup().catch(() => undefined);
   }
 }

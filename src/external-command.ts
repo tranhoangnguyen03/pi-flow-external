@@ -48,13 +48,6 @@ import {
   type BindingField,
   type HarnessField,
 } from "./config-lifecycle.ts";
-import {
-  applyConfigUpgrade,
-  planConfigUpgrade,
-  planLegacyPurge,
-  purgeLegacyFiles,
-  type LegacyPurgeCandidate,
-} from "./config-upgrade.ts";
 import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
 import type { SubagentProfile } from "./types.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
@@ -69,7 +62,7 @@ const COMMANDS = [
   { value: "config", description: "Open guided settings (text without UI)" },
   { value: "config text", description: "Show configuration details as text in any mode" },
   { value: "config edit", description: "Edit and validate settings, including named Pi harnesses, with the standard editor" },
-  { value: "config convert", description: "Preview and confirm conversion to v5 (pre-v4 installs convert in two steps)" },
+  { value: "config convert", description: "Preview and confirm conversion of version 4 settings to v5" },
   { value: "config harness list", description: "List harnesses with model, effort, enabled, and default state" },
   { value: "config harness inspect", description: "Show one harness's effective defaults, exceptions, and gates" },
   { value: "config harness create", description: "Register a named Pi harness: create pi-NAME --model provider/model" },
@@ -92,7 +85,6 @@ const COMMANDS = [
   { value: "config role reset", description: "Reset selected fields or instructions, or all after confirmation" },
   { value: "config role delete", description: "Delete a custom role after an impact preview" },
   { value: "config role assist", description: "Assisted role-authoring interview" },
-  { value: "[danger]purge-old-files", description: "Delete obsolete extension files (explicit maintenance)" },
   { value: "workflows", description: "List saved workflows" },
   { value: "runs", description: "Browse session runs and their complete paged output" },
   { value: "runs summary", description: "Summarize durable receipts" },
@@ -148,6 +140,7 @@ const MOVED_COMMANDS = [
   ["role create", "config role create NAME, or config role assist"],
   ["role inspect <role> [harness]", "config role inspect <role> [--harness NAME]"],
   ["role override <role> <harness>", "config role edit <role> --harness NAME"],
+  ["[danger]purge-old-files", "(removed) legacy files are ignored; delete them manually if wanted"],
 ] as const;
 
 function helpText(): string {
@@ -238,12 +231,9 @@ function configText(options: ExternalCommandOptions, ctx: CommandContextLike): {
     ? ` (project: ${harness.projectPath})`
     : " (global)";
   const catalog = loadCatalogSnapshot(getAgentDir(), options);
-  const upgradePlan = planConfigUpgrade(getAgentDir());
-  const upgradeHint = upgradePlan.status === "ready"
+  const upgradeHint = planV5Upgrade(getAgentDir()).status === "ready"
     ? ["A one-time configuration conversion is ready: run /external config convert to preview it."]
-    : upgradePlan.status === "blocked"
-      ? ["Configuration conversion is blocked:", ...upgradePlan.diagnostics.map((item) => `- ${item}`)]
-      : [];
+    : [];
   const warnings = [...options.settings.diagnostics, ...harness.diagnostics, ...catalogProblems(catalog), ...defaultHarnessProblems(catalog, harness.harness), ...upgradeHint];
   const text = [
     `defaultHarness: ${harness.harness}${harnessSource}`,
@@ -853,9 +843,9 @@ async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionComma
     return;
   }
   // Explicit editor repair: a guided full replacement may overwrite a
-  // malformed or v4-invalid current file. Valid pre-v4 installations and
-  // future versions are still rejected — those go through
-  // /external config convert, not the editor.
+  // malformed or invalid current file. Valid version 4 files go through
+  // /external config convert; pre-v4 and future versions are refused, never
+  // rewritten here.
   const save = options.saveSettings ?? saveExternalSettings;
   try {
     const path = save(agentDir, record, { repair: true });
@@ -863,30 +853,6 @@ async function settingsEdit(options: ExternalCommandOptions, ctx: ExtensionComma
   } catch (error) {
     ctx.ui.notify(`Settings not saved: ${error instanceof Error ? error.message : String(error)}`, "error");
   }
-}
-
-function formatUpgradePreview(plan: ReturnType<typeof planConfigUpgrade>): string {
-  if (plan.status !== "ready" || !plan.settings) return plan.diagnostics.join(" ");
-  const lines = [
-    "Configuration conversion preview (one-time; original files stay in place as the recovery copy):",
-    `Settings: ${plan.settingsPath}`,
-    JSON.stringify(plan.settings, null, 2),
-  ];
-  const list = (title: string, items: string[]) => {
-    if (!items.length) return;
-    lines.push(`${title} (${items.length}):`);
-    const shown = items.slice(0, 20);
-    for (const item of shown) lines.push(`- ${item}`);
-    if (items.length > shown.length) lines.push(`- … and ${items.length - shown.length} more`);
-  };
-  list("Override copies", plan.overrides.map((override) => `${override.name} (${override.reason})`));
-  list("Disabled seeded identities", plan.disabledProfiles);
-  list("Unchanged defaults (no copy needed)", plan.unchangedDefaults);
-  list("Excluded native/contradictory profiles", plan.excludedProfiles);
-  list("Notes", plan.notes);
-  const preserved = Object.keys(plan.preservedFields);
-  if (preserved.length) lines.push(`Preserved unknown fields: ${preserved.join(", ")}`);
-  return lines.join("\n");
 }
 
 async function settingsConvert(ctx: ExtensionCommandContext): Promise<void> {
@@ -901,125 +867,8 @@ async function settingsConvert(ctx: ExtensionCommandContext): Promise<void> {
     return;
   }
   if (v5.status === 'current') { ctx.ui.notify('Configuration is already version 5. Nothing to convert.', 'info'); return; }
-  const plan = planConfigUpgrade(agentDir);
-  if (v5.status === 'blocked' && (plan.status === 'current' || plan.status === 'empty')) { ctx.ui.notify(`v5 conversion blocked: ${v5.diagnostics.join(' ')}`, 'error'); return; }
-  if (plan.status === "current") {
-    ctx.ui.notify("Configuration is already version 4. Nothing to convert.", "info");
-    return;
-  }
-  if (plan.status === "empty") {
-    ctx.ui.notify("No legacy configuration found. Nothing to convert.", "info");
-    return;
-  }
-  if (plan.status === "blocked" || !plan.settings) {
-    ctx.ui.notify(`Configuration conversion is blocked:\n${plan.diagnostics.map((item) => `- ${item}`).join("\n")}`, "error");
-    return;
-  }
-  const preview = formatUpgradePreview(plan);
-  if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") {
-    ctx.ui.notify(`${summarizeUnknown(preview, 4000)}\n\nConversion needs interactive confirmation; rerun /external config convert with UI.`, "warning");
-    return;
-  }
-  const confirmed = await ctx.ui.confirm(
-    "Apply configuration conversion?",
-    `${summarizeUnknown(preview, 4000)}\n\nOverride copies land first; settings.json version 4 activates last. Originals stay in place.`,
-  );
-  if (!confirmed) {
-    ctx.ui.notify("Conversion cancelled. Nothing was written.", "info");
-    return;
-  }
-  const result = applyConfigUpgrade(agentDir);
-  if (result.status === "applied") {
-    ctx.ui.notify(
-      [
-        `Conversion applied (legacy step): ${result.settingsPath} is now version 4. Run /external config convert again to preview the final v5 conversion.`,
-        `Overrides installed: ${result.overridesInstalled.length}`,
-        result.disabledProfiles.length ? `Disabled seeded identities: ${result.disabledProfiles.length}` : undefined,
-        "Values apply from the next invocation; frozen workflows keep their prior snapshot.",
-      ].filter((line): line is string => Boolean(line)).join("\n"),
-      "info",
-    );
-    return;
-  }
-  ctx.ui.notify(
-    `Conversion did not apply (${result.status}). Nothing was activated:\n${result.diagnostics.map((item) => `- ${item}`).join("\n")}`,
-    result.status === "blocked" ? "error" : "warning",
-  );
-}
-
-function formatPurgeCandidate(candidate: LegacyPurgeCandidate): string {
-  return `${candidate.relativePath} · ${candidate.kind}${candidate.copied ? " · copied to overrides" : " · NOT copied to overrides"}`;
-}
-
-async function purgeOldFiles(ctx: ExtensionCommandContext): Promise<void> {
-  const agentDir = getAgentDir();
-  const plan = planLegacyPurge(agentDir);
-  if (plan.status === "blocked") {
-    ctx.ui.notify(`Purge is blocked:\n${plan.diagnostics.map((item) => `- ${item}`).join("\n")}`, "warning");
-    return;
-  }
-  if (!plan.candidates.length) {
-    ctx.ui.notify("No legacy files to purge. Repeat invocation is harmless.", "info");
-    return;
-  }
-  // Nonstandard exact-only names stay out of the default inventory and are
-  // listed separately for explicit selection, never blanket deletion.
-  const inventory = plan.candidates.filter((candidate) => candidate.inventory);
-  const nonstandard = plan.candidates.filter((candidate) => !candidate.inventory);
-  const byPath = new Map(plan.candidates.map((candidate) => [candidate.path, candidate]));
-  const describe = (title: string, items: LegacyPurgeCandidate[]): string => {
-    if (!items.length) return "";
-    return `${title}:\n${items.map((candidate) => `- ${formatPurgeCandidate(candidate)}`).join("\n")}`;
-  };
-  const listing = [describe("Purge inventory", inventory), describe("Nonstandard names (select explicitly)", nonstandard)]
-    .filter(Boolean)
-    .join("\n");
-  if (!ctx.hasUI || typeof ctx.ui.select !== "function" || typeof ctx.ui.confirm !== "function") {
-    ctx.ui.notify(`${listing}\n\nPurge needs interactive selection and confirmation; rerun /external [danger]purge-old-files with UI. Nothing was deleted.`, "warning");
-    return;
-  }
-  // Explicit individual selection: nothing is preselected and there is no
-  // select-all shortcut. Toggle entries one at a time, then delete.
-  const selected = new Set<string>();
-  while (true) {
-    const toggleChoices = plan.candidates.map((candidate) =>
-      `${selected.has(candidate.path) ? "✓" : "○"} ${formatPurgeCandidate(candidate)}`);
-    const choice = await ctx.ui.select("Purge old files", [...toggleChoices, `Delete ${selected.size} selected`, "Back"]);
-    if (!choice || choice === "Back") {
-      ctx.ui.notify("Purge cancelled. Nothing was deleted.", "info");
-      return;
-    }
-    if (choice.startsWith("Delete ")) {
-      break;
-    }
-    const index = toggleChoices.indexOf(choice);
-    const candidate = index === -1 ? undefined : plan.candidates[index];
-    if (!candidate) continue;
-    if (selected.has(candidate.path)) selected.delete(candidate.path);
-    else selected.add(candidate.path);
-  }
-  if (!selected.size) {
-    ctx.ui.notify("No files selected. Nothing was deleted.", "info");
-    return;
-  }
-  const selection = [...selected].map((path) => ({ path, fingerprint: byPath.get(path)!.fingerprint }));
-  const confirmed = await ctx.ui.confirm(
-    `Delete ${selection.length} obsolete file(s)?`,
-    `${selection.map((item) => `- ${byPath.get(item.path)!.relativePath}`).join("\n")}\n\nFiles changed since preview are skipped, never forced. Repeat invocation is harmless.`,
-  );
-  if (!confirmed) {
-    ctx.ui.notify("Purge cancelled. Nothing was deleted.", "info");
-    return;
-  }
-  const result = purgeLegacyFiles(agentDir, selection);
-  const lines = [
-    `Deleted: ${result.deleted.length}`,
-    ...result.deleted.map((path) => `- ${path}`),
-    ...result.skipped.map((item) => `Skipped ${item.path} (${item.reason})`),
-    ...result.failed.map((item) => `Failed ${item.path}: ${item.reason}`),
-    ...result.diagnostics.map((item) => `- ${item}`),
-  ];
-  ctx.ui.notify(lines.join("\n"), result.failed.length || result.status === "blocked" ? "warning" : "info");
+  if (v5.status === 'empty') { ctx.ui.notify('No legacy configuration found. Nothing to convert.', 'info'); return; }
+  ctx.ui.notify(`v5 conversion blocked: ${v5.diagnostics.join(' ')}`, 'error');
 }
 
 async function doctorText(pi: ExtensionAPI, options: ExternalCommandOptions, ctx: ExtensionCommandContext): Promise<string> {
@@ -1330,8 +1179,6 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
           ? await harnessCommand(pi, options, ctx, tokens.slice(2))
           : await roleCommand(options, ctx, tokens.slice(2));
         if (notice) ctx.ui.notify(notice.message, notice.level);
-      } else if (action === "[danger]purge-old-files") {
-        await purgeOldFiles(ctx);
       } else if (action === "workflows") {
         const saved = workflows(ctx);
         ctx.ui.notify(saved.length ? saved.map((workflow) => `${workflow.name}: ${workflow.description}`).join("\n") : "No saved workflows.", "info");

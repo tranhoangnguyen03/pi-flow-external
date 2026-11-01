@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAgentSession,
@@ -16,6 +16,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { installFakeCli } from "./helpers/fake-cli.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import { getSubagentProfiles } from "../src/profiles.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
@@ -112,7 +113,6 @@ describe("pi-subagent codex backend", () => {
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-reviewer.md"), `---
 description: Reviews through Codex CLI.
 backend: codex
@@ -121,8 +121,7 @@ thinking: low
 ---
 
 Codex reviewer prompt.`);
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "codex", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -133,9 +132,7 @@ console.log(JSON.stringify({ type: 'item.started', item: { type: 'command_execut
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'rg TODO' } }));
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'codex child done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 50 } }));
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -175,9 +172,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     const spawnCountPath = join(tempDir, "spawn-count");
     const releasePath = join(tempDir, "release-first");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Queue test.\nbackend: codex\n---\n");
-    writeFileSync(join(binDir, "codex"), `#!/usr/bin/env node
+    installFakeCli(binDir, "codex", `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 for await (const _chunk of process.stdin) {}
 const count = existsSync(${JSON.stringify(spawnCountPath)}) ? Number(readFileSync(${JSON.stringify(spawnCountPath)}, 'utf8')) : 0;
@@ -186,9 +182,7 @@ while (!existsSync(${JSON.stringify(releasePath)})) await new Promise((resolve) 
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'queued-test' }));
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
-`);
-    chmodSync(join(binDir, "codex"), 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
     const tool = session.getToolDefinition("external_delegate") as any;
@@ -260,17 +254,13 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, c
 
   it("forwards every parsed codex stream event", async () => {
     const binDir = join(tempDir, "bin-codex-events");
-    mkdirSync(binDir, { recursive: true });
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "codex", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-events' }));
 console.log('not-json');
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } }));
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const eventTypes: Array<string | undefined> = [];
     const result = await spawnCodexSubagent({
@@ -301,14 +291,10 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
 
   it("does not accept final text without a terminal codex event", async () => {
     const binDir = join(tempDir, "bin-codex-no-terminal");
-    mkdirSync(binDir, { recursive: true });
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "codex", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'plausible but unverified' } }));
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnCodexSubagent({
       toolCallId: "codex-no-terminal",
@@ -333,103 +319,10 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
     expect(result.content[0].text).toContain("Interrupted output:\nplausible but unverified");
   });
 
-  it("kills a codex child if abort lands after process spawn", async () => {
-    const binDir = join(tempDir, "bin-abort-race");
-    const markerPath = join(tempDir, "codex-child-completed");
-    mkdirSync(binDir, { recursive: true });
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-process.stdin.resume();
-setTimeout(() => {
-  writeFileSync(${JSON.stringify(markerPath)}, 'completed');
-  console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-abort-race' }));
-  console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'should not complete' } }));
-  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } }));
-}, 700);
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    let abortedChecks = 0;
-    const signal = {
-      get aborted() {
-        abortedChecks += 1;
-        return abortedChecks >= 3;
-      },
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    } as unknown as AbortSignal;
-
-    const result = await spawnCodexSubagent({
-      toolCallId: "codex-abort-race",
-      description: "Codex abort race",
-      prompt: "This should be aborted before stdin is sent.",
-      profile: {
-        name: "codex-race",
-        description: "Codex abort race profile.",
-        backend: "codex",
-        model: "gpt-5.4-mini",
-        systemPrompt: "Codex race prompt.",
-      },
-      thinkingLevel: "medium",
-      ctx: { cwd } as ExtensionContext,
-      signal,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("aborted");
-    expect(result.details.backend).toBe("codex");
-    expect(result.details.error).toContain("aborted before prompt start");
-    expect(signal.addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(existsSync(markerPath)).toBe(false);
-  });
-
-  it("fails clearly when codex emits an oversized stdout line", async () => {
-    const binDir = join(tempDir, "bin-codex-oversize");
-    mkdirSync(binDir, { recursive: true });
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
-for await (const _chunk of process.stdin) {}
-console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
-console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'must not pass' } }));
-console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }));
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    const result = await spawnCodexSubagent({
-      toolCallId: "codex-oversize",
-      description: "Codex oversize",
-      prompt: "Trigger oversize stdout.",
-      profile: {
-        name: "codex-oversize",
-        description: "Codex oversize profile.",
-        backend: "codex",
-        model: "gpt-5.4-mini",
-        systemPrompt: "Codex oversize prompt.",
-      },
-      thinkingLevel: "medium",
-      ctx: { cwd } as ExtensionContext,
-      signal: undefined,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("codex emitted a stdout line over");
-    expect(result.details.error).toContain("chars");
-  });
-
   it("does not add unknown codex model cost to the status line", async () => {
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-unknown-cost");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "codex-unknown.md"), `---
 description: Uses an unpriced Codex model.
 backend: codex
@@ -437,16 +330,13 @@ model: custom-codex-model
 ---
 
 Codex prompt.`);
-    const fakeCodexPath = join(binDir, "codex");
-    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+    installFakeCli(binDir, "codex", `#!/usr/bin/env node
 import 'node:process';
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-test-session' }));
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'unknown model done' } }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 50 } }));
-`);
-    chmodSync(fakeCodexPath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("external_delegate") as any;

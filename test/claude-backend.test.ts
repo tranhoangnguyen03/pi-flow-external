@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAgentSession,
@@ -16,6 +16,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { installFakeCli } from "./helpers/fake-cli.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import { getSubagentProfiles } from "../src/profiles.ts";
 import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
@@ -192,7 +193,6 @@ describe("pi-subagent claude backend", () => {
     const binDir = join(tempDir, "bin-claude");
     const argsPath = join(tempDir, "claude-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-reviewer.md"), `---
 description: Reviews through Claude Code.
 backend: claude
@@ -201,8 +201,7 @@ thinking: xhigh
 ---
 
 Claude reviewer prompt.`);
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
@@ -211,9 +210,7 @@ console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claud
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git diff --stat' } }], usage: { input_tokens: 100, cache_creation_input_tokens: 300, cache_read_input_tokens: 200, output_tokens: 10 } } }));
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'claude child done' }], usage: { input_tokens: 100, cache_creation_input_tokens: 300, cache_read_input_tokens: 200, output_tokens: 10 } } }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude child done', total_cost_usd: 0.0123, usage: { input_tokens: 150, cache_creation_input_tokens: 350, cache_read_input_tokens: 250, output_tokens: 25 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -274,11 +271,9 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-claude-denials");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-implementer.md"), `---
 description: Implements through Claude Code.\nbackend: claude\nmodel: sonnet\n---\n\nClaude implementer prompt.`);
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-denial-session' }));
@@ -286,9 +281,7 @@ console.log(JSON.stringify({ type: 'system', subtype: 'permission_denied', tool_
 console.log(JSON.stringify({ type: 'system', subtype: 'permission_denied', tool_name: 'Read', tool_use_id: 't2', content: 'denied' }));
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'blocked report' }], usage: { input_tokens: 10, output_tokens: 5 } } }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'blocked report', permission_denials: [{ tool_name: 'Bash', tool_use_id: 't1' }, { tool_name: 'Read', tool_use_id: 't2' }], usage: { input_tokens: 15, output_tokens: 6 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -318,7 +311,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const binDir = join(tempDir, "bin-claude-elevate");
     const argsPath = join(tempDir, "claude-elevate-args.json");
     mkdirSync(subagentsDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(join(subagentsDir, "claude-worker.md"), `---
 description: General work through Claude Code.
 backend: claude
@@ -326,17 +318,14 @@ model: sonnet
 ---
 
 Claude worker prompt.`);
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }));
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-elevate-session' }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude worker done', usage: { input_tokens: 10, output_tokens: 5 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const { session, registration } = await createSession();
     let rootContinuationContext: Context | undefined;
@@ -368,17 +357,13 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("forwards every parsed claude stream event", async () => {
     const binDir = join(tempDir, "bin-claude-events");
-    mkdirSync(binDir, { recursive: true });
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-events' }));
 console.log('not-json');
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 2 } } }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 10, output_tokens: 2 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const eventTypes: Array<string | undefined> = [];
     const result = await spawnClaudeSubagent({
@@ -409,16 +394,12 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("uses the latest result when a background-agent notification adds one", async () => {
     const binDir = join(tempDir, "bin-claude-two-results");
-    mkdirSync(binDir, { recursive: true });
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-two-results' }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'interim: waiting for background agent' }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, origin: { kind: 'task-notification' }, result: 'final audit answer', usage: { input_tokens: 10, output_tokens: 2 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-two-results",
@@ -439,15 +420,11 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
   it("does not accept a Claude result that does not affirm success", async () => {
     const binDir = join(tempDir, "bin-claude-no-terminal");
-    mkdirSync(binDir, { recursive: true });
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+    installFakeCli(binDir, "claude", `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'plausible but unverified' }], usage: { input_tokens: 10, output_tokens: 2 } } }));
 console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+`, originalPathEnv);
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-no-terminal",
@@ -472,97 +449,4 @@ console.log(JSON.stringify({ type: 'result', result: 'plausible but unverified' 
     expect(result.content[0].text).toContain("Interrupted output:\nplausible but unverified");
   });
 
-  it("kills a claude child if abort lands after process spawn", async () => {
-    const binDir = join(tempDir, "bin-claude-abort-race");
-    const markerPath = join(tempDir, "claude-child-completed");
-    mkdirSync(binDir, { recursive: true });
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-process.stdin.resume();
-setTimeout(() => {
-  writeFileSync(${JSON.stringify(markerPath)}, 'completed');
-  console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-abort-race' }));
-  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'should not complete', usage: { input_tokens: 10, output_tokens: 2 } }));
-}, 700);
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    let abortedChecks = 0;
-    const signal = {
-      get aborted() {
-        abortedChecks += 1;
-        return abortedChecks >= 2;
-      },
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    } as unknown as AbortSignal;
-
-    const result = await spawnClaudeSubagent({
-      toolCallId: "claude-abort-race",
-      description: "Claude abort race",
-      prompt: "This should be aborted before stdin is sent.",
-      profile: {
-        name: "claude-race",
-        description: "Claude abort race profile.",
-        backend: "claude",
-        model: "sonnet",
-        systemPrompt: "Claude race prompt.",
-      },
-      thinkingLevel: "medium",
-      ctx: { cwd } as ExtensionContext,
-      signal,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("aborted");
-    expect(result.details.backend).toBe("claude");
-    // A profile with no explicit `harness` (the common case for external CLI
-    // profiles) still persists one: harness defaults to backend, never left
-    // unset for a caller reading this field.
-    expect(result.details.harness).toBe("claude");
-    expect(result.details.error).toContain("aborted before prompt start");
-    expect(signal.addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(existsSync(markerPath)).toBe(false);
-  });
-
-  it("fails clearly when claude emits an oversized stdout line", async () => {
-    const binDir = join(tempDir, "bin-claude-oversize");
-    mkdirSync(binDir, { recursive: true });
-    const fakeClaudePath = join(binDir, "claude");
-    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
-for await (const _chunk of process.stdin) {}
-console.log('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}));
-console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'must not pass', usage: { input_tokens: 1, output_tokens: 1 } }));
-`);
-    chmodSync(fakeClaudePath, 0o755);
-    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
-
-    const result = await spawnClaudeSubagent({
-      toolCallId: "claude-oversize",
-      description: "Claude oversize",
-      prompt: "Trigger oversize stdout.",
-      profile: {
-        name: "claude-oversize",
-        description: "Claude oversize profile.",
-        backend: "claude",
-        model: "sonnet",
-        systemPrompt: "Claude oversize prompt.",
-      },
-      thinkingLevel: "medium",
-      ctx: { cwd } as ExtensionContext,
-      signal: undefined,
-      progressEnabled: false,
-      onProgress: undefined,
-      onUsage: () => undefined,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("claude emitted a stdout line over");
-    expect(result.details.error).toContain("chars");
-  });
 });

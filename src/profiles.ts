@@ -1,16 +1,10 @@
 import { ExpectedFlowError } from "./core/errors.ts";
-import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
-import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { EXTERNAL_HARNESSES, type ExternalHarness, type SubagentBackend, type SubagentProfile, type ThinkingLevel } from "./types.ts";
-import { defaultRoleNames, roleDefinition } from "./default-roles.ts";
-import type { HarnessConfig } from "./harnesses.ts";
 import { loadExternalSettings } from "./settings.ts";
 import { bindingKey, loadV5Catalog } from './catalog-v5.ts';
 
-const EXTERNAL_AGENT_BACKENDS: readonly SubagentBackend[] = EXTERNAL_HARNESSES;
 const NO_PI_HARNESSES: ReadonlySet<string> = new Set();
-const NO_HARNESS_CONFIGS: ReadonlyMap<string, HarnessConfig> = new Map();
 
 const VALID_PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -125,47 +119,8 @@ export function parseSubagentProfileContent(
   };
 }
 
-function parseProfileFile(filePath: string, name: string, options: { requireBody: boolean }): SubagentProfile | undefined {
-  try {
-    return parseSubagentProfileContent(readFileSync(filePath, "utf-8"), name, options);
-  } catch {
-    return undefined;
-  }
-}
-
-export function loadCustomSubagentProfiles(agentDir = getAgentDir()): Map<string, SubagentProfile> {
-  const dir = join(agentDir, "subagents");
-  const profiles = new Map<string, SubagentProfile>();
-  if (!existsSync(dir)) {
-    return profiles;
-  }
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return profiles;
-  }
-
-  for (const entry of entries) {
-    if (!entry.endsWith(".md")) {
-      continue;
-    }
-    const name = basename(entry, ".md");
-    if (!isValidSubagentName(name)) {
-      continue;
-    }
-    const profile = parseProfileFile(join(dir, entry), name, { requireBody: false });
-    if (profile) {
-      profiles.set(name, profile);
-    }
-  }
-
-  return profiles;
-}
-
-export function getSubagentProfiles(agentDir = getAgentDir(), options: { legacyInspection?: boolean } = {}): Map<string, SubagentProfile> {
-  const catalog = loadExternalCatalog(agentDir, options);
+export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, SubagentProfile> {
+  const catalog = loadExternalCatalog(agentDir);
   if (catalog.blocked) throw new Error(catalog.diagnostics.join(" "));
   return catalog.profiles;
 }
@@ -191,29 +146,6 @@ export function opencodeProfileProblem(profile: SubagentProfile): string | undef
   return undefined;
 }
 
-/**
- * A `backend: "pi"` profile is external-delegation-eligible only when it also
- * declares `harness: <name>` for a name present in the live harness registry
- * (see src/harnesses.ts). This is the mechanical reason an ordinary native Pi
- * subagent file (no `harness:`, or one naming an unregistered config) can
- * never accidentally qualify: condition (2) requires a name that only this
- * extension's own harness registry can supply.
- */
-export function isExternalAgentProfile(
-  profile: SubagentProfile,
-  configuredPiHarnesses: ReadonlySet<string> = NO_PI_HARNESSES,
-): boolean {
-  if (EXTERNAL_AGENT_BACKENDS.includes(profile.backend)) return true;
-  return profile.backend === "pi" && profile.harness !== undefined && configuredPiHarnesses.has(profile.harness);
-}
-
-export function filterExternalAgentProfiles(
-  profiles: Map<string, SubagentProfile>,
-  configuredPiHarnesses: ReadonlySet<string> = NO_PI_HARNESSES,
-): Map<string, SubagentProfile> {
-  return new Map([...profiles].filter(([, profile]) => isExternalAgentProfile(profile, configuredPiHarnesses)));
-}
-
 /** Actionable rejection for a disabled harness. Selection never substitutes another harness. */
 export function disabledHarnessMessage(harness: string, isDefault = false): string {
   return isDefault
@@ -221,82 +153,13 @@ export function disabledHarnessMessage(harness: string, isDefault = false): stri
     : `Harness "${harness}" is disabled in settings.json. Enable it with /external config harness enable ${harness}, or choose another harness.`;
 }
 
-export function loadExternalCatalog(agentDir = getAgentDir(), options: { legacyInspection?: boolean } = {}): { profiles: Map<string, SubagentProfile>; diagnostics: string[]; blocked: boolean; harnessConfigs: Map<string, HarnessConfig>; disabledHarnesses: Set<string> } {
+export type ExternalCatalog = ReturnType<typeof loadV5Catalog>;
+
+/** The one catalog source. Settings version 4 is blocked until explicit conversion. */
+export function loadExternalCatalog(agentDir = getAgentDir()): ExternalCatalog {
   const loaded = loadExternalSettings(agentDir);
-  if (loaded.settings.version === 4 && !options.legacyInspection) return { profiles: new Map<string, SubagentProfile>(), diagnostics: [...loaded.diagnostics, 'Settings version 4 requires explicit conversion. Run /external config convert.'], blocked: true, harnessConfigs: new Map(Object.entries(loaded.settings.harnesses ?? {})), disabledHarnesses: new Set(loaded.settings.disabledHarnesses ?? []) };
-  if (loaded.settings.version === 5) return loadV5Catalog(agentDir, loaded);
-  const diagnostics = [...loaded.diagnostics];
-  const profiles = new Map<string, SubagentProfile>();
-  const harnesses = new Map(Object.entries(loaded.settings.harnesses ?? {}));
-  const disabledHarnesses = new Set(loaded.settings.disabledHarnesses ?? []);
-  if (loaded.blocked) return { profiles, diagnostics, blocked: true, harnessConfigs: harnesses, disabledHarnesses };
-  const names = [...EXTERNAL_HARNESSES, ...harnesses.keys()];
-  for (const name of disabledHarnesses) {
-    if (!names.includes(name)) diagnostics.push(`disabledHarnesses entry "${name}" is not a known harness. It is kept and applies if that harness appears; remove it with /external config harness enable ${name}.`);
-  }
-  const labels: Record<string, string> = { agy: "Antigravity", claude: "Claude Code", codex: "Codex CLI", grok: "Grok CLI", muse: "Muse Code", opencode: "OpenCode" };
-  const bind = (role: string, definition: { description: string; systemPrompt?: string; configurationError?: string }, source: string) => {
-    for (const harness of names) {
-      const config = harnesses.get(harness);
-      profiles.set(`${harness}-${role}`, { ...definition, name: `${harness}-${role}`, description: definition.description.replaceAll("${backendLabel}", labels[harness] ?? harness), backend: config ? "pi" : harness as ExternalHarness, ...(config ? { harness, ...piHarnessBinding(config) } : {}), source });
-    }
-  };
-  for (const role of defaultRoleNames()) {
-    const definition = roleDefinition(role)!;
-    bind(role, { description: definition.description, systemPrompt: definition.body }, "built-in");
-  }
-  for (const kind of ["roles", "overrides"] as const) {
-    const dir = join(agentDir, "pi-flow-external", kind);
-    if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir)) {
-      if (!entry.endsWith(".md")) continue;
-      const name = basename(entry, ".md");
-      if (!isValidSubagentName(name)) continue;
-      const path = join(dir, entry);
-      let profile: SubagentProfile | undefined;
-      let error: string | undefined;
-      try {
-        if (!lstatSync(path).isFile()) throw new Error("must be a regular file");
-        const content = readFileSync(path, "utf8");
-        profile = parseSubagentProfileContent(content, name, { requireBody: kind === "roles" });
-        if (!profile) throw new Error("invalid role metadata or instructions");
-        if (kind === "roles") {
-          const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
-          const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
-          if (obsolete.length) {
-            throw new Error(`obsolete metadata ${obsolete.join(", ")} does not grant authority. Remove it. A role describes intent; pass permission on the external_delegate or external_workflow call, or set defaultPermission. Pi skills follow the harness preset.`);
-          }
-          if (Object.keys(frontmatter).some((key) => key !== "description")) throw new Error("shared roles support description only; use an exact override for execution settings");
-        } else {
-          const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
-          const obsolete = ["permission", "capabilitySet"].filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key));
-          if (obsolete.length) {
-            throw new Error(`obsolete metadata ${obsolete.join(", ")} is not an authority floor or a capability selection. Remove it. Pass permission on the call, or set defaultPermission. Pi skills follow the harness preset.`);
-          }
-          if (!isExternalAgentProfile(profile, new Set(harnesses.keys()))) throw new Error("override must declare an external backend or registered Pi harness");
-          const opencodeProblem = opencodeProfileProblem(profile);
-          if (opencodeProblem) throw new Error(opencodeProblem);
-        }
-      } catch (cause) { error = `Invalid ${kind === "roles" ? "role" : "override"} ${path}: ${cause instanceof Error ? cause.message : String(cause)}`; diagnostics.push(error); }
-      if (kind === "roles") bind(name, { description: profile?.description ?? name, systemPrompt: profile?.systemPrompt, ...(error ? { configurationError: error } : {}) }, path);
-      else {
-        const prior = profiles.get(name);
-        const harness = [...names].sort((a, b) => b.length - a.length).find(h => name.startsWith(`${h}-`));
-        const fallback = prior ?? { name, description: name, backend: harnesses.has(harness ?? "") ? "pi" as const : (harness ?? "agy") as ExternalHarness, ...(harnesses.has(harness ?? "") ? { harness } : {}) };
-        profiles.set(name, { ...(profile ?? fallback), source: path, ...(error ? { configurationError: error } : {}) });
-      }
-    }
-  }
-  for (const name of loaded.settings.disabledProfiles ?? []) {
-    const profile = profiles.get(name);
-    if (profile) profiles.set(name, { ...profile, configurationError: `Execution identity "${name}" is disabled in settings.json.` });
-  }
-  const merged = mergeSynthesizedPiProfiles(profiles, harnesses);
-  for (const [name, profile] of merged) {
-    const harness = selectorHarness(profile);
-    if (disabledHarnesses.has(harness)) merged.set(name, { ...profile, configurationError: disabledHarnessMessage(harness) });
-  }
-  return { profiles: merged, diagnostics, blocked: false, harnessConfigs: harnesses, disabledHarnesses };
+  if (loaded.settings.version === 4) return { profiles: new Map<string, SubagentProfile>(), diagnostics: [...loaded.diagnostics, 'Settings version 4 requires explicit conversion. Run /external config convert.'], blocked: true, harnessConfigs: new Map(Object.entries(loaded.settings.harnesses ?? {})), disabledHarnesses: new Set(loaded.settings.disabledHarnesses ?? []) };
+  return loadV5Catalog(agentDir, loaded);
 }
 
 export interface ExternalAgentSelection {
@@ -316,21 +179,9 @@ export function selectorHarness(profile: SubagentProfile): string {
   return profile.harness ?? profile.backend;
 }
 
-/**
- * Structural role-prefix extraction: `<harness>-<role>` for either an
- * external CLI profile (harness === backend) or a pi profile that declares a
- * harness (backend "pi", harness "pi-*"). This does not check registry
- * membership; callers work from an already-filtered profiles map.
- */
+/** Canonical role of a binding; exact compatibility records have none. */
 export function externalProfileRole(profile: SubagentProfile): string | undefined {
-  if (profile.configVersion === 5) return profile.role;
-  const isShapedForRoleExtraction = EXTERNAL_AGENT_BACKENDS.includes(profile.backend)
-    || (profile.backend === "pi" && profile.harness !== undefined);
-  if (!isShapedForRoleExtraction) return undefined;
-  const prefix = `${selectorHarness(profile)}-`;
-  return profile.name.startsWith(prefix) && profile.name.length > prefix.length
-    ? profile.name.slice(prefix.length)
-    : undefined;
+  return profile.role;
 }
 
 function compareHarnessNames(a: string, b: string): number {
@@ -361,145 +212,15 @@ export function externalRoleAvailability(
   return new Map([...roles].sort(([a], [b]) => a.localeCompare(b)));
 }
 
-/** Model, thinking, and resource preset copied from a named Pi registration. */
-function piHarnessBinding(config: HarnessConfig): Pick<SubagentProfile, "model" | "thinking" | "preset"> {
-  return { model: config.model, thinking: config.thinking, preset: config.preset };
-}
-
-/** Canonically synthesize `<harness>-<role>` for a registered pi-* harness. */
-function synthesizePiRoleProfile(role: string, harness: string, harnessConfig: HarnessConfig): SubagentProfile | undefined {
-  const definition = roleDefinition(role);
-  if (!definition) return undefined;
-  return {
-    name: `${harness}-${role}`,
-    description: definition.description.replaceAll("${backendLabel}", harness),
-    backend: "pi",
-    harness,
-    ...piHarnessBinding(harnessConfig),
-    systemPrompt: definition.body,
-  };
-}
-
-/**
- * Core reconciliation rule shared by the throwing (resolution-time) and
- * non-throwing (merge-time) call sites below: the harness registry stays
- * authoritative for model, thinking, and resource preset. A file that omits
- * model or thinking inherits the registry's values; a file that declares the
- * same values is redundant-but-consistent; a file that declares a *different*
- * model or thinking is a configuration conflict. Preset is registration state,
- * not role metadata, so the registry value is always stamped.
- */
-export function computeReconciledPiProfile(
-  profile: SubagentProfile,
-  harnessConfigs: ReadonlyMap<string, HarnessConfig>,
-): { profile: SubagentProfile; conflict?: string } {
-  if (profile.backend !== "pi" || profile.configVersion === 5) {
-    return { profile };
-  }
-  if (!profile.harness) return { profile };
-  const harnessConfig = harnessConfigs.get(profile.harness);
-  if (!harnessConfig) {
-    return {
-      profile,
-      conflict: `Harness "${profile.harness}" is not registered. Create it first via /external config harness create.`,
-    };
-  }
-  if (profile.model !== undefined && profile.model !== harnessConfig.model) {
-    return {
-      profile,
-      conflict: `Profile "${profile.name}" declares harness "${profile.harness}" but pins model "${profile.model}", which conflicts with "${profile.harness}"'s registered model "${harnessConfig.model}". Remove the override or update settings.json.`,
-    };
-  }
-  if (profile.thinking !== undefined && profile.thinking !== harnessConfig.thinking) {
-    return {
-      profile,
-      conflict: `Profile "${profile.name}" declares harness "${profile.harness}" but pins thinking "${profile.thinking}", which conflicts with "${profile.harness}"'s registered thinking "${harnessConfig.thinking}". Remove the override or update settings.json.`,
-    };
-  }
-  return { profile: { ...profile, ...piHarnessBinding(harnessConfig) } };
-}
-
-/**
- * Resolution-time reconciliation: throws on a genuine conflict or unregistered
- * harness, since this is called for one specific profile that is *actually
- * about to be selected or installed* — the whole point of the legitimacy rule
- * is that a declared harness's validated model is what makes the profile
- * trustworthy to execute, and a conflicting or unregistered harness must block
- * that execution, not be silently honored.
- */
-export function reconcilePiProfileWithHarness(
-  profile: SubagentProfile,
-  harnessConfigs: ReadonlyMap<string, HarnessConfig>,
-): SubagentProfile {
-  const { profile: reconciled, conflict } = computeReconciledPiProfile(profile, harnessConfigs);
-  if (conflict) throw new ExpectedFlowError("selection_invalid", conflict);
-  return reconciled;
-}
-
-/**
- * Merge canonically-synthesized `<harness>-<role>` profiles for every
- * registered pi-* harness into an already-filtered external profiles map,
- * once, skipping any `<harness>-<role>` key that already has a real on-disk
- * entry (same override precedence resolveExternalProfile applies at
- * resolution time). This is the single shared merge every consumer that
- * needs a *complete* roster reuses: the external_delegate tool's catalog/help text, the
- * workflow tool's frozen per-run profile+model snapshot (so a workflow can
- * actually execute a synthesized pi role, not just resolve its name), and
- * /external's doctor/settings/profiles text. Real on-disk profiles are never
- * mutated; this returns a new map layering synthesized entries underneath.
- *
- * Every existing on-disk `backend: pi` entry is also reconciled against its
- * declared harness's registered model/thinking here — not just newly
- * synthesized entries — because this merged map is read directly (not
- * through resolveExternalProfile) by workflow execution's model lookup and
- * fingerprint descriptor. Without this, a branch-3 custom-role file that
- * omits `model`/`thinking` (the common case, inheriting from its harness)
- * would carry `model: undefined` into that map and fail with "no model
- * selected" even though the exact same profile resolves and runs fine
- * through the external_delegate tool's resolveExternalProfile path.
- *
- * A genuine conflict is deliberately *not* thrown here: this function runs
- * on every turn (coordinator prompt catalog) and at the top of every
- * workflow run, for the *whole* roster, not just the profile a caller is
- * about to use — throwing here would break an unrelated turn or workflow
- * over one stale, unrelated profile file. The conflicting entry is left
- * unreconciled (its own file's values, unchanged) and is still caught
- * authoritatively, before execution, by resolveExternalProfile's throwing
- * reconciliation the moment that specific profile is actually selected
- * (every workflow call resolves through resolveSubagentType first).
- */
-export function mergeSynthesizedPiProfiles(
-  profiles: Map<string, SubagentProfile>,
-  harnessConfigs: ReadonlyMap<string, HarnessConfig>,
-): Map<string, SubagentProfile> {
-  if (harnessConfigs.size === 0) return profiles;
-  const merged = new Map<string, SubagentProfile>();
-  for (const [name, profile] of profiles) {
-    merged.set(name, computeReconciledPiProfile(profile, harnessConfigs).profile);
-  }
-  for (const [harness, harnessConfig] of harnessConfigs) {
-    for (const role of defaultRoleNames()) {
-      const key = `${harness}-${role}`;
-      if (merged.has(key)) continue;
-      const synthesized = synthesizePiRoleProfile(role, harness, harnessConfig);
-      if (synthesized) merged.set(key, synthesized);
-    }
-  }
-  return merged;
-}
-
 export interface ResolveExternalProfileOptions {
   /** All legitimate selector names: EXTERNAL_HARNESSES plus registered pi-* harnesses. */
   configuredHarnessNames?: ReadonlySet<string>;
-  /** Registered pi-* harness configs, used for canonical synthesis and model/thinking reconciliation. */
-  harnessConfigs?: ReadonlyMap<string, HarnessConfig>;
   /** Harnesses disabled in settings; selecting one fails without fallback. */
   disabledHarnesses?: ReadonlySet<string>;
 }
 
 const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
   configuredHarnessNames: new Set(EXTERNAL_HARNESSES),
-  harnessConfigs: NO_HARNESS_CONFIGS,
   disabledHarnesses: NO_PI_HARNESSES,
 };
 
@@ -516,7 +237,6 @@ export function resolveExternalProfile(
   options: ResolveExternalProfileOptions = {},
 ): SubagentProfile {
   const configuredHarnessNames = options.configuredHarnessNames ?? DEFAULT_RESOLVE_OPTIONS.configuredHarnessNames;
-  const harnessConfigs = options.harnessConfigs ?? DEFAULT_RESOLVE_OPTIONS.harnessConfigs;
   const role = selection.role?.trim();
   const harness = selection.harness?.trim();
   const subagentType = selection.subagentType?.trim();
@@ -532,7 +252,7 @@ export function resolveExternalProfile(
       throw new ExpectedFlowError("selection_invalid", unknownExternalProfileMessage(subagentType, profiles.keys()));
     }
     if (profile.configurationError) throw new ExpectedFlowError("selection_invalid", profile.configurationError);
-    return reconcilePiProfileWithHarness(profile, harnessConfigs);
+    return profile;
   }
 
   if (!role) {
@@ -548,20 +268,10 @@ export function resolveExternalProfile(
     throw new ExpectedFlowError("selection_invalid", disabledHarnessMessage(selectedHarness, !harness));
   }
 
-  const legacy = profiles.get(`${selectedHarness}-${role}`);
-  const exact = profiles.get(bindingKey(selectedHarness, role)) ?? (legacy?.configVersion === 5 ? undefined : legacy);
-  if (exact) {
-    if (exact.configurationError) throw new ExpectedFlowError("selection_invalid", exact.configurationError);
-    if (selectorHarness(exact) !== selectedHarness || externalProfileRole(exact) !== role) throw new ExpectedFlowError("selection_invalid", `Override "${exact.name}" does not match selected harness "${selectedHarness}".`);
-    return reconcilePiProfileWithHarness(exact, harnessConfigs);
-  }
-
-  if (!EXTERNAL_HARNESSES.includes(selectedHarness as ExternalHarness)) {
-    const harnessConfig = harnessConfigs.get(selectedHarness);
-    if (harnessConfig) {
-      const synthesized = synthesizePiRoleProfile(role, selectedHarness, harnessConfig);
-      if (synthesized) return synthesized;
-    }
+  const binding = profiles.get(bindingKey(selectedHarness, role));
+  if (binding) {
+    if (binding.configurationError) throw new ExpectedFlowError("selection_invalid", binding.configurationError);
+    return binding;
   }
 
   const availability = externalRoleAvailability(profiles);
@@ -571,8 +281,7 @@ export function resolveExternalProfile(
       `Role "${role}" is unavailable for harness "${selectedHarness}". Supported harnesses for this role: ${supported.join(", ")}. Choose one of those harnesses or add profile "${selectedHarness}-${role}".`,
     );
   }
-  const knownRoles = new Set([...availability.keys(), ...(EXTERNAL_HARNESSES.includes(selectedHarness as ExternalHarness) ? [] : defaultRoleNames())]);
   throw new ExpectedFlowError("selection_invalid",
-    `Unknown external role "${role}". Available roles: ${[...knownRoles].join(", ") || "none"}. Nonstandard profile names must be selected with legacy subagent_type.`,
+    `Unknown external role "${role}". Available roles: ${[...availability.keys()].join(", ") || "none"}. Nonstandard profile names must be selected with legacy subagent_type.`,
   );
 }

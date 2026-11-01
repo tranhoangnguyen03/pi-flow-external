@@ -50,7 +50,7 @@ describe("pi-subagent agent contract", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("registers the external_delegate tool contract without an Agent alias", async () => {
+  it("registers and validates the external_delegate tool contract without an Agent alias", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "external_delegate");
@@ -77,13 +77,7 @@ describe("pi-subagent agent contract", () => {
     );
     expect(session.getAllTools().find((candidate) => candidate.name === "external_runs")).toBeDefined();
 
-    disposeSession(session);
-  });
-
-  it("requires description and prompt while exposing role-first and legacy selectors", async () => {
-    const { session } = await createSession();
-
-    const tool = session.getAllTools().find((candidate) => candidate.name === "external_delegate");
+    // Validate required fields against the same registered tool; no second Pi session.
     const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown>; anyOf?: unknown[] } | undefined;
     expect(schema?.required).toContain("description");
     expect(schema?.required).toContain("prompt");
@@ -409,12 +403,9 @@ setInterval(() => {}, 1000);
   });
 
   it("preserves explicit background cancellation reasons in outcomes and durable evidence", async () => {
-    const subagentsDir = join(agentDir, "pi-flow-external", "overrides");
     const binDir = join(tempDir, "bin-cancel-reason");
     const startedPath = join(tempDir, "cancel-reason-started");
-    mkdirSync(subagentsDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "codex-worker.md"), "---\ndescription: Cancel worker.\nbackend: codex\n---\n");
     const fakeCodex = join(binDir, "codex");
     writeFileSync(fakeCodex, `#!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
@@ -424,7 +415,7 @@ setInterval(() => {}, 1000);
     chmodSync(fakeCodex, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
-    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 5_000 });
+    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 2_000 });
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
     context.sessionManager.getBranch = () => [];
     const agent = session.getToolDefinition("external_delegate") as any;
