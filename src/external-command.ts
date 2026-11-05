@@ -1161,13 +1161,13 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
         const matches = names.filter((name) => name.startsWith(nameArg[3]!));
         return matches.length ? matches.map(name => ({ value: `config ${nameArg[1]} ${nameArg[2]} ${name}`, label: name })) : null;
       }
-      if (!normalized) return FEATURED_COMMANDS.map(value => COMMANDS.find(command => command.value === value)!);
+      if (!normalized) return FEATURED_COMMANDS.map(value => ({ ...COMMANDS.find(command => command.value === value)!, label: value }));
       if (normalized.startsWith("config ") && !/^config (harness|role) /.test(normalized)) {
         const matches = CONFIG_GROUPS.filter(command => command.value.startsWith(normalized));
-        return matches.length ? [...matches] : null;
+        return matches.length ? matches.map(command => ({ ...command, label: command.value })) : null;
       }
       const matches = COMMANDS.filter(command => command.value.startsWith(normalized));
-      return matches.length ? matches.map(command => ({ ...command })) : null;
+      return matches.length ? matches.map(command => ({ ...command, label: command.value })) : null;
     },
     handler: async function handleExternal(args, ctx) {
       const action = args.trim().toLowerCase();
