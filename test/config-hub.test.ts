@@ -88,12 +88,13 @@ it('opens a modal-first control center and selects the session mode without touc
 });
 
 it('opens Runs, Workflows and Help from the same control center without running diagnostics',async()=>{
-  const {dir}=fixture();const h=harness(dir,['Runs…','Summary','Back','Workflows…','Back','Help…','Complete command reference','Back','Close']);
+  const {dir}=fixture();const h=harness(dir,['Runs…','Browse runs…','Summary','Back','Workflows…','Back','Help…','Complete command reference','Back','Close']);
   await openConfigHub({exec:h.exec} as never,h.ctx as never,h.options);
   expect(h.screens[0]?.options).toContain('Runs…');
   expect(h.screens[0]?.options).toContain('Workflows…');
   expect(h.screens[0]?.options).toContain('Help…');
   expect(h.screens.some(v=>v.title.startsWith('External › Workflows\n\nNo saved workflows'))).toBe(true);
+  expect(h.options.runCommand).toHaveBeenCalledWith('runs',expect.anything());
   expect(h.options.runCommand).toHaveBeenCalledWith('runs summary',expect.anything());
   expect(h.options.runCommand).toHaveBeenCalledWith('help',expect.anything());
   expect(h.options.runCommand).not.toHaveBeenCalledWith('doctor',expect.anything());
