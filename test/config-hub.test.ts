@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -7,7 +7,8 @@ import { openConfigHub } from '../src/config-hub.ts';
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
 function fixture(record: unknown = {version:5}) {
- const dir = mkdtempSync(join(tmpdir(),'config-hub-')); roots.push(dir); mkdirSync(join(dir,'pi-flow-external'));
+ // macOS may alias /var/folders to /private/var/folders. Registry paths use realpathSync.
+ const dir = realpathSync(mkdtempSync(join(tmpdir(),'config-hub-'))); roots.push(dir); mkdirSync(join(dir,'pi-flow-external'));
  const path=join(dir,'pi-flow-external/settings.json'); writeFileSync(path,JSON.stringify(record));
  return {dir,path};
 }
@@ -80,6 +81,9 @@ it('opens a modal-first control center and selects the session mode without touc
   });
   expect(mode).toBe('frontline-worker');
   expect(h.screens[0]?.options).toContain('Mode · Normal');
+  const modeScreen=h.screens.find(s=>s.title==='External › Session mode');
+  expect(modeScreen?.options).toContain('Normal · Current');
+  expect(modeScreen?.options).toContain('Frontline Worker');
   expect(h.screens.some(s=>s.title==='External › Configuration'&&s.options.includes('Agents…'))).toBe(true);
   expect(h.screens.some(s=>s.title==='External › Global')).toBe(true);
   expect(readFileSync(path,'utf8')).toBe(before);
@@ -143,4 +147,16 @@ it('runs Doctor only on an explicit Help selection',async()=>{
   const chosen=harness(dir,['Help…','Diagnostics…','Back','Close']);
   await openConfigHub({exec:chosen.exec} as never,chosen.ctx as never,chosen.options);
   expect(chosen.options.runCommand).toHaveBeenCalledWith('doctor',expect.anything());
+});
+
+it('shows the active mode by its display name and marks it current in the picker',async()=>{
+  const {dir}=fixture();const h=harness(dir,['Mode · Frontline Worker','Back','Close']);
+  const setMode=vi.fn();
+  await openConfigHub({exec:h.exec} as never,h.ctx as never,{
+    ...h.options,getMode:()=> 'frontline-worker' as const,setMode,
+  });
+  expect(h.screens[0]?.title).toContain('Mode: Frontline Worker');
+  expect(h.screens[0]?.options).toContain('Mode · Frontline Worker');
+  expect(h.screens.find(s=>s.title==='External › Session mode')?.options).toContain('Frontline Worker · Current');
+  expect(setMode).not.toHaveBeenCalled();
 });

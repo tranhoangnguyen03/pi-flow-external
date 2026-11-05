@@ -18,7 +18,7 @@ import type { ExternalSettings } from './settings.ts';
 import type { BindingField, HarnessField } from './config-lifecycle.ts';
 import { cliModelChoices } from './config-models.ts';
 import { withConfigModal } from './config-modal.ts';
-import type { ExternalMode } from './external-mode.ts';
+import { externalModeLabel, type ExternalMode } from './external-mode.ts';
 import { listSavedWorkflows } from './workflow/registry.ts';
 
 export type ConfigHubOptions = {
@@ -270,7 +270,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
     const defaultMenu=async()=>{
       while(true){const names=registeredHarnesses(settings());const labels=names.map(n=>`${agentLabel(n)}${n===settings().defaultHarness?' · Current global default':''}${harnessDisabled(settings(),n)?' · Off':''}${n==='agy'?' · Requires full access':''}`);const chosen=await select(`Choose the global default agent\nCurrent: ${agentLabel(settings().defaultHarness)}${effectiveDefault().source==='project'?`\nThis project uses ${agentLabel(effectiveDefault().harness)}; changing the global default will not change it.`:''}`,labels);if(!chosen)return;const name=names[labels.indexOf(chosen)]!;
         if(harnessDisabled(settings(),name)){const action=await select('This agent is off',['Turn it on first']);if(action)await attempt(async()=>{setHarnessEnabled(dir,name,true);saved();});continue;}
-        await attempt(async()=>{if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change access under Advanced. No default was changed.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project still uses ${agentLabel(current.harness)} from ${current.projectPath}. Project files were not changed.`);else saved();});return;
+        await attempt(async()=>{if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change Default access under Configuration › Global. No default was changed.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project still uses ${agentLabel(current.harness)} from ${current.projectPath}. Project files were not changed.`);else saved();});return;
       }
     };
     const agentAdvanced=async(name:string)=>{
@@ -291,7 +291,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         await attempt(async()=>{
           if(choice.startsWith('Model ·'))await changeField(name,'model');
           else if(choice.startsWith('Reasoning ·'))await changeField(name,'effort');
-          else if(choice==='Make default'){if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change access under Advanced. No default was changed.');return;}if(off){await show('Agent is off','Turn it on first, then select Make default.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project uses ${agentLabel(current.harness)} from ${current.projectPath}.`);else saved();}
+          else if(choice==='Make default'){if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change Default access under Configuration › Global. No default was changed.');return;}if(off){await show('Agent is off','Turn it on first, then select Make default.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project uses ${agentLabel(current.harness)} from ${current.projectPath}.`);else saved();}
           else if(choice==='Role customizations…')await agentRoles(name);
           else if(choice.startsWith('Check '))await checkSetup(name);
           else if(choice.startsWith('Send a test')){if(!options.testHarness){await show('Test unavailable','No model test handler is available in this session.');return;}const result=await busy('Testing · Esc cancels',signal=>options.testHarness!(ctx,name,signal));await show('Test message result',result.ok?`Passed${result.detail?': '+result.detail:''}`:result.error);}
@@ -428,12 +428,15 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
     while(true){
       const selectedMode=options.getMode?.(ctx)??'normal';
       const def=effectiveDefault();
-      const modeChoice=`Mode · ${selectedMode==='frontline-worker'?'Frontline Worker':selectedMode==='orchestrator'?'Orchestrator':'Normal'}`;
-      const choice=await ctx.ui.select(`External\nDefault: ${agentLabel(def.harness)} · Mode: ${selectedMode}`,[...(options.setMode?[modeChoice]:[]),'Configuration…','Runs…','Workflows…','Help…','Close']);
+      const modeChoice=`Mode · ${externalModeLabel(selectedMode)}`;
+      const choice=await ctx.ui.select(`External\nDefault: ${agentLabel(def.harness)} · Mode: ${externalModeLabel(selectedMode)}`,[...(options.setMode?[modeChoice]:[]),'Configuration…','Runs…','Workflows…','Help…','Close']);
       if(!choice||choice==='Close')return;
       if(choice===modeChoice&&options.setMode){
-        const value=await ctx.ui.select('External › Session mode',['Normal','Orchestrator','Frontline Worker','Back']);
-        if(value&&value!=='Back')options.setMode(ctx,value==='Orchestrator'?'orchestrator':value==='Frontline Worker'?'frontline-worker':'normal');
+        const modes:ExternalMode[]=['normal','orchestrator','frontline-worker'];
+        const choices=modes.map(mode=>`${externalModeLabel(mode)}${mode===selectedMode?' · Current':''}`);
+        const value=await ctx.ui.select('External › Session mode',[...choices,'Back']);
+        const mode=modes[choices.indexOf(value??'')];
+        if(mode&&mode!==selectedMode)options.setMode(ctx,mode);
       }else if(choice==='Configuration…')await configMenu();
       else if(choice==='Runs…')await runsMenu();
       else if(choice==='Workflows…')await workflowsMenu();
