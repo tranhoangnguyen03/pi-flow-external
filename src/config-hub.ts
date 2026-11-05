@@ -18,12 +18,16 @@ import type { ExternalSettings } from './settings.ts';
 import type { BindingField, HarnessField } from './config-lifecycle.ts';
 import { cliModelChoices } from './config-models.ts';
 import { withConfigModal } from './config-modal.ts';
+import { externalModeLabel, type ExternalMode } from './external-mode.ts';
 
 export type ConfigHubOptions = {
   agentDir?: string;
   getThinkingLevel?: () => string | undefined;
   testHarness?: (ctx:ExtensionCommandContext,name:string,signal?:AbortSignal)=>Promise<{ok:true;detail?:string}|{ok:false;error:string}>;
   runCommand: (args:string,ctx:ExtensionCommandContext)=>Promise<void>;
+  initialPage?: 'root' | 'config';
+  getMode?: (ctx:ExtensionCommandContext)=>ExternalMode;
+  setMode?: (ctx:ExtensionCommandContext,mode:ExternalMode)=>void;
 };
 export function agentLabel(name:string):string {return BACKEND_LABELS[name]??`Pi · ${name.replace(/^pi-/,'')}`;}
 function valueLabel(value:string|undefined,agent:string,session?:string):string {
@@ -265,7 +269,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
     const defaultMenu=async()=>{
       while(true){const names=registeredHarnesses(settings());const labels=names.map(n=>`${agentLabel(n)}${n===settings().defaultHarness?' · Current global default':''}${harnessDisabled(settings(),n)?' · Off':''}${n==='agy'?' · Requires full access':''}`);const chosen=await select(`Choose the global default agent\nCurrent: ${agentLabel(settings().defaultHarness)}${effectiveDefault().source==='project'?`\nThis project uses ${agentLabel(effectiveDefault().harness)}; changing the global default will not change it.`:''}`,labels);if(!chosen)return;const name=names[labels.indexOf(chosen)]!;
         if(harnessDisabled(settings(),name)){const action=await select('This agent is off',['Turn it on first']);if(action)await attempt(async()=>{setHarnessEnabled(dir,name,true);saved();});continue;}
-        await attempt(async()=>{if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change access under Advanced. No default was changed.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project still uses ${agentLabel(current.harness)} from ${current.projectPath}. Project files were not changed.`);else saved();});return;
+        await attempt(async()=>{if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change Default access under Configuration › Global. No default was changed.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project still uses ${agentLabel(current.harness)} from ${current.projectPath}. Project files were not changed.`);else saved();});return;
       }
     };
     const agentAdvanced=async(name:string)=>{
@@ -286,7 +290,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         await attempt(async()=>{
           if(choice.startsWith('Model ·'))await changeField(name,'model');
           else if(choice.startsWith('Reasoning ·'))await changeField(name,'effort');
-          else if(choice==='Make default'){if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change access under Advanced. No default was changed.');return;}if(off){await show('Agent is off','Turn it on first, then select Make default.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project uses ${agentLabel(current.harness)} from ${current.projectPath}.`);else saved();}
+          else if(choice==='Make default'){if(name==='agy'&&settings().defaultPermission!=='danger'){await show('Antigravity requires full access','Choose another agent or change Default access under Configuration › Global. No default was changed.');return;}if(off){await show('Agent is off','Turn it on first, then select Make default.');return;}setDefaultHarness(dir,name);const current=effectiveDefault();if(current.source==='project')await show('Global default saved',`This project uses ${agentLabel(current.harness)} from ${current.projectPath}.`);else saved();}
           else if(choice==='Role customizations…')await agentRoles(name);
           else if(choice.startsWith('Check '))await checkSetup(name);
           else if(choice.startsWith('Send a test')){if(!options.testHarness){await show('Test unavailable','No model test handler is available in this session.');return;}const result=await busy('Testing · Esc cancels',signal=>options.testHarness!(ctx,name,signal));await show('Test message result',result.ok?`Passed${result.detail?': '+result.detail:''}`:result.error);}
@@ -328,7 +332,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
     };
     const advanced=async()=>{
       const fields:[keyof ExternalSettings,string][]=[['defaultPermission','Default access'],['defaultMaxBudgetUsd','Default spending cap (USD)'],['maxConcurrentSubagents','Concurrent runs'],['subagentTimeoutMs','Run timeout (milliseconds; 0 disables)'],['maxRunRecords','Retained completed runs (0 keeps all)']];
-      while(true){const choice=await select('External › Advanced',['Global default…',...fields.map(([key,label])=>`${label} · ${key==='defaultPermission'?({readonly:'Read-only',edit:'Can edit files',danger:'Full access'}[settings().defaultPermission]):settings()[key]??'No cap'}`),'Configuration details','Edit settings file…','Diagnostics (checks installation/sign-in)…','Legacy selectors…']);if(!choice)return;
+      while(true){const choice=await select('External › Global',['Global default…',...fields.map(([key,label])=>`${label} · ${key==='defaultPermission'?({readonly:'Read-only',edit:'Can edit files',danger:'Full access'}[settings().defaultPermission]):settings()[key]??'No cap'}`),'Configuration details','Edit settings file…','Diagnostics (checks installation/sign-in)…','Legacy selectors…']);if(!choice)return;
         await attempt(async()=>{
           const field=fields.find(([,label])=>choice.startsWith(label+' ·'));if(field){await globalField(...field);return;}
           if(choice==='Global default…')await defaultMenu();
@@ -337,27 +341,60 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         });
       }
     };
-    while(true){
-      const loaded=loadExternalSettings(dir);const catalog=snapshot();
-      if(loaded.blocked||loaded.settings.version!==5||catalog.blocked){
-        const convertible=planV5Upgrade(dir).status==='ready';
-        const choice=await ctx.ui.select('External › Settings need attention',[...(convertible?['Preview format update…']:[]),'Edit settings file…','Show problem and file location','Close']);if(!choice||choice==='Close')return;
-        if(choice==='Show problem and file location'){await show('Settings problem',`${loaded.path}\n${[...loaded.diagnostics,...catalog.diagnostics].join('\n')}\nDelegation is paused. No fallback settings are used here. Future-format files need a compatible extension version; they are never downgraded here.`);continue;}
-        await attempt(async()=>{await command(choice==='Edit settings file…'?'config edit':'config convert');});continue;
+    const agentsMenu=async()=>{
+      while(true){
+        const s=settings();const def=effectiveDefault();const names=registeredHarnesses(s);
+        const rows=names.map(n=>`${agentLabel(n)}${n===def.harness?' · Default':''}${harnessDisabled(s,n)?' · Off':''} · ${inherited(n,'model')}${s.harnessSettings?.[n]?.thinking?` · ${inherited(n,'effort')}`:''}`);
+        const defaultProblem=!names.includes(def.harness)||harnessDisabled(s,def.harness)||(def.harness==='agy'&&s.defaultPermission!=='danger');
+        const choice=await select(`External › Configuration › Agents\nDefault: ${agentLabel(def.harness)}${def.source==='project'?' (this project)':''}${defaultProblem?' · Needs attention':''}`,[...rows,...(defaultProblem?['Fix default agent…']:[]),'Add a Pi agent…']);
+        if(!choice)return;
+        await attempt(async()=>{
+          const index=rows.indexOf(choice);
+          if(index>=0)await agentMenu(names[index]!);
+          else if(choice==='Fix default agent…')await defaultMenu();
+          else if(choice==='Add a Pi agent…')await createPiFlow();
+        });
       }
-      const s=loaded.settings;const def=effectiveDefault();const names=registeredHarnesses(s);
-      const rows=names.map(n=>`${agentLabel(n)}${n===def.harness?' · Default':''}${harnessDisabled(s,n)?' · Off':''} · ${inherited(n,'model')}${s.harnessSettings?.[n]?.thinking?` · ${inherited(n,'effort')}`:''}`);
-      const defaultProblem=!names.includes(def.harness)||harnessDisabled(s,def.harness)||(def.harness==='agy'&&s.defaultPermission!=='danger');
-      const title=`External agents\nDefault: ${agentLabel(def.harness)}${def.source==='project'?' (this project)':''}${defaultProblem?' · Needs attention':''}\nSelect an agent to change its settings. / searches the list.`;
-      const choice=await ctx.ui.select(title,[...rows,...(defaultProblem?['Fix default agent…']:[]),'Add a Pi agent…','Roles…','Recent runs…','Advanced…','Close']);if(!choice||choice==='Close')return;
-      await attempt(async()=>{
-        const index=rows.indexOf(choice);if(index>=0)await agentMenu(names[index]!);
-        else if(choice==='Fix default agent…')await defaultMenu();
-        else if(choice==='Add a Pi agent…')await createPiFlow();
+    };
+    const configMenu=async()=>{
+      while(true){
+        const loaded=loadExternalSettings(dir);const catalog=snapshot();
+        if(loaded.blocked||loaded.settings.version!==5||catalog.blocked){
+          const convertible=planV5Upgrade(dir).status==='ready';
+          const choice=await ctx.ui.select('External › Configuration › Settings need attention',[...(convertible?['Preview format update…']:[]),'Edit settings file…','Show problem and file location','Back']);
+          if(!choice||choice==='Back')return;
+          if(choice==='Show problem and file location'){
+            await show('Settings problem',`${loaded.path}\n${[...loaded.diagnostics,...catalog.diagnostics].join('\n')}\nDelegation is paused. No fallback settings are used here. Future-format files need a compatible extension version; they are never downgraded here.`);
+            continue;
+          }
+          await attempt(async()=>{await command(choice==='Edit settings file…'?'config edit':'config convert');});
+          continue;
+        }
+        const choice=await select('External › Configuration',['Global…','Agents…','Roles…']);
+        if(!choice)return;
+        if(choice==='Global…')await advanced();
+        else if(choice==='Agents…')await agentsMenu();
         else if(choice==='Roles…')await rolesMenu();
-        else if(choice==='Recent runs…')await command('runs');
-        else await advanced();
-      });
+      }
+    };
+    if(options.initialPage==='config'){
+      await configMenu();
+      return;
+    }
+    while(true){
+      const selectedMode=options.getMode?.(ctx)??'normal';
+      const def=effectiveDefault();
+      const modeChoice=`Mode · ${externalModeLabel(selectedMode)}`;
+      const choice=await ctx.ui.select(`External\nDefault: ${agentLabel(def.harness)} · Mode: ${externalModeLabel(selectedMode)}`,[...(options.setMode?[modeChoice]:[]),'Configuration…','Recent runs…','Close']);
+      if(!choice||choice==='Close')return;
+      if(choice===modeChoice&&options.setMode){
+        const modes:ExternalMode[]=['normal','orchestrator','frontline-worker'];
+        const choices=modes.map(mode=>`${externalModeLabel(mode)}${mode===selectedMode?' · Current':''}`);
+        const value=await ctx.ui.select('External › Session mode',[...choices,'Back']);
+        const mode=modes[choices.indexOf(value??'')];
+        if(mode&&mode!==selectedMode)options.setMode(ctx,mode);
+      }else if(choice==='Configuration…')await configMenu();
+      else if(choice==='Recent runs…')await command('runs');
     }
   });
 }

@@ -59,7 +59,7 @@ Check installed CLIs, authentication, and harness availability:
 
 ### 2. Configure defaults (optional)
 
-Run `/external` to open the interactive settings window. You can set your default harness, choose default models or reasoning levels, and manage roles.
+Run `/external` for the control center: select the session mode, inspect runs, or open **Configuration → Global / Agents / Roles**. `/external config` opens Configuration directly. All existing detailed commands remain callable for scripts and headless use.
 
 ### 3. Choose a work mode (optional)
 
@@ -205,10 +205,12 @@ return { arch, coverage };
 
 ## Configuration &amp; Commands
 
-- `/external` and `/external config`: Interactive settings window (TUI &amp; RPC) to set defaults, manage models, and edit roles.
+- `/external`: Interactive control center (TUI &amp; RPC); `/external config` opens its Global / Agents / Roles navigator directly.
 - `/external mode`: Cycle this session through Normal, Orchestrator, and Frontline Worker.
 - `/external doctor`: Validates catalog and checks CLI / provider authentication.
 - `/external runs`: Interactive viewer for active and completed runs, outputs, and diagnostics.
+
+**Default suggestions** focus on `/external mode`, `/external runs`, `/external config`, and `/external workflows`. Detailed commands remain available by typing a prefix (`/external config harness ...`), and full command syntax remains executable.
 
 **Common CLI commands:**
 
