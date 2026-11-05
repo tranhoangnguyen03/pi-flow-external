@@ -17,9 +17,13 @@ External
     Agents…             → Select harness → Model, reasoning, role customizations,
                            enablement, readiness, advanced settings
     Roles…              → Shared definitions, per-agent overrides, restore / delete
-  Recent runs…          → Existing run browser
+  Runs…                 → Browse/inspect runs; summary; confirmed receipt pruning
+  Workflows…            → Browse saved workflows and their source paths (read-only)
+  Help…                 → Quick guidance, full command reference, optional diagnostics
   Close
 ```
+
+Runs reuses the existing inspection and cancellation navigator. Its Maintenance page requires confirmation before pruning completed receipts. Workflows lists validated global and trusted-project scripts without executing them. Help displays short guidance and opens Doctor only when selected.
 
 The Mode selector changes the same session entry as `/external mode`; it does not alter global defaults. Configuration values still follow existing inheritance and edit permissions. A broken configuration enters its existing repair screen while the control center remains accessible.
 

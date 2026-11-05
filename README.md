@@ -59,7 +59,7 @@ Check installed CLIs, authentication, and harness availability:
 
 ### 2. Configure defaults (optional)
 
-Run `/external` for the control center: select the session mode, inspect runs, or open **Configuration → Global / Agents / Roles**. `/external config` opens Configuration directly. All existing detailed commands remain callable for scripts and headless use.
+Run `/external` for the control center: select the session mode, browse Runs and Workflows, get Help, or open **Configuration → Global / Agents / Roles**. `/external config` opens Configuration directly. All existing detailed commands remain callable for scripts and headless use.
 
 ### 3. Choose a work mode (optional)
 
@@ -205,7 +205,7 @@ return { arch, coverage };
 
 ## Configuration &amp; Commands
 
-- `/external`: Interactive control center (TUI &amp; RPC); `/external config` opens its Global / Agents / Roles navigator directly.
+- `/external`: Interactive control center for Modes, Runs, Workflows, Help and Configuration (TUI &amp; RPC); `/external config` opens Global / Agents / Roles directly.
 - `/external mode`: Cycle this session through Normal, Orchestrator, and Frontline Worker.
 - `/external doctor`: Validates catalog and checks CLI / provider authentication.
 - `/external runs`: Interactive viewer for active and completed runs, outputs, and diagnostics.
