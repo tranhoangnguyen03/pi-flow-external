@@ -19,6 +19,7 @@ import type { BindingField, HarnessField } from './config-lifecycle.ts';
 import { cliModelChoices } from './config-models.ts';
 import { withConfigModal } from './config-modal.ts';
 import { externalModeLabel, type ExternalMode } from './external-mode.ts';
+import { listSavedWorkflows } from './workflow/registry.ts';
 
 export type ConfigHubOptions = {
   agentDir?: string;
@@ -377,6 +378,49 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         else if(choice==='Roles…')await rolesMenu();
       }
     };
+    const runsMenu=async()=>{
+      while(true){
+        const choice=await ctx.ui.select('External › Runs',['Browse runs…','Summary','Maintenance…','Back']);
+        if(!choice||choice==='Back')return;
+        if(choice==='Browse runs…')await command('runs');
+        else if(choice==='Summary')await command('runs summary');
+        else {
+          const action=await ctx.ui.select('External › Runs › Maintenance',['Prune completed receipts…','Back']);
+          if(action!=='Prune completed receipts…')continue;
+          if(await ctx.ui.confirm('Prune completed receipts?','Prunes only eligible completed receipts beyond the configured retention limit. Active, interrupted, incomplete, and damaged evidence is kept. Pruning cannot be undone.')){
+            await command('runs --prune');
+          }
+        }
+      }
+    };
+    const workflowsMenu=async()=>{
+      // Keep the same trusted-project filtering as /external workflows.
+      const trusted=(()=>{try{return ctx.isProjectTrusted();}catch{return false;}})();
+      const items=listSavedWorkflows({agentDir:dir,cwd:ctx.cwd,projectTrusted:trusted});
+      if(!items.length){
+        await show('External › Workflows','No saved workflows. Add a valid .js workflow under the global workflows directory or, in a trusted project, under .pi/workflows. This browser never runs scripts.');
+        return;
+      }
+      const rows=items.map(item=>`${item.name} · ${item.scope} · ${item.description.slice(0,90)}`);
+      while(true){
+        const choice=await ctx.ui.select('External › Workflows',[...rows,'Back']);
+        if(!choice||choice==='Back')return;
+        const item=items[rows.indexOf(choice)];
+        if(!item)continue;
+        await show(`External › Workflows › ${item.name}`,`Description: ${item.description}\nScope: ${item.scope}\nSource: ${item.path}\n\nView or edit this source file to change the workflow. Opening this page never executes it.`);
+      }
+    };
+    const helpMenu=async()=>{
+      while(true){
+        const choice=await ctx.ui.select('External › Help',['Getting started','Session modes','Delegation and workflows','Complete command reference','Diagnostics…','Back']);
+        if(!choice||choice==='Back')return;
+        if(choice==='Getting started')await show('Getting started','Ask Pi to delegate work in normal chat. Use /external mode to cycle behavior, or choose a mode in this modal. Browse Runs for results; Configuration controls harnesses and roles.');
+        else if(choice==='Session modes')await show('Session modes','Normal adds no Flow system prompt. Orchestrator favors useful delegation. Frontline Worker favors hands-on execution. Each is a preference, not an access control. /external mode cycles the three states.');
+        else if(choice==='Delegation and workflows')await show('Delegation help','The agent uses external_delegate for bounded assignments and external_workflow for coordinated jobs. The installed pi-flow-orchestration skill contains on-demand examples. The external_help tool provides exact contracts and capabilities.');
+        else if(choice==='Complete command reference')await command('help');
+        else if(choice==='Diagnostics…')await command('doctor');
+      }
+    };
     if(options.initialPage==='config'){
       await configMenu();
       return;
@@ -385,7 +429,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
       const selectedMode=options.getMode?.(ctx)??'normal';
       const def=effectiveDefault();
       const modeChoice=`Mode · ${externalModeLabel(selectedMode)}`;
-      const choice=await ctx.ui.select(`External\nDefault: ${agentLabel(def.harness)} · Mode: ${externalModeLabel(selectedMode)}`,[...(options.setMode?[modeChoice]:[]),'Configuration…','Recent runs…','Close']);
+      const choice=await ctx.ui.select(`External\nDefault: ${agentLabel(def.harness)} · Mode: ${externalModeLabel(selectedMode)}`,[...(options.setMode?[modeChoice]:[]),'Configuration…','Runs…','Workflows…','Help…','Close']);
       if(!choice||choice==='Close')return;
       if(choice===modeChoice&&options.setMode){
         const modes:ExternalMode[]=['normal','orchestrator','frontline-worker'];
@@ -394,7 +438,9 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         const mode=modes[choices.indexOf(value??'')];
         if(mode&&mode!==selectedMode)options.setMode(ctx,mode);
       }else if(choice==='Configuration…')await configMenu();
-      else if(choice==='Recent runs…')await command('runs');
+      else if(choice==='Runs…')await runsMenu();
+      else if(choice==='Workflows…')await workflowsMenu();
+      else if(choice==='Help…')await helpMenu();
     }
   });
 }
