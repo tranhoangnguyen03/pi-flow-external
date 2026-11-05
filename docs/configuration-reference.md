@@ -4,28 +4,28 @@ This guide covers advanced configuration, the interactive settings window, JSON 
 
 ---
 
-## Interactive Settings Window (`/external`)
+## Control center and Configuration (`/external`)
 
-Running `/external` or `/external config` in terminal (TUI) or RPC mode opens the guided settings modal.
-
-### Menu Navigation
+`/external` opens the control center in TUI/RPC. `/external config` goes directly to the Configuration navigator. Neither opens a provider or makes a paid request.
 
 ```text
-External agents
-Default: <agent>
-  <agent> · Default · <model>      → Model · Reasoning · Make default · Role customizations…
-                                     Check installation and sign-in… (CLI) | Check model and credentials… (Pi)
-                                     Send a test message… (may incur cost) (Pi only) · Turn on | Turn off · Advanced…
-  Add a Pi agent…                  → provider → model → name → Review new agent → Create agent
-  Roles…                           → <role> → Edit shared instructions… · Customize for an agent… ·
-                                     Turn off everywhere · Details · Restore original instructions… | Remove role…
-                                     Create a role…
-  Recent runs…                     → the same navigator as /external runs
-  Advanced…                        → Global default… · Default access · Default spending cap (USD) · Concurrent runs ·
-                                     Run timeout · Retained completed runs · Configuration details · Edit settings file… ·
-                                     Diagnostics (checks installation/sign-in)… · Legacy selectors…
+External
+  Mode…                 → Normal / Orchestrator / Frontline Worker
+  Configuration…        → Global / Agents / Roles
+    Global…             → Default harness, access, budgets, concurrency, timeouts,
+                           retention, diagnostics, settings file
+    Agents…             → Select harness → Model, reasoning, role customizations,
+                           enablement, readiness, advanced settings
+    Roles…              → Shared definitions, per-agent overrides, restore / delete
+  Recent runs…          → Existing run browser
   Close
 ```
+
+The Mode selector changes the same session entry as `/external mode`; it does not alter global defaults. Configuration values still follow existing inheritance and edit permissions. A broken configuration enters its existing repair screen while the control center remains accessible.
+
+### Command discovery
+
+The empty `/external ` argument menu suggests only `mode`, `runs`, `config`, and `workflows`. Typing a prefix finds detailed commands such as `doctor` or `config harness inspect`. `config ` folds suggestions into harness, role, text, edit, and conversion groups. No command is removed; detailed routes still work in headless mode.
 
 ### UI Navigation Shortcuts
 - **Terminal (TUI):** ↑/↓ to navigate, `Enter` to select, `/` to filter list rows, `Esc` to clear filter, go back, or close. `PgUp`/`PgDn` scroll text previews. In the instructions editor, `Shift+Enter` adds a newline; `Ctrl+G` opens `$VISUAL` or `$EDITOR`.

@@ -2,6 +2,16 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.2.0-external.0] - 2026-11-05
+
+### Changed
+- Bare `/external` now opens a lightweight control center with a direct three-mode selector and Configuration → Global / Agents / Roles. `/external config` opens the new configuration navigator.
+- Default command suggestions show four feature-level entries instead of every advanced action. Namespaces reveal deeper commands progressively; exact existing commands and headless behavior remain available.
+- Keep the existing agent/role editor, validation, confirmation and permission behavior. The modal does not add configuration storage or initiate diagnostics by opening.
+
+### Verification
+- Add focused command-completion and TUI/RPC navigation tests. Live terminal interaction still needs an explicit smoke check.
+
 ## [6.1.0-external.0] - 2026-11-01
 
 ### Added

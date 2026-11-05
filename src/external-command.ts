@@ -1,5 +1,6 @@
 import { openConfigHub } from './config-hub.ts';
 import { EXTERNAL_MODE_ENTRY, externalModeLabel, getExternalMode, nextExternalMode, updateExternalModeStatus } from './external-mode.ts';
+import type { ExternalMode } from './external-mode.ts';
 import { planV5Upgrade, applyV5Upgrade } from './config-v5-upgrade.ts';
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
@@ -90,6 +91,16 @@ const COMMANDS = [
   { value: "runs summary", description: "Summarize durable receipts" },
   { value: "runs --prune", description: "Prune eligible completed receipts" },
   { value: "help", description: "Show this reference" },
+] as const;
+
+// Feature-first discovery: exact and deep commands remain callable and searchable.
+const FEATURED_COMMANDS = ["mode", "runs", "config", "workflows"] as const;
+const CONFIG_GROUPS = [
+  { value: "config harness", description: "Configure agent harnesses" },
+  { value: "config role", description: "Configure shared and agent-specific roles" },
+  { value: "config text", description: "Inspect effective settings as text" },
+  { value: "config edit", description: "Edit settings file" },
+  { value: "config convert", description: "Preview settings migration" },
 ] as const;
 
 const FIELD_REPORT_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "field-report.mjs");
@@ -1148,16 +1159,32 @@ export function registerExternalCommand(pi: ExtensionAPI, options: ExternalComma
       if (nameArg && nameArg[2] !== "list" && nameArg[2] !== "assist") {
         const names = nameArg[1] === "harness" ? knownHarnessNames(getAgentDir()) : completionRoleNames();
         const matches = names.filter((name) => name.startsWith(nameArg[3]!));
-        return matches.length ? matches.map((name) => ({ value: `config ${nameArg[1]} ${nameArg[2]} ${name}`, label: name })) : null;
+        return matches.length ? matches.map(name => ({ value: `config ${nameArg[1]} ${nameArg[2]} ${name}`, label: name })) : null;
       }
-      const matches = COMMANDS.filter((command) => command.value.startsWith(normalized.trim()));
-      return matches.length ? matches.map((command) => ({ ...command, label: command.value })) : null;
+      if (!normalized) return FEATURED_COMMANDS.map(value => COMMANDS.find(command => command.value === value)!);
+      if (normalized.startsWith("config ") && !/^config (harness|role) /.test(normalized)) {
+        const matches = CONFIG_GROUPS.filter(command => command.value.startsWith(normalized));
+        return matches.length ? [...matches] : null;
+      }
+      const matches = COMMANDS.filter(command => command.value.startsWith(normalized));
+      return matches.length ? matches.map(command => ({ ...command })) : null;
     },
     handler: async function handleExternal(args, ctx) {
       const action = args.trim().toLowerCase();
       const tokens = tokenizeArgs(args.trim());
       if ((!action || action === 'config') && ctx.hasUI && (ctx.mode === 'tui' || ctx.mode === 'rpc')) {
-        await openConfigHub(pi, ctx, { getThinkingLevel: options.getThinkingLevel, testHarness: options.testHarness, runCommand: handleExternal });
+        await openConfigHub(pi, ctx, {
+          getThinkingLevel: options.getThinkingLevel,
+          testHarness: options.testHarness,
+          runCommand: handleExternal,
+          initialPage: action === 'config' ? 'config' : 'root',
+          getMode: getExternalMode,
+          setMode: (modalCtx, mode: ExternalMode) => {
+            pi.appendEntry(EXTERNAL_MODE_ENTRY, { mode });
+            updateExternalModeStatus(modalCtx);
+            modalCtx.ui.notify(`${externalModeLabel(mode)} Mode selected`, 'info');
+          },
+        });
       } else if (!action) {
         ctx.ui.notify(overviewText(options, ctx), "info");
       } else if (action === "doctor") {

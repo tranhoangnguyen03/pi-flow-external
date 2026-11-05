@@ -135,12 +135,13 @@ describe("/external command", () => {
 
         const verbs = (group: string, list: string[]) => list.map((verb) => `config ${group} ${verb}`);
         expect(command?.getArgumentCompletions("")?.map((item) => item.value)).toEqual([
-          "doctor", "mode", "config", "config text", "config edit", "config convert",
-          ...verbs("harness", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "default", "test", "assist"]),
-          ...verbs("role", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "assist"]),
-          "workflows", "runs", "runs summary", "runs --prune", "help",
+          "mode", "runs", "config", "workflows",
         ]);
+        expect(command?.getArgumentCompletions("config ")?.map((item) => item.value)).toEqual(["config harness", "config role", "config text", "config edit", "config convert"]);
+        expect(command?.getArgumentCompletions("config harness ")?.map((item) => item.value)).toEqual(verbs("harness", ["list", "inspect", "create", "edit", "enable", "disable", "set", "reset", "delete", "default", "test", "assist"]));
         expect(command?.getArgumentCompletions("config role inspect rev")?.map((item) => item.value)).toEqual(["config role inspect reviewer"]);
+        expect(command?.getArgumentCompletions("doc")?.map((item) => item.value)).toEqual(["doctor"]);
+        expect(command?.getArgumentCompletions("runs ")?.map((item) => item.value)).toEqual(["runs summary", "runs --prune"]);
 
         const notices: string[] = [];
         const ctx = { cwd: root, isProjectTrusted: () => false, ui: { notify: (message: string) => notices.push(message) } };
