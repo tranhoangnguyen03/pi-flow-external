@@ -80,9 +80,24 @@ it('opens a modal-first control center and selects the session mode without touc
   });
   expect(mode).toBe('frontline-worker');
   expect(h.screens[0]?.options).toContain('Mode · Normal');
+  const modeScreen=h.screens.find(s=>s.title==='External › Session mode');
+  expect(modeScreen?.options).toContain('Normal · Current');
+  expect(modeScreen?.options).toContain('Frontline Worker');
   expect(h.screens.some(s=>s.title==='External › Configuration'&&s.options.includes('Agents…'))).toBe(true);
   expect(h.screens.some(s=>s.title==='External › Global')).toBe(true);
   expect(readFileSync(path,'utf8')).toBe(before);
   expect(h.exec).not.toHaveBeenCalled();
   expect(h.paid).not.toHaveBeenCalled();
+});
+
+it('shows the active mode by its display name and marks it current in the picker',async()=>{
+  const {dir}=fixture();const h=harness(dir,['Mode · Frontline Worker','Back','Close']);
+  const setMode=vi.fn();
+  await openConfigHub({exec:h.exec} as never,h.ctx as never,{
+    ...h.options,getMode:()=> 'frontline-worker' as const,setMode,
+  });
+  expect(h.screens[0]?.title).toContain('Mode: Frontline Worker');
+  expect(h.screens[0]?.options).toContain('Mode · Frontline Worker');
+  expect(h.screens.find(s=>s.title==='External › Session mode')?.options).toContain('Frontline Worker · Current');
+  expect(setMode).not.toHaveBeenCalled();
 });
