@@ -161,7 +161,7 @@ Run only when project default-harness resolution changes. In a fresh Pi session 
 
 Run when settings ownership, the role catalog, slash commands, or conversion behavior changes. Use a disposable `PI_CODING_AGENT_DIR`. This check uses the product commands. It does not add an E2E flag.
 
-1. Fresh directory: start Pi against this checkout. In TUI mode, `/external` opens the control center with Mode, Configuration, Runs, Workflows, and Help. `/external config` opens Configuration → Global / Agents / Roles. Global owns defaults and runtime tuning; Agents lists configured harnesses and identifies the effective default. In headless/text mode (`/external` with no UI), it reports the text overview. `/external doctor` reports catalog validity separately from CLI and Pi readiness — for a fresh install, missing or unauthenticated CLIs are reported as readiness observations, not catalog validation failures. The directory gains no extension role files under `subagents/` and no `.pi-flow-defaults-seeded-v1`, `-v2`, or `-v3` markers. Reading settings does not create `settings.json`.
+1. Fresh directory: start Pi against this checkout. In TUI mode, `/external` opens the control center with Mode, Configuration, and Recent runs. `/external config` opens Configuration → Global / Agents / Roles. Global owns defaults and runtime tuning; Agents lists configured harnesses and identifies the effective default. In headless/text mode (`/external` with no UI), it reports the text overview. `/external doctor` reports catalog validity separately from CLI and Pi readiness — for a fresh install, missing or unauthenticated CLIs are reported as readiness observations, not catalog validation failures. The directory gains no extension role files under `subagents/` and no `.pi-flow-defaults-seeded-v1`, `-v2`, or `-v3` markers. Reading settings does not create `settings.json`.
 2. `/reload`, then start another session. Still no generated role files. Authoring via `/external config role create NAME` (or Configuration → Roles → Create a role in the modal) writes one file under `pi-flow-external/roles/<name>.md` with `description` frontmatter only, and no per-harness copies.
 3. Registration via `/external config harness create pi-NAME --model provider/model` (or Configuration → Agents → Add a Pi agent in the modal) writes that entry into settings v5 `harnesses` only. `/external config role list` and a following `external_delegate` or `external_workflow` call on that harness use the same model binding. No role file appears for the six built-ins.
 4. Upgrade: place a version 4 `settings.json` with one registered Pi harness and one customized `overrides/<harness>-<role>.md` in the disposable directory. Runtime delegation blocks until conversion (unconverted v4 settings are not executed under fallback compatibility). `/external config` (or the modal recovery screen) points to `/external config convert`. Run it to preview and apply the v5 conversion. A pre-v4 `settings.json` instead reports the last converting release and changes nothing. Confirm `settings.v4.backup.json` is preserved, instruction replacements land in nested `overrides/<harness>/<role>.md` directories with `description` frontmatter only, and legacy exact selectors are preserved under `exact` in `settings.json`. A following delegation reads the version 5 catalog. Old paths are ignored after activation. Confirm a deleted seeded identity from a historical cohort stays disabled and is not recreated: known pairs become binding `enabled: false` gates; unresolved names retain their exclusions. An auth-blocked backend is not a passing receipt.
@@ -200,7 +200,7 @@ Pi may create its own root files; opening the extension must not create `agent/p
   - *Separately authorized paid tests (Level 2):* Explicit "Send a test message" in the Pi modal, requiring separate confirmation that warns about token costs. Run only when authorized.
 
 ### Task 1: Modal navigation, model choice, search, and cancel-safety (TUI)
-- Launch `/external` in TUI mode. Inspect the control center: current Mode, effective default, Configuration, Runs, Workflows, and Help. Open Configuration → Global / Agents / Roles; then select an agent from Agents.
+- Launch `/external` in TUI mode. Inspect the control center: current Mode, effective default, Configuration, and Recent runs. Open Configuration → Global / Agents / Roles; then select an agent from Agents.
 - From Configuration → Agents, select an agent (e.g. Codex CLI) → Model:
   - Claude shows static alias choices (`sonnet`, `opus`, `fable`).
   - Codex reads local cache (`~/.codex/models_cache.json` or `$CODEX_HOME`) without network calls.
@@ -210,12 +210,6 @@ Pi may create its own root files; opening the extension must not create `agent/p
 - Confirm active/stored model is labeled `· Current`.
 - Press `Esc` to clear the search, then again to return without selecting; verify the previous menu selection position is remembered.
 - Terminal cancellation during busy waits: while a Level 1 metadata command or Level 2 test is running, pressing `Esc` or `Ctrl+C` in the terminal aborts the active operation via its `AbortSignal`. Note: RPC mode does NOT support busy cancellation; cancellation during busy waits is terminal-only.
-
-### Task 1b: Operations views, workflow scope and maintenance
-- From `/external`, open Runs → Browse runs. Confirm the existing inspector supports refresh, paging, final output and cancellation exactly as `/external runs` does. Runs → Summary should match `/external runs summary`.
-- Runs → Maintenance → Prune completed receipts: cancel the confirmation and verify that no cleanup occurs; explicitly confirm in a disposable directory and verify only eligible completed records beyond retention are pruned.
-- Workflows: list a valid global workflow and a trusted project workflow. In an untrusted project, the project workflow must stay hidden. Selecting a workflow displays its description, scope and source path; it must never execute the script. Compare the displayed source to `realpathSync` (on macOS, `/var/folders` may resolve to `/private/var/folders`).
-- Help: check the task guidance, then open the full command reference. Doctor must not run when opening Help; it runs only when Diagnostics is explicitly selected.
 
 ### Task 2: Role inheritance vs. explicit native setting
 - In Configuration → Roles → select a role (e.g. `reviewer`) → select an agent (e.g. `Codex CLI`), or navigate from Agent → Role customizations:
@@ -228,7 +222,7 @@ Pi may create its own root files; opening the extension must not create `agent/p
 
 ### Task 4: Default guards and recovery screen
 - Attempt to turn off the global default harness or a trusted-project default; confirm the interface guards against this and requires selecting another default first.
-- Set an unsupported/old settings format or malformed JSON in `settings.json`; launch `/external`. Confirm Mode, Runs, Workflows, and Help remain accessible. Open Configuration and confirm it presents a recovery screen explaining the issue and offering conversion/repair options, never executing with fallback values. In headless mode, `/external config` reports the conversion/repair requirement.
+- Set an unsupported/old settings format or malformed JSON in `settings.json`; launch `/external`. Confirm Mode and Recent runs remain accessible. Open Configuration and confirm it presents a recovery screen explaining the issue and offering conversion/repair options, never executing with fallback values. In headless mode, `/external config` reports the conversion/repair requirement.
 
 ### Task 5: RPC and headless acceptance checks
 - In RPC mode (`ctx.mode === 'rpc'`), verify that commands use native host dialogs (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) rather than rendering a custom TUI terminal overlay component. Note: RPC mode does not support busy cancellation.

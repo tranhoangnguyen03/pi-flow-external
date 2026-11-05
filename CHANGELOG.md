@@ -2,18 +2,6 @@
 
 All notable changes to pi-flow external are documented here.
 
-## [6.3.0-external.0] - 2026-11-05
-
-### Added
-- Focused Runs, Workflows and Help pages in the existing `/external` control center. Runs reuses its inspection and cancellation UI and offers a summary plus confirmed receipt maintenance. Workflows browses validated saved metadata and source paths without execution; untrusted project scripts remain hidden.
-- Help puts brief usage and mode guidance first, with the full command reference and diagnostics behind explicit selections.
-
-### Compatibility
-- Existing `/external runs`, `/external workflows`, `/external doctor`, and detailed commands still run unchanged in headless and interactive sessions. No new backend, saved workflow executor, configuration storage, permissions or model calls are introduced.
-
-### Verification
-- Focused modal navigation, trust filtering and maintenance confirmation tests. Live terminal review remains a follow-up.
-
 ## [6.2.0-external.0] - 2026-11-05
 
 ### Changed

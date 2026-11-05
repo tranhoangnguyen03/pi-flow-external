@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -7,8 +7,7 @@ import { openConfigHub } from '../src/config-hub.ts';
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
 function fixture(record: unknown = {version:5}) {
- // macOS may alias /var/folders to /private/var/folders. Registry paths use realpathSync.
- const dir = realpathSync(mkdtempSync(join(tmpdir(),'config-hub-'))); roots.push(dir); mkdirSync(join(dir,'pi-flow-external'));
+ const dir = mkdtempSync(join(tmpdir(),'config-hub-')); roots.push(dir); mkdirSync(join(dir,'pi-flow-external'));
  const path=join(dir,'pi-flow-external/settings.json'); writeFileSync(path,JSON.stringify(record));
  return {dir,path};
 }
@@ -89,64 +88,6 @@ it('opens a modal-first control center and selects the session mode without touc
   expect(readFileSync(path,'utf8')).toBe(before);
   expect(h.exec).not.toHaveBeenCalled();
   expect(h.paid).not.toHaveBeenCalled();
-});
-
-it('opens Runs, Workflows and Help from the same control center without running diagnostics',async()=>{
-  const {dir}=fixture();const h=harness(dir,['Runs…','Browse runs…','Summary','Back','Workflows…','Back','Help…','Complete command reference','Back','Close']);
-  await openConfigHub({exec:h.exec} as never,h.ctx as never,h.options);
-  expect(h.screens[0]?.options).toContain('Runs…');
-  expect(h.screens[0]?.options).toContain('Workflows…');
-  expect(h.screens[0]?.options).toContain('Help…');
-  expect(h.screens.some(v=>v.title.startsWith('External › Workflows\n\nNo saved workflows'))).toBe(true);
-  expect(h.options.runCommand).toHaveBeenCalledWith('runs',expect.anything());
-  expect(h.options.runCommand).toHaveBeenCalledWith('runs summary',expect.anything());
-  expect(h.options.runCommand).toHaveBeenCalledWith('help',expect.anything());
-  expect(h.options.runCommand).not.toHaveBeenCalledWith('doctor',expect.anything());
-  expect(h.exec).not.toHaveBeenCalled();
-});
-
-it('asks before modal receipt pruning; direct command execution is unchanged',async()=>{
-  const {dir}=fixture();
-  const cancelled=harness(dir,['Runs…','Maintenance…','Prune completed receipts…','Back','Close'],[],[false]);
-  await openConfigHub({exec:cancelled.exec} as never,cancelled.ctx as never,cancelled.options);
-  expect(cancelled.ctx.ui.confirm).toHaveBeenCalledOnce();
-  expect(cancelled.options.runCommand).not.toHaveBeenCalled();
-
-  const approved=harness(dir,['Runs…','Maintenance…','Prune completed receipts…','Back','Close'],[],[true]);
-  await openConfigHub({exec:approved.exec} as never,approved.ctx as never,approved.options);
-  expect(approved.options.runCommand).toHaveBeenCalledWith('runs --prune',expect.anything());
-});
-
-it('browses saved workflow metadata only, respecting trusted-project visibility',async()=>{
-  const {dir}=fixture();
-  const global=join(dir,'workflows');mkdirSync(global,{recursive:true});
-  writeFileSync(join(global,'review-plan.js'), "export const meta={apiVersion:1,name:'review-plan',description:'Review a proposal'};\nreturn await agent('review');\n");
-  const project=join(dir,'.pi','workflows');mkdirSync(project,{recursive:true});
-  writeFileSync(join(project,'project-only.js'), "export const meta={apiVersion:1,name:'project-only',description:'Local project review'};\nreturn await agent('review');\n");
-
-  const untrusted=harness(dir,['Workflows…','review-plan','Back','Back','Close']);
-  await openConfigHub({exec:untrusted.exec} as never,untrusted.ctx as never,untrusted.options);
-  const listing=untrusted.screens.find(x=>x.title==='External › Workflows');
-  expect(listing?.options.some(v=>v.startsWith('review-plan · global'))).toBe(true);
-  expect(listing?.options.some(v=>v.startsWith('project-only'))).toBe(false);
-  expect(untrusted.screens.some(x=>x.title.includes('Source: '+join(global,'review-plan.js')))).toBe(true);
-  expect(untrusted.options.runCommand).not.toHaveBeenCalled();
-
-  const trusted=harness(dir,['Workflows…','Back','Close']);
-  trusted.ctx.isProjectTrusted=()=>true;
-  await openConfigHub({exec:trusted.exec} as never,trusted.ctx as never,trusted.options);
-  expect(trusted.screens.find(x=>x.title==='External › Workflows')?.options.some(v=>v.startsWith('project-only · project'))).toBe(true);
-});
-
-it('runs Doctor only on an explicit Help selection',async()=>{
-  const {dir}=fixture();
-  const quiet=harness(dir,['Help…','Back','Close']);
-  await openConfigHub({exec:quiet.exec} as never,quiet.ctx as never,quiet.options);
-  expect(quiet.options.runCommand).not.toHaveBeenCalled();
-
-  const chosen=harness(dir,['Help…','Diagnostics…','Back','Close']);
-  await openConfigHub({exec:chosen.exec} as never,chosen.ctx as never,chosen.options);
-  expect(chosen.options.runCommand).toHaveBeenCalledWith('doctor',expect.anything());
 });
 
 it('shows the active mode by its display name and marks it current in the picker',async()=>{
