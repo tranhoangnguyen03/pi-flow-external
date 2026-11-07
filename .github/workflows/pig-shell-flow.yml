@@ -1,0 +1,87 @@
+name: PiG shell Flow qualification
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-flow:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/pig-shell-flow-qualification-112' }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout exact Flow PR source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+
+      - name: Verify fixture source syntax
+        run: node --check scripts/e2e/pig-shell-flow.mjs
+
+      - name: Checkout PiG-Agent PR 2 shell at its original exact head
+        uses: actions/checkout@v4
+        with:
+          repository: tranhoangnguyen03/PiG-Agent
+          ref: 3f121638feaf9c8a551a2d7001481cd7d936a8c9
+          path: _pig_agent
+          persist-credentials: false
+
+      - name: Set only Flow source pin to this PR commit for test build
+        working-directory: _pig_agent
+        env:
+          FLOW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const p="shell/source-lock.json";
+            const lock=JSON.parse(fs.readFileSync(p,"utf8"));
+            const ext=lock.extensions.find(x=>x.id==="external");
+            if (!ext || ext.version!=="6.3.0-external.0" || !/^[a-f0-9]{40}$/.test(process.env.FLOW_SHA)) throw new Error("Unexpected Flow pin");
+            ext.commit=process.env.FLOW_SHA;
+            fs.writeFileSync(p,JSON.stringify(lock,null,2)+"\n");
+          '
+          # The shell build intentionally rejects dirty checkouts. Commit the
+          # test-only pin adjustment locally, preserving source provenance.
+          git -c user.name='PiG test runner' -c user.email='pig-flow-test@example.invalid' add shell/source-lock.json
+          git -c user.name='PiG test runner' -c user.email='pig-flow-test@example.invalid' commit -m "ci: test Flow PR source against pinned shell"
+
+      - name: Build full native PiG shell with real upstream Flow source
+        working-directory: _pig_agent
+        run: node shell/build.mjs
+
+      - name: Run original PiG shell smoke
+        working-directory: _pig_agent
+        run: node shell/smoke.mjs dist/shell/bundle
+
+      - name: Run installed PiG Flow integration fixture
+        run: node scripts/e2e/pig-shell-flow.mjs _pig_agent/dist/shell/bundle pig-flow-fixture-report.json
+
+      - name: Preserve evidence whether green or red
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-inside-pig-${{ matrix.target }}
+          path: |
+            pig-flow-fixture-report.json
+            _pig_agent/dist/shell/smoke-report.json
+            _pig_agent/dist/shell/bundle/release.json
+            _pig_agent/dist/shell/*.sha256
+          retention-days: 14
+          if-no-files-found: warn
