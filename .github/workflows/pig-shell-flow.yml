@@ -72,6 +72,8 @@ jobs:
         run: node shell/smoke.mjs dist/shell/bundle
 
       - name: Run installed PiG Flow integration fixture
+        env:
+          FLOW_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/e2e/pig-shell-flow.mjs _pig_agent/dist/shell/bundle pig-flow-fixture-report.json
 
       - name: Preserve evidence whether green or red
