@@ -15,14 +15,14 @@ function fakeCliDirectory(): string {
     const executable = join(dir, command);
     const code = [
       "#!/usr/bin/env node",
-      "const name = process.argv[1].split(/[\\/]/).at(-1);",
+      "const name = process.argv[1].split(\"/\").at(-1);",
       "const requested = process.argv.slice(2).join(\" \");",
       "if (requested === \"auth status --json\" && name === \"claude\") {",
       "  console.log(JSON.stringify({loggedIn:true,authMethod:process.env.FAKE_CLAUDE_METHOD || \"oauth_token\"}));",
       "} else if (requested === \"login status\" && name === \"codex\") {",
       "  console.error(process.env.FAKE_CODEX_STATUS || \"Logged in using ChatGPT\");",
       "} else {",
-      "  console.log(JSON.stringify({selected:process.env.CLAUDE_CONFIG_DIR || process.env.CODEX_HOME, key:process.env.ANTHROPIC_API_KEY || process.env.CODEX_API_KEY || null}));",
+      "  console.log(JSON.stringify({selected:name === \"claude\" ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME, key:name === \"claude\" ? process.env.ANTHROPIC_API_KEY || null : process.env.CODEX_API_KEY || null}));",
       "}",
     ].join("\n");
     writeFileSync(executable, code); chmodSync(executable, 0o755);
@@ -99,7 +99,7 @@ describe("installed shell external CLI account contract", () => {
       return runCliProcess({ label: name, command: name, args: ["exec"], cwd: bin, env: account.env, rawStdout: true });
     }));
     expect(JSON.parse(outputs[0].stdout || "{}")).toEqual({ selected: "/private/Claude One", key: null });
-    expect(JSON.parse(outputs[1].stdout || "{}")).toEqual({ selected: "/private/Claude One", key: "parent-key" });
+    expect(JSON.parse(outputs[1].stdout || "{}")).toEqual({ selected: "/private/Codex Two", key: null });
     expect(parent.ANTHROPIC_API_KEY).toBe("parent-key");
     expect(parent.CODEX_API_KEY).toBe("parent-key");
   });
