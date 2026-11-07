@@ -35,11 +35,11 @@ jobs:
       - name: Verify fixture source syntax
         run: node --check scripts/e2e/pig-shell-flow.mjs
 
-      - name: Checkout PiG-Agent PR 2 shell at its original exact head
+      - name: Checkout current pinned PiG-Agent PR 2 shell
         uses: actions/checkout@v4
         with:
           repository: tranhoangnguyen03/PiG-Agent
-          ref: 3f121638feaf9c8a551a2d7001481cd7d936a8c9
+          ref: eef7162241a8a65c1774043e172f90fe2d082110
           path: _pig_agent
           persist-credentials: false
 
