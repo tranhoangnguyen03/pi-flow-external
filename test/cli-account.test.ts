@@ -18,7 +18,7 @@ function fakeCliDirectory(): string {
       "const name = process.argv[1].split(\"/\").at(-1);",
       "const requested = process.argv.slice(2).join(\" \");",
       "if (requested === \"auth status --json\" && name === \"claude\") {",
-      "  console.log(JSON.stringify({loggedIn:true,authMethod:process.env.FAKE_CLAUDE_METHOD || \"oauth_token\"}));",
+      "  console.log(JSON.stringify({loggedIn:true,authMethod:process.env.FAKE_CLAUDE_METHOD || \"oauth_token\",email:process.env.FAKE_CLAUDE_EMAIL || \"fixture@example.test\"}));",
       "} else if (requested === \"login status\" && name === \"codex\") {",
       "  console.error(process.env.FAKE_CODEX_STATUS || \"Logged in using ChatGPT\");",
       "} else {",
@@ -50,15 +50,18 @@ describe("installed shell external CLI account contract", () => {
       PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "subscription", PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
       CLAUDE_CONFIG_DIR: "/profiles/Claude A", CODEX_HOME: "/profiles/Codex B",
       ANTHROPIC_API_KEY: "anthropic-key", ANTHROPIC_AUTH_TOKEN: "token", ANTHROPIC_BASE_URL: "proxy",
+      CLAUDE_CODE_OAUTH_TOKEN: "alternate-subscriber", CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "alternate-refresh", CLAUDE_CODE_OAUTH_SCOPES: "wrong-scope",
       CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_USE_VERTEX: "1", CLAUDE_CODE_USE_FOUNDRY: "1",
       CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "openai-key", OPENAI_BASE_URL: "proxy",
+      CODEX_ACCESS_TOKEN: "other-chatgpt-account", OPENAI_FEDERATION_RULE_ID: "wrong-rule",
+      OPENAI_IDENTITY_TOKEN_FILE: "/other/token", OPENAI_WORKLOAD_IDENTITY_CONTEXT: "not this account",
     };
     const claude = resolveCliChildAccount("claude", parent);
     const codex = resolveCliChildAccount("codex", parent);
     expect(claude.env.CLAUDE_CONFIG_DIR).toBe("/profiles/Claude A");
     expect(codex.env.CODEX_HOME).toBe("/profiles/Codex B");
-    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"]) expect(claude.env[name]).toBeUndefined();
-    for (const name of ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"]) expect(codex.env[name]).toBeUndefined();
+    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"]) expect(claude.env[name]).toBeUndefined();
+    for (const name of ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_ACCESS_TOKEN", "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"]) expect(codex.env[name]).toBeUndefined();
     expect(claude.env.CODEX_API_KEY).toBe("codex-key");
     expect(codex.env.ANTHROPIC_API_KEY).toBe("anthropic-key");
     expect(parent.ANTHROPIC_API_KEY).toBe("anthropic-key");
@@ -102,6 +105,35 @@ describe("installed shell external CLI account contract", () => {
     expect(JSON.parse(outputs[1].stdout || "{}")).toEqual({ selected: "/private/Codex Two", key: null });
     expect(parent.ANTHROPIC_API_KEY).toBe("parent-key");
     expect(parent.CODEX_API_KEY).toBe("parent-key");
+  });
+
+  it("fails the requested Claude identity check even when OAuth authMethod matches", async () => {
+    const bin = fakeCliDirectory();
+    const env = {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "subscription",
+      PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL: "expected@example.test",
+      FAKE_CLAUDE_EMAIL: "different@example.test",
+    };
+    await expect(verifyCliChildAccount("claude", resolveCliChildAccount("claude", env), bin))
+      .rejects.toThrow(/does not match the expected identity/);
+  });
+
+  it("holds separate homes for concurrent Claude children within the same parent", async () => {
+    const bin = fakeCliDirectory();
+    const base = {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "subscription", ANTHROPIC_API_KEY: "parent-api",
+    };
+    const profiles = ["/subscriber/alpha", "/subscriber/beta"].map(home =>
+      resolveCliChildAccount("claude", { ...base, CLAUDE_CONFIG_DIR: home }));
+    const results = await Promise.all(profiles.map(async account => {
+      await verifyCliChildAccount("claude", account, bin);
+      return runCliProcess({ label: "claude", command: "claude", args: ["exec"], cwd: bin, env: account.env, rawStdout: true });
+    }));
+    expect(results.map(r => JSON.parse(r.stdout || "{}").selected)).toEqual(["/subscriber/alpha", "/subscriber/beta"]);
+    expect(results.map(r => JSON.parse(r.stdout || "{}").key)).toEqual([null, null]);
+    expect(base.ANTHROPIC_API_KEY).toBe("parent-api");
   });
 
   it("does not launch when explicit subscription resolves to an API login", async () => {
