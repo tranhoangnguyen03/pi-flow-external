@@ -55,6 +55,7 @@ jobs:
             const ext=lock.extensions.find(x=>x.id==="external");
             if (!ext || ext.version!=="6.3.0-external.0" || !/^[a-f0-9]{40}$/.test(process.env.FLOW_SHA)) throw new Error("Unexpected Flow pin");
             ext.commit=process.env.FLOW_SHA;
+            ext.version="6.3.0-external.1";
             fs.writeFileSync(p,JSON.stringify(lock,null,2)+"\n");
           '
           # The shell build intentionally rejects dirty checkouts. Commit the
