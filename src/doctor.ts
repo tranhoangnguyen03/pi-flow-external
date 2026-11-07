@@ -57,8 +57,8 @@ export async function usageLimitHistory(directory: string, project: string, now 
 
 // Names only: values and raw CLI diagnostics can contain credentials.
 const ENV_WARNINGS: Record<string, string[]> = {
-  claude: ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
-  codex: ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"],
+  claude: ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+  codex: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "CODEX_HOME"],
   agy: [],
   grok: ["XAI_API_KEY"],
   muse: ["META_API_KEY"],
@@ -132,12 +132,21 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
   }
   lines.push(`  Login: ${login}`);
   if (account && account.source !== "inherit") {
-    lines.push(observedAuth === account.source
-      ? `  Child auth method: ${observedAuth} reported by CLI; actual model request not tested`
-      : `  Child auth method: ${observedAuth ?? "unverified"}; selected ${account.source} cannot be confirmed`);
+    const directApi = account.source === "api" && (backend === "claude"
+      ? Boolean(account.env.ANTHROPIC_API_KEY || account.env.ANTHROPIC_AUTH_TOKEN)
+      : Boolean(account.env.CODEX_API_KEY));
+    lines.push(directApi
+      ? "  Child auth method: direct API key override (environment); stored CLI login may differ"
+      : observedAuth === account.source
+        ? `  Child auth method: ${observedAuth} reported by CLI; actual model request not tested`
+        : `  Child auth method: ${observedAuth ?? "unverified"}; selected ${account.source} cannot be confirmed`);
   }
-  const set = (ENV_WARNINGS[backend] ?? []).filter(name => Boolean(env[name]));
-  if (set.length) lines.push(`  Settings: ${set.join(", ")} set; inherited by child and may affect authentication or routing. Values hidden.`);
+  const settingNames = ENV_WARNINGS[backend] ?? [];
+  const effective = account?.env ?? env;
+  const set = settingNames.filter(name => Boolean(effective[name]));
+  if (set.length) lines.push(`  Child settings: ${set.join(", ")} set; may affect authentication or routing. Values hidden.`);
+  const excluded = account ? settingNames.filter(name => Boolean(env[name]) && !effective[name]) : [];
+  if (excluded.length) lines.push(`  Excluded from child: ${excluded.join(", ")}. Parent settings unchanged.`);
   lines.push("  Remaining allowance: unavailable (no quota request made)");
   return lines.join("\n");
 }
