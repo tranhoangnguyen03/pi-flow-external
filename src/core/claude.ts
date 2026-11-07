@@ -10,6 +10,7 @@ import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } fr
 import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
 import { runCliProcess } from "./cli-process.ts";
+import { resolveCliChildAccount, verifyCliChildAccount } from "./cli-account.ts";
 
 const CLAUDE_COMMAND = "claude";
 
@@ -443,12 +444,15 @@ export async function spawnClaudeSubagent(params: {
       resumeSessionId: params.resumeSessionId,
     });
 
+    const childAccount = resolveCliChildAccount("claude");
+    await verifyCliChildAccount("claude", childAccount, params.ctx.cwd, params.signal);
     emitter.emit();
     emitter.startHeartbeat();
     const closeResult = await runCliProcess({
       label: "claude",
       command: CLAUDE_COMMAND,
       args,
+      env: childAccount.env,
       cwd: params.ctx.cwd,
       stdin: taskPrompt,
       signal: params.signal,
