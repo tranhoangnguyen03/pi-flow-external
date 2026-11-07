@@ -5,8 +5,8 @@ Status: **qualification candidate, not accepted**. This document accompanies the
 ## Exact baseline
 
 - Original PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. Its reference builder pins extension source commits and records the final archive checksum.
-- Original Flow main: `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, package **6.3.0-external.0**.
-- Qualification CI checks out that exact PiG shell commit, changes **only** the test build's Flow source pin to the PR head, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2, ship a new release, or change Flow's package version.
+- Original Flow main: `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, package **6.3.0-external.0**. This qualification PR deliberately bumps the candidate Flow package to **6.3.0-external.1**. The baseline remains recorded.
+- Qualification CI checks out that exact PiG shell commit, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
 - The CI script rebuilds the *entire* PiG shell on Linux x64 and macOS ARM64; runs the original shell smoke and then `scripts/e2e/pig-shell-flow.mjs`. The latter installs a relocated shell, launches genuine Flow model tools with a synthetic parent model and fake child CLIs, and writes a structured report. This is **fixture evidence**, not a live-account test.
 
 ## Account ownership and child execution
@@ -15,9 +15,9 @@ PiG-Agent owns account-source selection and private model configuration. Flow co
 
 For a selected **Claude Code subscription**, the shell may set `PI_EXTERNAL_CLAUDE_AUTH_SOURCE=subscription` and `CLAUDE_CONFIG_DIR=/selected/claude-home`. For a **Codex ChatGPT subscription**, it may set `PI_EXTERNAL_CODEX_AUTH_SOURCE=subscription` and `CODEX_HOME=/selected/codex-home`. Both env homes apply to the selected CLI only; don't infer different accounts from two different directories. Explicit `api` and default `inherit` are also supported.
 
-When `subscription` is explicit, Flow builds a *child-only* env. It removes Claude's inherited `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, API base URL, and Bedrock/Vertex/Foundry switches from Claude; for Codex, it removes `CODEX_API_KEY`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` from Codex. It then runs **that CLI's** auth-status command with **that exact env** and refuses execution if the reported method cannot be confirmed as subscription. Claude's reported email can be compared to optional `PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL`; a mismatch blocks launch. Codex CLI login status presently confirms the **login type**, not a unique ChatGPT account identity: this remains a live-host verification item. The CLI may change its status schema; unknown status fails closed for explicit selection.
+When `subscription` is explicit, Flow builds a *child-only* env. It removes Claude's inherited `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, API base URL, alternate `CLAUDE_CODE_OAUTH_TOKEN`/refresh-token settings and Bedrock/Vertex/Foundry switches. For Codex, it removes `CODEX_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, alternate `CODEX_ACCESS_TOKEN`, and workload-identity variables. These overrides otherwise risk another account or billing source. It then runs **that CLI's** auth-status command with **that exact env** and refuses execution if the reported method cannot be confirmed as subscription. Claude's reported email can be compared to optional `PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL`; a mismatch blocks launch. Codex CLI login status presently confirms the **login type**, not a unique ChatGPT account identity: this remains a live-host verification item. The CLI may change its status schema; unknown status fails closed for explicit selection.
 
-For explicit `api`, Flow respects an explicitly inherited key. For `inherit`, it does not strip or select anything. No child-scoped key or subscription rule changes the parent PiG model's auth storage. CLI execution, resume and workflow children all pass through the same launcher. Doctor reports reported login method and warns when a requested source differs. **A login-status probe is not proof of a charged request or quota.** Exercise one actual model request and inspect the account in the provider's usage/billing UI before accepting an account-routing claim.
+For explicit `api`, Flow respects an explicitly inherited API key but removes conflicting OAuth/workload credentials from that child. For `inherit`, it does not strip or select anything. No child-scoped key or subscription rule changes the parent PiG model's auth storage. CLI execution, resume and workflow children all pass through the same launcher. Doctor reports reported login method and warns when a requested source differs. **A login-status probe is not proof of a charged request or quota.** Exercise one actual model request and inspect the account in the provider's usage/billing UI before accepting an account-routing claim.
 
 ## Model and storage boundary
 
@@ -30,18 +30,19 @@ For explicit `api`, Flow respects an explicitly inherited key. For `inherit`, it
 
 Mark individual journeys PASS only after the named test actually completes, with machine/OS, commit SHA, release ID and logs attached. FAIL retains diagnostic evidence. NOT RUN covers any unavailable live account, no local shell, or a human TUI action not exercised. Never infer one from another.
 
-| Journey | Evidence available before this PR's CI run | Current result |
+| Journey | Verified scope and evidence | Result |
 |---|---|---|
-| Source pins and separation from #113 | Original Flow/PiG git heads, source-lock inspected | PASS (source review) |
-| Flow source account override + concurrent profiles | Unit and native fixture tests committed; awaiting execution | NOT RUN |
-| Real PiG `external_delegate`, `external_workflow`, `external_runs`, `external_help` | Full-shell synthetic fixture committed; awaiting execution | NOT RUN |
-| Private `models.json` Pi SDK child | Installed-shell synthetic provider fixture committed; awaiting execution | NOT RUN |
-| Relocated shell, private settings, new print sessions | Original PiG-Agent PR #2 CI reports success at *original* Flow pin; not retested against this PR | NOT RUN (this revision) |
-| Foreground/background, inspect/wait, streaming, errors, cancellation, timeout, cleanup | Only foreground/background/inspect/wait synthetic coverage prepared; remaining checks must run | NOT RUN |
-| Real PiG modal control center, config/modes/roles, doctor and run inspection | Needs a person at the actual native PiG terminal | NOT RUN |
-| Actual Claude Code host login, API-key precedence, selected account and billing | No live host credentials available in remote CI | NOT RUN |
-| Actual Codex CLI ChatGPT login, precedence and account verification | No live host credentials available in remote CI | NOT RUN |
-| Manual main Pi ↔ specialist session pairing | Separate Comms task; not a prerequisite for Flow-inside-PiG | NOT RUN |
+| Source pins and separation from #113 | Inspected original PiG and Flow heads | PASS |
+| Unit/typecheck and release metadata | [Flow CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942945), Node 22/26 and release rules | PASS at that revision; recheck final head |
+| Installed PiG rebuilt on Linux/macOS | [PiG shell CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942967) | PASS at that revision; recheck final head |
+| Flow delegate/workflow/runs/help, foreground/background and inspect/wait | Native installed shell, synthetic model and fake CLIs | PASS (fixture), NOT RUN (live) |
+| Private models.json custom Pi SDK child | Native installed shell with private-only study/probe provider | PASS (fixture) |
+| CLI auth source, concurrent isolated homes, inherited keys, bad account | Fixture/unit tests; no live subscribed CLI | PASS (fixture), NOT RUN (live) |
+| Child errors, cancel and deadline | [Linux native fixture at 75a5011](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42351331887) passed; other platform/final revision separate | PASS (Linux fixture); NOT RUN (live) |
+| Human PiG modal navigation: /external, pickers, doctor and inspection | No interactive terminal user in CI | NOT RUN |
+| Actual Claude host login, selected account and billed request | Live subscription and billing receipt unavailable | NOT RUN |
+| Actual Codex ChatGPT identity, effective auth and billed request | CLI status does not prove unique ChatGPT identity; live billing unavailable | NOT RUN |
+| Shutdown/reload cleanup and manual main Pi/specialist pairing | Needs host and two running agent sessions | NOT RUN |
 
 ### Manual acceptance on a real host
 
