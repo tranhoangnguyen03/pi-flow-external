@@ -12,6 +12,17 @@ import { createServer } from "node:http";
 
 const bundle = path.resolve(process.argv[2] || "_pig_agent/dist/shell/bundle");
 const release = JSON.parse(await fs.readFile(path.join(bundle, "release.json"), "utf8"));
+const selectedFlow = release.extensions.find(extension => extension.id === "external");
+assert.ok(selectedFlow, "Installed PiG has no Flow package");
+assert.ok(/^[a-f0-9]{40}$/.test(process.env.FLOW_EXPECTED_SHA || ""), "Must supply the exact Flow commit under test");
+assert.equal(selectedFlow.sourceCommit,process.env.FLOW_EXPECTED_SHA,"Installed Flow commit is not the PR head");
+assert.equal(selectedFlow.version,"6.3.0-external.1","Installed Flow package version is not the candidate");
+assert.equal(release.runtime.pig,"0.5.3","PiG version silently changed");
+assert.equal(release.runtime.node,"24.15.0","Node version silently changed");
+const installedLock = JSON.parse(await fs.readFile(path.join(bundle,"source-lock.json"),"utf8"));
+const commsLock = installedLock.extensions.find(extension => extension.id === "comms");
+assert.equal(commsLock?.version,"0.2.0","Selected PiG shell's Comms pin is stale");
+assert.equal(commsLock?.commit,"39ad5a7888981efbeb4c819b13d31e2f8a7576a7","Selected Comms source differs");
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pig-flow-installed "));
 const reportPath = path.resolve(process.argv[3] || "pig-flow-fixture-report.json");
 const report = {
