@@ -1,7 +1,8 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { diagnoseCli } from "../src/doctor.ts";
 import { classifyCliLogin, resolveCliChildAccount, verifyCliChildAccount } from "../src/core/cli-account.ts";
 import { runCliProcess } from "../src/core/cli-process.ts";
 
@@ -155,6 +156,23 @@ describe("installed shell external CLI account contract", () => {
     expect(results.map(r => JSON.parse(r.stdout || "{}").selected)).toEqual(["/subscriber/alpha", "/subscriber/beta"]);
     expect(results.map(r => JSON.parse(r.stdout || "{}").key)).toEqual([null, null]);
     expect(base.ANTHROPIC_API_KEY).toBe("parent-api");
+  });
+
+  it("doctor probes the effective child account, reporting excluded overrides without leaking values", async () => {
+    const bin = fakeCliDirectory();
+    const parent = {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "subscription",
+      CLAUDE_CONFIG_DIR: "/private/doctor", ANTHROPIC_API_KEY: "SECRET API",
+      CLAUDE_CODE_OAUTH_TOKEN: "SECRET SUBSCRIBER",
+    };
+    const parentExec = vi.fn().mockRejectedValue(new Error("parent exec must not be used for explicit source"));
+    const report = await diagnoseCli(parentExec, "claude", parent);
+    expect(parentExec).not.toHaveBeenCalled();
+    expect(report).toContain("Child auth method: subscription reported by CLI");
+    expect(report).toContain("Child settings: CLAUDE_CONFIG_DIR set");
+    expect(report).toContain("Excluded from child: ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN");
+    expect(report).not.toContain("SECRET");
   });
 
   it("does not launch when explicit subscription resolves to an API login", async () => {
