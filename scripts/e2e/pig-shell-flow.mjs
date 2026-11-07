@@ -106,21 +106,23 @@ const checks = [
   { marker:"FLOW_NATIVE_RUNS_LIST", tool:"external_runs", params:{action:"list"}, stage:"final" },
   { marker:"FLOW_NATIVE_CLAUDE", tool:"external_delegate", params:{description:"Fixture Claude execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly"}, expect:"SHELL_CLAUDE_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_CODEX", tool:"external_delegate", params:{description:"Fixture Codex execution",prompt:"Return SHELL_CODEX_DONE",role:"worker",harness:"codex",permission:"readonly"}, expect:"SHELL_CODEX_DONE", stage:"inspect" },
+  { marker:"FLOW_NATIVE_PI_CHILD", tool:"external_delegate", params:{description:"Fixture private Pi model",prompt:"Return SHELL_PI_MODEL_DONE",role:"worker",harness:"pi-local",permission:"readonly"}, expect:"SHELL_PI_MODEL_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_BACKGROUND", tool:"external_delegate", params:{description:"Fixture background execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly",background:true}, expect:"SHELL_CLAUDE_DONE", stage:"wait" },
   { marker:"FLOW_NATIVE_WORKFLOW", tool:"external_workflow", params:{script, background:false}, expect:"SHELL_CLAUDE_DONE", stage:"final" },
 ];
 const served = new Map(checks.map(check => [check.marker, []]));
+let piChildModelCalls = 0;
 function chunk(delta, done) {
   return "data: " + JSON.stringify({ id:"fixture", model:"probe", object:"chat.completion.chunk", choices:[{index:0,delta,finish_reason:done}]}) + "\n\n";
 }
-function answer(res, toolCall) {
+function answer(res, toolCall, text = "FLOW_NATIVE_FIXTURE_ACCEPTED") {
   res.writeHead(200, {"Content-Type":"text/event-stream"});
   if (toolCall) {
     res.write(chunk({role:"assistant",tool_calls:[{index:0,id:"flow-tool-" + served.size,type:"function",
       function:{name:toolCall.tool,arguments:JSON.stringify(toolCall.params)}}]},null));
     res.write(chunk({},"tool_calls"));
   } else {
-    res.write(chunk({role:"assistant",content:"FLOW_NATIVE_FIXTURE_ACCEPTED"},null));
+    res.write(chunk({role:"assistant",content:text},null));
     res.write(chunk({},"stop"));
   }
   res.end("data: [DONE]\n\n");
@@ -141,6 +143,13 @@ try {
       const user = payload.messages.filter(m => m.role === "user").at(-1);
       const text = typeof user?.content === "string" ? user.content : JSON.stringify(user?.content || "");
       const check = checks.find(c => text.includes(c.marker));
+      if (!check && text.includes("SHELL_PI_MODEL_DONE")) {
+        // The second request is from the real Pi SDK child, not the root
+        // model. It must resolve the private study/probe provider itself.
+        piChildModelCalls++;
+        answer(res,null,"SHELL_PI_MODEL_DONE");
+        return;
+      }
       assert.ok(check, "Unexpected fixture prompt");
       const tools = (payload.tools || []).map(t => t.function?.name || t.name);
       assert.ok(tools.includes(check.tool), "PiG did not expose tool " + check.tool);
@@ -174,6 +183,11 @@ try {
     models:[{id:"probe",name:"Fixture",reasoning:false,input:["text"],
       cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:128000,maxTokens:4096}]
   }}}));
+  const flowSettings = path.join(home, ".pi/pi-flow-external/settings.json");
+  await fs.mkdir(path.dirname(flowSettings), { recursive:true });
+  await fs.writeFile(flowSettings,JSON.stringify({
+    version:5, harnesses:{"pi-local":{model:"study/probe",thinking:"off",preset:"minimal"}}
+  }));
   for (const check of checks) {
     const started = Date.now();
     try {
@@ -194,6 +208,8 @@ try {
     assert.equal(child.gotPrompt,true,"Child prompt missing");
     assert.equal(child.selected, child.name === "claude" ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME);
   }
+  assert.ok(piChildModelCalls > 0, "Private models.json was not used by a real Pi SDK child");
+  report.piChildModelCalls = piChildModelCalls;
   report.childCount = children.length;
   report.checks.push({name:"child-scoped-subscription-auth-and-models-json",status:"PASS"});
   report.status = "PASS";
