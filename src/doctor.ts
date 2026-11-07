@@ -1,6 +1,8 @@
 import { open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { resolveCliChildAccount, classifyCliLogin } from "./core/cli-account.ts";
+import { runCliProcess } from "./core/cli-process.ts";
 
 // Summary-only, bounded reads: never scan potentially huge backend event logs.
 export async function usageLimitHistory(directory: string, project: string, now = Date.now()): Promise<string> {
@@ -55,7 +57,7 @@ export async function usageLimitHistory(directory: string, project: string, now 
 
 // Names only: values and raw CLI diagnostics can contain credentials.
 const ENV_WARNINGS: Record<string, string[]> = {
-  claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+  claude: ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
   codex: ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"],
   agy: [],
   grok: ["XAI_API_KEY"],
@@ -64,9 +66,29 @@ const ENV_WARNINGS: Record<string, string[]> = {
 
 export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const lines = [`${backend}:`];
+  // The shell selects account source; doctor must use the same effective
+  // environment as the child. Pi's exec() does not expose an env override.
+  let account;
+  try { account = backend === "claude" || backend === "codex" ? resolveCliChildAccount(backend, env) : undefined; }
+  catch { return backend + ":\\n  Invalid child account-source selection; no CLI was probed."; }
+  const probe = async (args: string[]) => {
+    if (!account || account.source === "inherit") return exec(backend, args, { timeout: 10_000 });
+    try {
+      const result = await runCliProcess({
+        label: backend + " doctor", command: backend, args, cwd: process.cwd(),
+        env: account.env, signal: AbortSignal.timeout(10_000), rawStdout: true, maxStdoutChars: 16_384,
+      });
+      return { code: result.code, killed: false, stdout: result.stdout ?? "", stderr: result.stderr };
+    } catch {
+      return { code: 1, killed: true, stdout: "", stderr: "" };
+    }
+  };
+  if (account?.source !== undefined && account.source !== "inherit") {
+    lines.push("  Requested child auth source: " + account.source + " (checked under child environment; not a billing receipt)");
+  }
   let available = false;
   try {
-    const result = await exec(backend, ["--version"], { timeout: 10_000 });
+    const result = await probe(["--version"]);
     available = result.code === 0 && !result.killed;
     // Only display a version number, never echo arbitrary subprocess output.
     const version = (result.stdout || result.stderr).match(/\b\d+\.\d+\.\d+\b/)?.[0];
@@ -83,7 +105,7 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
   if (!available) login = "not checked (CLI unavailable)";
   else if (backend === "claude" || backend === "codex") {
     try {
-      const result = await exec(backend, backend === "claude" ? ["auth", "status", "--json"] : ["login", "status"], { timeout: 10_000 });
+      const result = await probe(backend === "claude" ? ["auth", "status", "--json"] : ["login", "status"]);
       login = result.killed ? "not verified (status check timed out)" : "not verified (status check failed)";
       if (!result.killed) {
         if (backend === "claude") {
