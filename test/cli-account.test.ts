@@ -41,8 +41,29 @@ describe("installed shell external CLI account contract", () => {
   });
 
   it("keeps explicit API source intact, including an intentional shared API key", () => {
-    const env = { PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "api", ANTHROPIC_API_KEY: "same-key" };
-    expect(resolveCliChildAccount("claude", env)).toEqual({ source: "api", env });
+    const env = {
+      PI_EXTERNAL_CLAUDE_AUTH_SOURCE: "api",
+      ANTHROPIC_API_KEY: "same-key",
+      CLAUDE_CODE_OAUTH_TOKEN: "wrong-account",
+    };
+    const child = resolveCliChildAccount("claude", env);
+    expect(child.source).toBe("api");
+    expect(child.env.ANTHROPIC_API_KEY).toBe("same-key");
+    expect(child.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("wrong-account");
+  });
+
+  it("keeps selected Codex API key but rejects inherited alternate access token", () => {
+    const parent = {
+      PI_EXTERNAL_CODEX_AUTH_SOURCE: "api", CODEX_API_KEY: "api-key",
+      CODEX_ACCESS_TOKEN: "wrong-workspace", OPENAI_FEDERATION_RULE_ID: "another-workload",
+    };
+    const child = resolveCliChildAccount("codex", parent);
+    expect(child.source).toBe("api");
+    expect(child.env.CODEX_API_KEY).toBe("api-key");
+    expect(child.env.CODEX_ACCESS_TOKEN).toBeUndefined();
+    expect(child.env.OPENAI_FEDERATION_RULE_ID).toBeUndefined();
+    expect(parent.CODEX_ACCESS_TOKEN).toBe("wrong-workspace");
   });
 
   it("drops inherited API/proxy override variables only for the subscription child", () => {
