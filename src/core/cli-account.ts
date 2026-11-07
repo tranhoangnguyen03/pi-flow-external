@@ -66,6 +66,12 @@ export async function verifyCliChildAccount(
   signal?: AbortSignal,
 ): Promise<void> {
   if (account.source === "inherit") return;
+  // These are the documented direct-API override paths. A login status probe
+  // can still report a stored subscription even though exec uses this key.
+  if (account.source === "api" && (
+    (backend === "claude" && Boolean(account.env.ANTHROPIC_API_KEY || account.env.ANTHROPIC_AUTH_TOKEN)) ||
+    (backend === "codex" && Boolean(account.env.CODEX_API_KEY))
+  )) return;
   const args = backend === "claude" ? ["auth", "status", "--json"] : ["login", "status"];
   const result = await runCliProcess({
     label: backend + " authentication check", command: backend, args, cwd,
@@ -75,5 +81,18 @@ export async function verifyCliChildAccount(
   const actual = classifyCliLogin(backend, result.stdout ?? "", result.stderr);
   if (actual !== account.source) {
     throw new Error(backend + " authentication mismatch: selected " + account.source + ", CLI reported " + actual + "; task was not launched");
+  }
+  // Claude exposes a reported account email on some CLI versions. The shell
+  // may provide an expected identity without giving Flow access to secrets.
+  // Codex login status does not reliably expose account identity.
+  const expectedEmail = backend === "claude" ? account.env.PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL : undefined;
+  if (expectedEmail) {
+    let reported: unknown;
+    try { reported = JSON.parse(result.stdout ?? ""); } catch { /* Already classified above. */ }
+    const email = reported && typeof reported === "object" && !Array.isArray(reported)
+      ? (reported as Record<string, unknown>).email : undefined;
+    if (typeof email !== "string" || email.trim().toLowerCase() !== expectedEmail.trim().toLowerCase()) {
+      throw new Error("claude selected subscription account does not match the expected identity; task was not launched");
+    }
   }
 }
