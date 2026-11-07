@@ -51,6 +51,8 @@ process.stdin.on("end", () => {
   fs.appendFileSync(process.env.FLOW_FIXTURE_EVENT_LOG,
     JSON.stringify({ name, selected, hasKey, argv, gotPrompt:body.length > 0 }) + "\n");
   if (hasKey || !selected) { console.error("auth scope failure"); process.exit(17); }
+  if (body.includes("FLOW_CHILD_ERROR")) { console.error("FLOW_SYNTHETIC_ERROR"); process.exit(41); }
+  if (body.includes("FLOW_CHILD_HANG")) { setInterval(() => {}, 1000); return; }
   if (name === "claude") {
     console.log(JSON.stringify({ type:"assistant", message:{id:"fixture", content:[{type:"text", text:"fixture streaming activity"}]} }));
     console.log(JSON.stringify({ type:"result", subtype:"success", is_error:false,
@@ -109,6 +111,9 @@ const checks = [
   { marker:"FLOW_NATIVE_PI_CHILD", tool:"external_delegate", params:{description:"Fixture private Pi model",prompt:"Return SHELL_PI_MODEL_DONE",role:"worker",harness:"pi-local",permission:"readonly"}, expect:"SHELL_PI_MODEL_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_BACKGROUND", tool:"external_delegate", params:{description:"Fixture background execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly",background:true}, expect:"SHELL_CLAUDE_DONE", stage:"wait" },
   { marker:"FLOW_NATIVE_WORKFLOW", tool:"external_workflow", params:{script, background:false}, expect:"SHELL_CLAUDE_DONE", stage:"final" },
+  { marker:"FLOW_NATIVE_ERROR", tool:"external_delegate", params:{description:"Fixture child error reporting",prompt:"FLOW_CHILD_ERROR",role:"worker",harness:"claude",permission:"readonly"}, expect:"FLOW_SYNTHETIC_ERROR", negative:true, stage:"final" },
+  { marker:"FLOW_NATIVE_CANCEL", tool:"external_delegate", params:{description:"Fixture running cancellation",prompt:"FLOW_CHILD_HANG",role:"worker",harness:"claude",permission:"readonly",background:true}, negative:true, stage:"cancel" },
+  { marker:"FLOW_NATIVE_TIMEOUT", tool:"external_delegate", params:{description:"Fixture child deadline expiry",prompt:"FLOW_CHILD_HANG",role:"worker",harness:"claude",permission:"readonly"}, negative:true, stage:"timeout" },
 ];
 const served = new Map(checks.map(check => [check.marker, []]));
 let piChildModelCalls = 0;
@@ -156,6 +161,12 @@ try {
       const results = payload.messages.filter(m => m.role === "tool");
       if (results.length === 0) {
         answer(res,check);
+      } else if (results.length === 1 && check.stage === "cancel") {
+        const id = parseRunId(JSON.stringify(results[0]));
+        answer(res,{tool:"external_runs",params:{action:"cancel",runIds:[id],reason:"fixture user cancellation"}});
+      } else if (results.length === 2 && check.stage === "cancel") {
+        const id = parseRunId(JSON.stringify(results[0]));
+        answer(res,{tool:"external_runs",params:{action:"wait",runIds:[id],mode:"all"}});
       } else if (results.length === 1 && (check.stage === "inspect" || check.stage === "wait")) {
         const receipt = JSON.stringify(results[0]);
         if (check.stage === "inspect") assert.ok(receipt.includes(check.expect), "Foreground call did not settle with child result");
@@ -166,6 +177,10 @@ try {
       } else {
         const finalReceipt = JSON.stringify(results.at(-1));
         if (check.expect) assert.ok(finalReceipt.includes(check.expect), "Missing actual child result: " + finalReceipt.slice(0,1300));
+        if (check.stage === "cancel" || check.stage === "timeout") {
+          assert.match(finalReceipt,/aborted|timeout|timed.out/i, "Expected cancelled/timed-out child receipt");
+        }
+        if (check.negative) assert.ok(!finalReceipt.includes("SHELL_CLAUDE_DONE"), "Failed child was accepted as successful");
         served.get(check.marker).push({ tool:check.tool, checks:results.length });
         answer(res,null);
       }
@@ -189,6 +204,14 @@ try {
     version:5, harnesses:{"pi-local":{model:"study/probe",thinking:"off",preset:"minimal"}}
   }));
   for (const check of checks) {
+    if (check.stage === "timeout") {
+      // Only the final test uses this short cap; all prior paths retain the
+      // package default and must not be made flaky to test a deadline.
+      await fs.writeFile(flowSettings,JSON.stringify({
+        version:5, subagentTimeoutMs:3000,
+        harnesses:{"pi-local":{model:"study/probe",thinking:"off",preset:"minimal"}}
+      }));
+    }
     const started = Date.now();
     try {
       const output = await command(stable, ["print",check.marker,"--home",home,"--cwd",work,"--provider","study","--model","probe","--thinking","off"],120000);
