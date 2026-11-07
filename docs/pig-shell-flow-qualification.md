@@ -4,9 +4,9 @@ Status: **qualification candidate, not accepted**. This document accompanies the
 
 ## Exact baseline
 
-- Original PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. Its reference builder pins extension source commits and records the final archive checksum.
+- Initial inspected PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. PR #2 then advanced to **`eef7162241a8a65c1774043e172f90fe2d082110`**, pinning **Comms 0.2.0** at `39ad5a7888981efbeb4c819b13d31e2f8a7576a7`. Its reference builder pins source commits and records the archive checksum.
 - Original Flow main: `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, package **6.3.0-external.0**. This qualification PR deliberately bumps the candidate Flow package to **6.3.0-external.1**. The baseline remains recorded.
-- Qualification CI checks out that exact PiG shell commit, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
+- Qualification CI checks out current explicitly pinned PiG PR #2 commit `eef7162241a8a65c1774043e172f90fe2d082110`, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
 - The CI script rebuilds the *entire* PiG shell on Linux x64 and macOS ARM64; runs the original shell smoke and then `scripts/e2e/pig-shell-flow.mjs`. The latter installs a relocated shell, launches genuine Flow model tools with a synthetic parent model and fake child CLIs, and writes a structured report. This is **fixture evidence**, not a live-account test.
 
 ## Account ownership and child execution
@@ -34,7 +34,7 @@ Mark individual journeys PASS only after the named test actually completes, with
 |---|---|---|
 | Source pins and separation from #113 | Inspected original PiG and Flow heads | PASS |
 | Unit/typecheck and release metadata | [Flow CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942945), Node 22/26 and release rules | PASS at that revision; recheck final head |
-| Installed PiG rebuilt on Linux/macOS | [PiG shell CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942967) | PASS at that revision; recheck final head |
+| Installed PiG rebuilt on Linux/macOS | [Earlier PiG shell CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942967) used original PiG head 3f121638; current head eef71622 adds Comms 0.2.0 | PASS earlier; current pin needs its own run |
 | Flow delegate/workflow/runs/help, foreground/background and inspect/wait | Native installed shell, synthetic model and fake CLIs | PASS (fixture), NOT RUN (live) |
 | Private models.json custom Pi SDK child | Native installed shell with private-only study/probe provider | PASS (fixture) |
 | CLI auth source, concurrent isolated homes, inherited keys, bad account | Fixture/unit tests; no live subscribed CLI | PASS (fixture), NOT RUN (live) |
