@@ -70,7 +70,7 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
   // environment as the child. Pi's exec() does not expose an env override.
   let account;
   try { account = backend === "claude" || backend === "codex" ? resolveCliChildAccount(backend, env) : undefined; }
-  catch { return backend + ":\\n  Invalid child account-source selection; no CLI was probed."; }
+  catch { return backend + ":\n  Invalid child account-source selection; no CLI was probed."; }
   const probe = async (args: string[]) => {
     if (!account || account.source === "inherit") return exec(backend, args, { timeout: 10_000 });
     try {
@@ -101,6 +101,7 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
       : "  CLI: check failed; check the installation with --version");
   }
 
+  let observedAuth: ReturnType<typeof classifyCliLogin> | undefined;
   let login = "not verified (no supported status check)";
   if (!available) login = "not checked (CLI unavailable)";
   else if (backend === "claude" || backend === "codex") {
@@ -108,6 +109,7 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
       const result = await probe(backend === "claude" ? ["auth", "status", "--json"] : ["login", "status"]);
       login = result.killed ? "not verified (status check timed out)" : "not verified (status check failed)";
       if (!result.killed) {
+        if (result.code === 0) observedAuth = classifyCliLogin(backend, result.stdout, result.stderr);
         if (backend === "claude") {
           let status: unknown;
           try { status = JSON.parse(result.stdout); } catch { /* Unknown output stays unverified. */ }
@@ -129,6 +131,11 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
     }
   }
   lines.push(`  Login: ${login}`);
+  if (account && account.source !== "inherit") {
+    lines.push(observedAuth === account.source
+      ? `  Child auth method: ${observedAuth} reported by CLI; actual model request not tested`
+      : `  Child auth method: ${observedAuth ?? "unverified"}; selected ${account.source} cannot be confirmed`);
+  }
   const set = (ENV_WARNINGS[backend] ?? []).filter(name => Boolean(env[name]));
   if (set.length) lines.push(`  Settings: ${set.join(", ")} set; inherited by child and may affect authentication or routing. Values hidden.`);
   lines.push("  Remaining allowance: unavailable (no quota request made)");
