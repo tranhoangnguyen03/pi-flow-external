@@ -232,6 +232,11 @@ try {
     assert.equal(child.selected, child.name === "claude" ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME);
   }
   assert.ok(piChildModelCalls > 0, "Private models.json was not used by a real Pi SDK child");
+  const receiptDir = path.join(home, ".pi/pi-flow-external/runs");
+  const receipts = (await fs.readdir(receiptDir, { withFileTypes:true })).filter(entry =>
+    entry.isDirectory() && entry.name.startsWith("run_"));
+  assert.ok(receipts.length >= 5, "Flow did not persist private run receipts under installed PiG home");
+  report.privateReceiptCount = receipts.length;
   report.piChildModelCalls = piChildModelCalls;
   report.childCount = children.length;
   report.checks.push({name:"child-scoped-subscription-auth-and-models-json",status:"PASS"});
