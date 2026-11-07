@@ -37,6 +37,14 @@ export function resolveCliChildAccount(backend: CliAccountBackend, inherited: No
   const env = { ...inherited };
   if (source === "subscription") {
     for (const name of SUBSCRIPTION_BLOCKED_ENV[backend]) delete env[name];
+  } else if (source === "api") {
+    // An explicitly selected API key must not accidentally reuse an unrelated
+    // subscriber's OAuth token or a different workload identity. Stored CLI
+    // API login remains available if no direct API key was configured.
+    const alternateAuth = backend === "claude"
+      ? ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_OAUTH_SCOPES"]
+      : ["CODEX_ACCESS_TOKEN", "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"];
+    for (const name of alternateAuth) delete env[name];
   }
   return { source, env };
 }
