@@ -107,7 +107,7 @@ export function codexSubscriptionRoutingProblem(toml: string): string | undefine
   return undefined;
 }
 
-async function verifyCodexSubscriptionRoute(env: NodeJS.ProcessEnv): Promise<void> {
+export async function verifyCodexSubscriptionRoute(env: NodeJS.ProcessEnv): Promise<void> {
   const home = env.CODEX_HOME ?? join(env.HOME || homedir(), ".codex");
   if (!isAbsolute(home)) {
     throw new Error("Codex subscription selection requires an absolute CODEX_HOME path");
