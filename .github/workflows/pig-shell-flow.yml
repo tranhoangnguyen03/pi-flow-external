@@ -34,12 +34,14 @@ jobs:
 
       - name: Verify fixture source syntax
         run: node --check scripts/e2e/pig-shell-flow.mjs
+      - name: Verify alternate fetch script syntax
+        run: node --check scripts/e2e/pig-prefetch.mjs
 
       - name: Checkout current pinned PiG-Agent PR 2 shell
         uses: actions/checkout@v4
         with:
           repository: tranhoangnguyen03/PiG-Agent
-          ref: eef7162241a8a65c1774043e172f90fe2d082110
+          ref: dcae9e35ba8dec105e2bab9b590d9d9ce43e930a
           path: _pig_agent
           persist-credentials: false
 
@@ -50,6 +52,11 @@ jobs:
           # before use. Cache misses download pinned archives normally.
           path: _pig_agent/dist/shell/cache
           key: pig-flow-native-assets-${{ runner.os }}-${{ runner.arch }}-pig0.5.3-node24.15.0-v1
+
+      - name: Prefetch pinned PiG archive through alternate GitHub asset API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/e2e/pig-prefetch.mjs _pig_agent
 
       - name: Set only Flow source pin to this PR commit for test build
         working-directory: _pig_agent
