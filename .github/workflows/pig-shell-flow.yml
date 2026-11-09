@@ -77,13 +77,13 @@ jobs:
           set -o pipefail
           for attempt in 1 2 3; do
             echo "Full pinned shell build, attempt $attempt"
-            if node shell/build.mjs 2>&1 | tee "build-attempt-$attempt.log"; then
+            if node shell/build.mjs 2>&1 | tee "../build-attempt-$attempt.log"; then
               exit 0
             fi
             # A transport 502/503/504 is not a Flow or PiG test failure.
             # Only retry this exact transient download class; any other
             # build/type/checksum failure must fail immediately.
-            if [ "$attempt" -lt 3 ] && grep -Eq 'curl:.*(502|503|504)' "build-attempt-$attempt.log"; then
+            if [ "$attempt" -lt 3 ] && grep -Eq 'curl:.*(502|503|504)' "../build-attempt-$attempt.log"; then
               sleep "$((attempt * 10))"
             else
               echo "Native shell build failed; retaining the failure log."
@@ -110,6 +110,6 @@ jobs:
             _pig_agent/dist/shell/smoke-report.json
             _pig_agent/dist/shell/bundle/release.json
             _pig_agent/dist/shell/*.sha256
-            _pig_agent/build-attempt-*.log
+            build-attempt-*.log
           retention-days: 14
           if-no-files-found: warn
