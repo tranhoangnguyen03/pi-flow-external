@@ -173,7 +173,6 @@ try {
       // Select an exact marker token. Prefix matching misroutes cases such
       // as FLOW_NATIVE_CODEX_REDIRECT to FLOW_NATIVE_CODEX.
       const matches = checks.filter(c => new RegExp("\\b" + c.marker + "\\b").test(text));
-      assert.equal(matches.length, 1, "Expected exactly one fixture marker, got " + matches.map(c => c.marker).join(", "));
       const [check] = matches;
       if (!check && text.includes("SHELL_PI_MODEL_DONE")) {
         // The second request is from the real Pi SDK child, not the root
@@ -182,7 +181,7 @@ try {
         answer(res,null,"SHELL_PI_MODEL_DONE");
         return;
       }
-      assert.ok(check, "Unexpected fixture prompt");
+      assert.equal(matches.length, 1, "Expected exactly one fixture marker, got " + matches.map(c => c.marker).join(", "));
       const tools = (payload.tools || []).map(t => t.function?.name || t.name);
       assert.ok(tools.includes(check.tool), "PiG did not expose tool " + check.tool);
       const results = payload.messages.filter(m => m.role === "tool");
