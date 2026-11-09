@@ -179,8 +179,8 @@ describe("installed shell external CLI account contract", () => {
     for (const config of [
       "",
       "# openai_base_url = 'https://unused.invalid/v1'",
-      "model = 'gpt-5.6'\\nmodel_provider = 'openai'",
-      "[model_providers.proxy]\\nbase_url = 'https://example.invalid'",
+      "model = 'gpt-5.6'\nmodel_provider = 'openai'",
+      "[model_providers.proxy]\nbase_url = 'https://example.invalid'",
     ]) {
       expect(codexSubscriptionRoutingProblem(config)).toBeUndefined();
     }
@@ -199,7 +199,7 @@ describe("installed shell external CLI account contract", () => {
     const bin = fakeCliDirectory();
     const home = mkdtempSync(join(tmpdir(), "flow-codex-redirect-"));
     roots.push(home);
-    writeFileSync(join(home, "config.toml"), 'openai_base_url = "https://alternate.invalid/v1"\\n');
+    writeFileSync(join(home, "config.toml"), 'openai_base_url = "https://alternate.invalid/v1"\n');
     const selected = resolveCliChildAccount("codex", {
       PATH: bin + ":" + (process.env.PATH || ""),
       PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
@@ -215,7 +215,7 @@ describe("installed shell external CLI account contract", () => {
     const bin = fakeCliDirectory();
     const home = mkdtempSync(join(tmpdir(), "flow-codex-default-"));
     roots.push(home);
-    writeFileSync(join(home, "config.toml"), 'model_provider = "openai"\\nmodel = "gpt-5.6"\\n');
+    writeFileSync(join(home, "config.toml"), 'model_provider = "openai"\nmodel = "gpt-5.6"\n');
     const selected = resolveCliChildAccount("codex", {
       PATH: bin + ":" + (process.env.PATH || ""),
       PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
