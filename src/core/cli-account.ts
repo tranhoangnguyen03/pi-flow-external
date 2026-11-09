@@ -1,4 +1,7 @@
 import { runCliProcess } from "./cli-process.ts";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 /** The shell chooses an account source. Flow only applies it to one CLI child. */
 export type CliAccountBackend = "claude" | "codex";
@@ -70,6 +73,58 @@ export function classifyCliLogin(backend: CliAccountBackend, stdout: string, std
   return "unknown";
 }
 
+/**
+ * Codex's login status reports the stored login type, but config.toml can
+ * redirect the builtin provider to another endpoint. Do not assert an
+ * explicit ChatGPT subscription source while the effective route is unclear.
+ *
+ * This is a conservative guard, not a TOML account manager: the shell owns
+ * account profiles. Unused provider definitions are allowed; active provider,
+ * endpoint, and config-profile overrides are not.
+ */
+export function codexSubscriptionRoutingProblem(toml: string): string | undefined {
+  let table = "";
+  for (const line of toml.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const heading = /^\[([^\]]+)\]\s*(?:#.*)?$/.exec(trimmed);
+    if (heading) {
+      table = heading[1].trim();
+      continue;
+    }
+    // Only root values apply without --profile, which Flow does not set.
+    // A selected profile itself must be rejected, as it loads other config
+    // files and would require a full Codex config resolution to verify.
+    if (table) continue;
+    const redirect = /^(?:openai_base_url|chatgpt_base_url)\s*=/.test(trimmed);
+    if (redirect) return "custom endpoint";
+    const provider = /^model_provider\s*=\s*(.*)$/.exec(trimmed);
+    if (provider && !/^(?:"openai"|'openai')\s*(?:#.*)?$/.test(provider[1])) {
+      return "nondefault model provider";
+    }
+    if (/^profile\s*=/.test(trimmed)) return "selected config profile";
+  }
+  return undefined;
+}
+
+async function verifyCodexSubscriptionRoute(env: NodeJS.ProcessEnv): Promise<void> {
+  const home = env.CODEX_HOME ?? join(env.HOME || homedir(), ".codex");
+  if (!isAbsolute(home)) {
+    throw new Error("Codex subscription selection requires an absolute CODEX_HOME path");
+  }
+  let config: string;
+  try {
+    config = await readFile(join(home, "config.toml"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new Error("Codex subscription configuration could not be checked; task was not launched");
+  }
+  const problem = codexSubscriptionRoutingProblem(config);
+  if (problem) {
+    throw new Error("Codex subscription routing cannot be confirmed (" + problem + "); use a clean CODEX_HOME or explicitly select inherit/API. Task was not launched");
+  }
+}
+
 /** Only called for an explicit source; inherit preserves native Pi/Flow behavior. */
 export async function verifyCliChildAccount(
   backend: CliAccountBackend,
@@ -78,6 +133,9 @@ export async function verifyCliChildAccount(
   signal?: AbortSignal,
 ): Promise<void> {
   if (account.source === "inherit") return;
+  if (backend === "codex" && account.source === "subscription") {
+    await verifyCodexSubscriptionRoute(account.env);
+  }
   // These are the documented direct-API override paths. A login status probe
   // can still report a stored subscription even though exec uses this key.
   if (account.source === "api" && (
