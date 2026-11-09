@@ -113,7 +113,11 @@ jobs:
         run: node scripts/e2e/pig-shell-flow.mjs _pig_agent/dist/shell/bundle pig-flow-fixture-report.json
 
       - name: Exercise real PiG TUI modals via pseudo-terminal
-        run: python3 scripts/e2e/pig-tui.py _pig_agent/dist/shell/bundle pig-flow-tui-report.json
+        run: |
+          python3 -c 'import subprocess; subprocess.run(
+            ["python3", "scripts/e2e/pig-tui.py", "_pig_agent/dist/shell/bundle", "pig-flow-tui-report.json"],
+            check=True, timeout=180
+          )'
 
       - name: Preserve evidence whether green or red
         if: always()
