@@ -170,7 +170,11 @@ try {
       const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       const user = payload.messages.filter(m => m.role === "user").at(-1);
       const text = typeof user?.content === "string" ? user.content : JSON.stringify(user?.content || "");
-      const check = checks.find(c => text.includes(c.marker));
+      // Select an exact marker token. Prefix matching misroutes cases such
+      // as FLOW_NATIVE_CODEX_REDIRECT to FLOW_NATIVE_CODEX.
+      const matches = checks.filter(c => new RegExp("\\b" + c.marker + "\\b").test(text));
+      assert.equal(matches.length, 1, "Expected exactly one fixture marker, got " + matches.map(c => c.marker).join(", "));
+      const [check] = matches;
       if (!check && text.includes("SHELL_PI_MODEL_DONE")) {
         // The second request is from the real Pi SDK child, not the root
         // model. It must resolve the private study/probe provider itself.
