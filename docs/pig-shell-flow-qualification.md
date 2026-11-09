@@ -4,9 +4,9 @@ Status: **qualification candidate, not accepted**. This document accompanies the
 
 ## Exact baseline
 
-- Initial inspected PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. PR #2 then advanced to **`eef7162241a8a65c1774043e172f90fe2d082110`**, pinning **Comms 0.2.0** at `39ad5a7888981efbeb4c819b13d31e2f8a7576a7`. Its reference builder pins source commits and records the archive checksum.
+- Initial inspected PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. The current tested shell source is **`dcae9e35ba8dec105e2bab9b590d9d9ce43e930a`**, with Bro **0.36.1** at `738e69f6f7cba6f828b27859c172bcf69100e829` and Comms **0.2.0** at `39ad5a7888981efbeb4c819b13d31e2f8a7576a7`. Its builder records immutable extension commits and archive checksums.
 - Original Flow main: `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, package **6.3.0-external.0**. This qualification PR deliberately bumps the candidate Flow package to **6.3.0-external.1**. The baseline remains recorded.
-- Qualification CI checks out current explicitly pinned PiG PR #2 commit `eef7162241a8a65c1774043e172f90fe2d082110`, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
+- Qualification CI checks out current explicitly pinned PiG PR #2 commit `dcae9e35ba8dec105e2bab9b590d9d9ce43e930a`, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
 - The CI script rebuilds the *entire* PiG shell on Linux x64 and macOS ARM64; runs the original shell smoke and then `scripts/e2e/pig-shell-flow.mjs`. The latter installs a relocated shell, launches genuine Flow model tools with a synthetic parent model and fake child CLIs, and writes a structured report. This is **fixture evidence**, not a live-account test.
 
 ## Account ownership and child execution
@@ -52,6 +52,25 @@ Mark individual journeys PASS only after the named test actually completes, with
 4. Configure a second explicit named account directory for each backend. Set the shell-provided source to `subscription`. Repeat checks with a deliberately inherited API key and with concurrent children. Verify status **and actual account-side usage** (Claude reported identity when available; Codex identity may require a direct human account check). Do not call the choice safe until there is evidence no request was billed to the wrong account. Preserve the parent model credential.
 5. Switch to explicit API source and confirm an intentional shared key still works. Test absent CLI and absent/invalid auth without blocking parent TUI, then resume/retry and relocate the package away from the developer checkout.
 6. Repeat the private `models.json` custom-provider Pi SDK child with a real, authorized provider if available. Do not infer external CLI supports the same model from this check.
+
+## 10 November 2026 continuation
+
+The Flow candidate remains **6.3.0-external.1**, with source changes reviewed in [draft Flow PR #114](https://github.com/tranhoangnguyen03/pi-flow-external/pull/114), not merged. Flow's `main` had not moved when this continuation began.
+
+### Native shell download and TUI
+
+- The original browser release URL intermittently returned HTTP 504. [Flow native CI 42669090302](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42669090302) passed on Linux x64 and macOS ARM64 after an optional GitHub release-asset API prefetch. The API download and normal builder both enforce the original PiG **0.5.3** SHA-256. No different release is substituted.
+- The durable fix belongs to the shell builder. [PiG-Agent draft PR #4](https://github.com/tranhoangnguyen03/PiG-Agent/pull/4) is a small, unmerged change that makes its builder use the same verified GitHub API route with direct-release fallback and offline integrity tests.
+- A separate native pseudo-terminal test launches the **installed PiG TUI** and sends real keyboard commands for `/external`, the control center, configuration/roles, mode, doctor, and runs. This is stronger than RPC registration, but it is **automated TUI verification**, not human review. [Linux TUI CI 42669819492](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42669819492) passed. Check that run's macOS job separately; do not infer its status from Linux.
+- The latest shell pin adds Bro **0.36.1**. The installed fixture explicitly checks Bro, Comms, PiG, Node, and the Flow commit before exercising tools.
+
+### Effective Codex subscription routing
+
+`codex login status` can report a saved ChatGPT login while user-level `config.toml` sends the built-in provider through a custom `openai_base_url` or selects another `model_provider`. Therefore explicit `PI_EXTERNAL_CODEX_AUTH_SOURCE=subscription` now checks the selected `CODEX_HOME/config.toml` **before any Codex CLI probe or execution**. A custom endpoint, nondefault provider, selected config profile, unreadable file, or relative `CODEX_HOME` fails closed. Omitted `model_provider` and explicit `model_provider = "openai"` remain supported. `/external doctor` uses the same check. This is a narrowly scoped routing guard, **not** a full Codex TOML interpreter or a claim that billing was verified. Use a clean account home for explicit subscription selection; choose inherited/API behavior only deliberately.
+
+### Outstanding gates
+
+The CI environment has no installed, logged-in Claude Code or Codex subscription sessions. Actual completed model calls, verified account identity, and charges/usage remain **NOT RUN**. Likewise, an automated TUI pass does not replace hands-on visual review. Full live reload and account rotation still require the target machine; #113 and team auto-start are independent.
 
 ## Acceptance decision
 
