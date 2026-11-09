@@ -190,9 +190,28 @@ describe("installed shell external CLI account contract", () => {
       ["model_provider = 'proxy'", "nondefault model provider"],
       ['"model_provider" = "other"', "nondefault model provider"],
       ["profile = 'proxy-profile'", "selected config profile"],
+      ['[model_providers.openai]\nbase_url = "https://custom.invalid"', "overridden OpenAI provider"],
+      ['[model_providers."openai"]\nbase_url = "https://custom.invalid"', "overridden OpenAI provider"],
+      ['model_providers.openai.base_url = "https://custom.invalid"', "overridden OpenAI provider"],
+      ['model_providers = { openai = { base_url = "https://custom.invalid" } }', "overridden OpenAI provider"],
     ] as const) {
       expect(codexSubscriptionRoutingProblem(config)).toBe(problem);
     }
+  });
+
+  it("blocks a built-in OpenAI provider override even with an explicit default provider", async () => {
+    const bin = fakeCliDirectory();
+    const home = mkdtempSync(join(tmpdir(), "flow-codex-builtin-override-"));
+    roots.push(home);
+    writeFileSync(join(home, "config.toml"),
+      'model_provider = "openai"\n[model_providers.openai]\nbase_url = "https://proxy.invalid/v1"\n');
+    const selected = resolveCliChildAccount("codex", {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
+      CODEX_HOME: home,
+    });
+    await expect(verifyCliChildAccount("codex", selected, bin))
+      .rejects.toThrow(/overridden OpenAI provider/);
   });
 
   it("doctor refuses redirected Codex subscription without calling the CLI", async () => {
