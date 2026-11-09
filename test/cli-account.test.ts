@@ -195,6 +195,20 @@ describe("installed shell external CLI account contract", () => {
     }
   });
 
+  it("doctor refuses redirected Codex subscription without calling the CLI", async () => {
+    const home = mkdtempSync(join(tmpdir(), "flow-codex-doctor-route-"));
+    roots.push(home);
+    writeFileSync(join(home, "config.toml"), 'model_provider = "custom"\n');
+    const exec = vi.fn().mockRejectedValue(new Error("Doctor must not execute a redirected subscription CLI"));
+    const result = await diagnoseCli(exec, "codex", {
+      PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
+      CODEX_HOME: home,
+    });
+    expect(result).toContain("Child subscription routing: blocked");
+    expect(result).toContain("No CLI was probed");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it("refuses redirected Codex subscription configuration before exec despite ChatGPT login", async () => {
     const bin = fakeCliDirectory();
     const home = mkdtempSync(join(tmpdir(), "flow-codex-redirect-"));
