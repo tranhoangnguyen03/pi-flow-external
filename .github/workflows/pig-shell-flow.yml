@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: flow-pig-native-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-flow:
     if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/pig-shell-flow-qualification-112' }}
