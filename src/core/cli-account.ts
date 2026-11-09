@@ -96,13 +96,13 @@ export function codexSubscriptionRoutingProblem(toml: string): string | undefine
     // A selected profile itself must be rejected, as it loads other config
     // files and would require a full Codex config resolution to verify.
     if (table) continue;
-    const redirect = /^(?:openai_base_url|chatgpt_base_url)\s*=/.test(trimmed);
+    const redirect = /^(?:openai_base_url|chatgpt_base_url|"openai_base_url"|"chatgpt_base_url"|\'openai_base_url\'|\'chatgpt_base_url\')\s*=/.test(trimmed);
     if (redirect) return "custom endpoint";
-    const provider = /^model_provider\s*=\s*(.*)$/.exec(trimmed);
+    const provider = /^(?:model_provider|"model_provider"|\'model_provider\')\s*=\s*(.*)$/.exec(trimmed);
     if (provider && !/^(?:"openai"|'openai')\s*(?:#.*)?$/.test(provider[1])) {
       return "nondefault model provider";
     }
-    if (/^profile\s*=/.test(trimmed)) return "selected config profile";
+    if (/^(?:profile|"profile"|\'profile\')\s*=/.test(trimmed)) return "selected config profile";
   }
   return undefined;
 }
