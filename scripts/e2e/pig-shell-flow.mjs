@@ -45,7 +45,7 @@ const name = path.basename(process.argv[1]);
 const argv = process.argv.slice(2).join(" ");
 if (argv === "--version") { console.log(name + " 2.0.0"); process.exit(0); }
 if (argv === "auth status --json" && name === "claude") {
-  console.log(JSON.stringify({ loggedIn:true, authMethod:"oauth_token", email:"fixture@example.test" }));
+  console.log(JSON.stringify({ loggedIn:true, authMethod:process.env.FAKE_CLAUDE_METHOD || "oauth_token", email:process.env.FAKE_CLAUDE_EMAIL || "fixture@example.test" }));
   process.exit(0);
 }
 if (argv === "login status" && name === "codex") {
@@ -96,8 +96,8 @@ const env = {
 const bundleCli = path.join(bundle, release.id);
 let server;
 let serverError;
-async function command(exe, args, timeoutMs = 120000) {
-  const proc = spawn(exe, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
+async function command(exe, args, timeoutMs = 120000, extraEnv = {}) {
+  const proc = spawn(exe, args, { cwd: work, env: {...env, ...extraEnv}, stdio: ["ignore", "pipe", "pipe"] });
   let output = "", stderr = "";
   proc.stdout.on("data", bytes => output += bytes.toString());
   proc.stderr.on("data", bytes => stderr += bytes.toString());
@@ -119,6 +119,11 @@ const checks = [
   { marker:"FLOW_NATIVE_RUNS_LIST", tool:"external_runs", params:{action:"list"}, stage:"final" },
   { marker:"FLOW_NATIVE_CLAUDE", tool:"external_delegate", params:{description:"Fixture Claude execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly"}, expect:"SHELL_CLAUDE_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_CODEX", tool:"external_delegate", params:{description:"Fixture Codex execution",prompt:"Return SHELL_CODEX_DONE",role:"worker",harness:"codex",permission:"readonly"}, expect:"SHELL_CODEX_DONE", stage:"inspect" },
+  { marker:"FLOW_NATIVE_RESUME_CLAUDE", tool:"external_delegate", params:{description:"Fixture Claude session resume",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly"}, expect:"SHELL_CLAUDE_DONE", stage:"inspect", resumeFrom:"claude" },
+  { marker:"FLOW_NATIVE_RESUME_CODEX", tool:"external_delegate", params:{description:"Fixture Codex session resume",prompt:"Return SHELL_CODEX_DONE",role:"worker",harness:"codex",permission:"readonly"}, expect:"SHELL_CODEX_DONE", stage:"inspect", resumeFrom:"codex" },
+  { marker:"FLOW_NATIVE_INHERIT_CLAUDE", tool:"external_delegate", params:{description:"Fixture existing host login",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly"}, expect:"SHELL_CLAUDE_DONE", stage:"inspect", childEnv:{PI_EXTERNAL_CLAUDE_AUTH_SOURCE:"inherit",ANTHROPIC_API_KEY:undefined,ANTHROPIC_AUTH_TOKEN:undefined} },
+  { marker:"FLOW_NATIVE_WRONG_CLAUDE_METHOD", tool:"external_delegate", params:{description:"Reject wrong subscription billing",prompt:"This task must never reach the child",role:"worker",harness:"claude",permission:"readonly"}, expect:"authentication mismatch", negative:true, rejectBeforeLaunch:true, stage:"final", childEnv:{FAKE_CLAUDE_METHOD:"api_key"} },
+  { marker:"FLOW_NATIVE_WRONG_CLAUDE_IDENTITY", tool:"external_delegate", params:{description:"Reject wrong subscription account",prompt:"This task must never reach the child",role:"worker",harness:"claude",permission:"readonly"}, expect:"expected identity", negative:true, rejectBeforeLaunch:true, stage:"final", childEnv:{PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL:"another@example.test"} },
   { marker:"FLOW_NATIVE_PI_CHILD", tool:"external_delegate", params:{description:"Fixture private Pi model",prompt:"Return SHELL_PI_MODEL_DONE",role:"worker",harness:"pi-local",permission:"readonly"}, expect:"SHELL_PI_MODEL_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_BACKGROUND", tool:"external_delegate", params:{description:"Fixture background execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly",background:true}, expect:"SHELL_CLAUDE_DONE", stage:"wait" },
   { marker:"FLOW_NATIVE_WORKFLOW", tool:"external_workflow", params:{script, background:false}, expect:"SHELL_CLAUDE_DONE", stage:"final" },
@@ -127,6 +132,7 @@ const checks = [
   { marker:"FLOW_NATIVE_TIMEOUT", tool:"external_delegate", params:{description:"Fixture child deadline expiry",prompt:"FLOW_CHILD_HANG",role:"worker",harness:"claude",permission:"readonly"}, negative:true, stage:"timeout" },
 ];
 const served = new Map(checks.map(check => [check.marker, []]));
+const previousRunIds = new Map();
 let piChildModelCalls = 0;
 function chunk(delta, done) {
   return "data: " + JSON.stringify({ id:"fixture", model:"probe", object:"chat.completion.chunk", choices:[{index:0,delta,finish_reason:done}]}) + "\n\n";
@@ -182,6 +188,8 @@ try {
         const receipt = JSON.stringify(results[0]);
         if (check.stage === "inspect") assert.ok(receipt.includes(check.expect), "Foreground call did not settle with child result");
         const id = parseRunId(receipt);
+        if (check.marker === "FLOW_NATIVE_CLAUDE") previousRunIds.set("claude",id);
+        if (check.marker === "FLOW_NATIVE_CODEX") previousRunIds.set("codex",id);
         answer(res,{tool:"external_runs",params:check.stage === "inspect"
           ? {action:"inspect",runIds:[id],view:"final"}
           : {action:"wait",runIds:[id],mode:"all"}});
@@ -223,9 +231,20 @@ try {
         harnesses:{"pi-local":{model:"study/probe",thinking:"off",preset:"minimal"}}
       }));
     }
+    if (check.resumeFrom) {
+      const prior = previousRunIds.get(check.resumeFrom);
+      assert.ok(prior, "No completed prior run for " + check.resumeFrom + " resume test");
+      check.params.resume = prior;
+    }
+    const beforeLaunchCount = check.rejectBeforeLaunch
+      ? (await fs.readFile(eventLog,"utf8").catch(() => "")).trim().split("\n").filter(Boolean).length : 0;
     const started = Date.now();
     try {
-      const output = await command(stable, ["print",check.marker,"--home",home,"--cwd",work,"--provider","study","--model","probe","--thinking","off"],120000);
+      const output = await command(stable, ["print",check.marker,"--home",home,"--cwd",work,"--provider","study","--model","probe","--thinking","off"],120000,check.childEnv || {});
+      if (check.rejectBeforeLaunch) {
+        const afterLaunchCount = (await fs.readFile(eventLog,"utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
+        assert.equal(afterLaunchCount,beforeLaunchCount,"Authentication mismatch launched a real child CLI");
+      }
       assert.match(output,/FLOW_NATIVE_FIXTURE_ACCEPTED/);
       assert.ok(served.get(check.marker).length >= 1, "Model tool was never completed");
       report.checks.push({name:check.marker,status:"PASS",ms:Date.now()-started});
@@ -237,6 +256,8 @@ try {
   const children = (await fs.readFile(eventLog,"utf8")).trim().split("\n").map(line => JSON.parse(line));
   assert.ok(children.some(c => c.name === "claude"), "Claude CLI was never invoked");
   assert.ok(children.some(c => c.name === "codex"), "Codex CLI was never invoked");
+  assert.ok(children.some(c => c.name === "claude" && c.argv.includes("--resume fixture-claude-session")), "Claude resume did not forward the exact prior session ID");
+  assert.ok(children.some(c => c.name === "codex" && c.argv.includes("resume fixture-codex-session")), "Codex resume did not forward the exact prior session ID");
   for (const child of children) {
     assert.equal(child.hasKey,false,"Child inherited API credentials despite subscription choice");
     assert.equal(child.gotPrompt,true,"Child prompt missing");
