@@ -93,14 +93,14 @@ export function codexSubscriptionRoutingProblem(toml: string): string | undefine
       // The built-in OpenAI provider may itself be overridden within a
       // model_providers.openai table. A saved ChatGPT login does not prove
       // that a configured custom endpoint won't be used for exec.
-      if (/^model_providers\\s*\\.\\s*["']?openai["']?(?:\\s*\\.|$)/.test(table)) {
+      if (/^model_providers\s*\.\s*["']?openai["']?(?:\s*\.|$)/.test(table)) {
         return "overridden OpenAI provider";
       }
       continue;
     }
     // Dotted and inline TOML provider overrides may appear at the top
     // level too. Reject their routing ambiguity for explicit subscriptions.
-    if (!table && /^(?:model_providers\\s*\\.|model_providers\\s*=)/.test(trimmed)) {
+    if (!table && /^(?:model_providers\s*\.|model_providers\s*=)/.test(trimmed)) {
       return "overridden OpenAI provider";
     }
     // An unused custom provider table is fine; only active root options,
