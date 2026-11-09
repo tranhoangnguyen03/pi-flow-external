@@ -23,6 +23,9 @@ const installedLock = JSON.parse(await fs.readFile(path.join(bundle,"source-lock
 const commsLock = installedLock.extensions.find(extension => extension.id === "comms");
 assert.equal(commsLock?.version,"0.2.0","Selected PiG shell's Comms pin is stale");
 assert.equal(commsLock?.commit,"39ad5a7888981efbeb4c819b13d31e2f8a7576a7","Selected Comms source differs");
+const broLock = installedLock.extensions.find(extension => extension.id === "bro");
+assert.equal(broLock?.version,"0.36.1","Current PiG shell must carry Bro 0.36.1");
+assert.equal(broLock?.commit,"738e69f6f7cba6f828b27859c172bcf69100e829","Pinned Bro source differs");
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pig-flow-installed "));
 const reportPath = path.resolve(process.argv[3] || "pig-flow-fixture-report.json");
 const report = {
