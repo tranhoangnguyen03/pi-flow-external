@@ -201,7 +201,9 @@ try {
         }
         if (check.negative) assert.ok(!finalReceipt.includes("SHELL_CLAUDE_DONE"), "Failed child was accepted as successful");
         served.get(check.marker).push({ tool:check.tool, checks:results.length });
-        answer(res,null);
+        // Simulate a parent that accepts successful work and reports a failed
+        // child as failed. Tool completion is not parent acceptance.
+        answer(res,null,check.negative ? "FLOW_NATIVE_FAILURE_REPORTED" : "FLOW_NATIVE_FIXTURE_ACCEPTED");
       }
     } catch (error) {
       serverError ||= error;
@@ -245,9 +247,9 @@ try {
         const afterLaunchCount = (await fs.readFile(eventLog,"utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
         assert.equal(afterLaunchCount,beforeLaunchCount,"Authentication mismatch launched a real child CLI");
       }
-      assert.match(output,/FLOW_NATIVE_FIXTURE_ACCEPTED/);
+      assert.match(output,check.negative ? /FLOW_NATIVE_FAILURE_REPORTED/ : /FLOW_NATIVE_FIXTURE_ACCEPTED/);
       assert.ok(served.get(check.marker).length >= 1, "Model tool was never completed");
-      report.checks.push({name:check.marker,status:"PASS",ms:Date.now()-started});
+      report.checks.push({name:check.marker,status:"PASS",parent:check.negative?"reported_failure":"accepted_result",ms:Date.now()-started});
     } catch (error) {
       report.checks.push({name:check.marker,status:"FAIL",ms:Date.now()-started,error:String(error)});
       throw error;
@@ -268,6 +270,26 @@ try {
   const receipts = (await fs.readdir(receiptDir, { withFileTypes:true })).filter(entry =>
     entry.isDirectory() && entry.name.startsWith("run_"));
   assert.ok(receipts.length >= 5, "Flow did not persist private run receipts under installed PiG home");
+  const recorded = await Promise.all(receipts.map(async entry => {
+    const base = path.join(receiptDir,entry.name);
+    const summary = JSON.parse(await fs.readFile(path.join(base,"summary.json"),"utf8"));
+    const events = (await fs.readFile(path.join(base,"events.ndjson"),"utf8"))
+      .trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+    return { summary, events };
+  }));
+  const eventTypes = backend => new Set(recorded
+    .filter(record => record.summary.summary?.backend === backend)
+    .flatMap(record => record.events.filter(event => event.type === "backend_event")
+      .map(event => event.data?.event?.type)).filter(Boolean));
+  const claudeEvents = eventTypes("claude");
+  const codexEvents = eventTypes("codex");
+  for (const expected of ["assistant","result"]) {
+    assert.ok(claudeEvents.has(expected), "Claude backend did not persist the streamed " + expected + " event");
+  }
+  for (const expected of ["thread.started","item.completed","turn.completed"]) {
+    assert.ok(codexEvents.has(expected), "Codex backend did not persist the streamed " + expected + " event");
+  }
+  report.backendEvents = { claude:[...claudeEvents],codex:[...codexEvents] };
   report.privateReceiptCount = receipts.length;
   report.piChildModelCalls = piChildModelCalls;
   report.childCount = children.length;
