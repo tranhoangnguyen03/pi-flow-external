@@ -257,7 +257,7 @@ try {
       ? (await fs.readFile(eventLog,"utf8").catch(() => "")).trim().split("\n").filter(Boolean).length : 0;
     const started = Date.now();
     try {
-      const output = await command(stable, ["print",check.marker,"--home",home,"--cwd",work,"--provider","study","--model","probe","--thinking","off"],120000,check.childEnv || {});
+      const output = await command(stable, ["print",check.marker,"--home",home,"--cwd",work,"--provider","study","--model","probe","--thinking","off"],check.stage === "unwaited" ? 30000 : 120000,check.childEnv || {});
       if (check.rejectBeforeLaunch) {
         const afterLaunchCount = (await fs.readFile(eventLog,"utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
         assert.equal(afterLaunchCount,beforeLaunchCount,"Authentication mismatch launched a real child CLI");
