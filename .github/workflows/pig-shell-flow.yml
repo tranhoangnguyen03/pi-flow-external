@@ -34,8 +34,6 @@ jobs:
 
       - name: Verify fixture source syntax
         run: node --check scripts/e2e/pig-shell-flow.mjs
-      - name: Verify alternate fetch script syntax
-        run: node --check scripts/e2e/pig-prefetch.mjs
       - name: Verify TUI fixture syntax
         run: python3 -c "import ast; ast.parse(open('scripts/e2e/pig-tui.py').read())"
 
@@ -43,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tranhoangnguyen03/PiG-Agent
-          ref: dcae9e35ba8dec105e2bab9b590d9d9ce43e930a
+          ref: 8053ad9c6882450977e2bedf17a1dc7e1ef43c52
           path: _pig_agent
           persist-credentials: false
 
@@ -55,10 +53,9 @@ jobs:
           path: _pig_agent/dist/shell/cache
           key: pig-flow-native-assets-${{ runner.os }}-${{ runner.arch }}-pig0.5.3-node24.15.0-v1
 
-      - name: Prefetch pinned PiG archive through alternate GitHub asset API
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/e2e/pig-prefetch.mjs _pig_agent
+      - name: Shell-owned release fallback and lifecycle tests
+        working-directory: _pig_agent
+        run: node --test shell/test/*.test.mjs
 
       - name: Set only Flow source pin to this PR commit for test build
         working-directory: _pig_agent
@@ -82,6 +79,8 @@ jobs:
 
       - name: Build full native PiG shell with real upstream Flow source
         working-directory: _pig_agent
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
           for attempt in 1 2 3; do
