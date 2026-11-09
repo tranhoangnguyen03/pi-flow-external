@@ -38,6 +38,7 @@ const work = path.join(dir, "workspace");
 const home = path.join(dir, "agent home");
 const fixtureBin = path.join(dir, "fixture bins");
 const eventLog = path.join(dir, "child-events.jsonl");
+const redirectedCodexHome = path.join(home, "codex redirected account");
 await fs.mkdir(work, { recursive: true });
 await fs.mkdir(fixtureBin, { recursive: true });
 
@@ -127,6 +128,7 @@ const checks = [
   { marker:"FLOW_NATIVE_INHERIT_CLAUDE", tool:"external_delegate", params:{description:"Fixture existing host login",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly"}, expect:"SHELL_CLAUDE_DONE", stage:"inspect", childEnv:{PI_EXTERNAL_CLAUDE_AUTH_SOURCE:"inherit",ANTHROPIC_API_KEY:undefined,ANTHROPIC_AUTH_TOKEN:undefined} },
   { marker:"FLOW_NATIVE_WRONG_CLAUDE_METHOD", tool:"external_delegate", params:{description:"Reject wrong subscription billing",prompt:"This task must never reach the child",role:"worker",harness:"claude",permission:"readonly"}, expect:"authentication mismatch", negative:true, rejectBeforeLaunch:true, stage:"final", childEnv:{FAKE_CLAUDE_METHOD:"api_key"} },
   { marker:"FLOW_NATIVE_WRONG_CLAUDE_IDENTITY", tool:"external_delegate", params:{description:"Reject wrong subscription account",prompt:"This task must never reach the child",role:"worker",harness:"claude",permission:"readonly"}, expect:"expected identity", negative:true, rejectBeforeLaunch:true, stage:"final", childEnv:{PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL:"another@example.test"} },
+  { marker:"FLOW_NATIVE_CODEX_REDIRECT", tool:"external_delegate", params:{description:"Reject redirected Codex subscription",prompt:"This task must never reach the child",role:"worker",harness:"codex",permission:"readonly"}, expect:"subscription routing cannot be confirmed", negative:true, rejectBeforeLaunch:true, stage:"final", childEnv:{CODEX_HOME:redirectedCodexHome} },
   { marker:"FLOW_NATIVE_PI_CHILD", tool:"external_delegate", params:{description:"Fixture private Pi model",prompt:"Return SHELL_PI_MODEL_DONE",role:"worker",harness:"pi-local",permission:"readonly"}, expect:"SHELL_PI_MODEL_DONE", stage:"inspect" },
   { marker:"FLOW_NATIVE_BACKGROUND", tool:"external_delegate", params:{description:"Fixture background execution",prompt:"Return SHELL_CLAUDE_DONE",role:"worker",harness:"claude",permission:"readonly",background:true}, expect:"SHELL_CLAUDE_DONE", stage:"wait" },
   { marker:"FLOW_NATIVE_WORKFLOW", tool:"external_workflow", params:{script, background:false}, expect:"SHELL_CLAUDE_DONE", stage:"final" },
@@ -242,6 +244,8 @@ try {
   await fs.writeFile(flowSettings,JSON.stringify({
     version:5, harnesses:{"pi-local":{model:"study/probe",thinking:"off",preset:"minimal"}}
   }));
+  await fs.mkdir(redirectedCodexHome, { recursive:true });
+  await fs.writeFile(path.join(redirectedCodexHome,"config.toml"), 'openai_base_url = "https://untrusted.invalid/v1"\n');
   for (const check of checks) {
     if (check.stage === "timeout") {
       // Only the final test uses this short cap; all prior paths retain the
