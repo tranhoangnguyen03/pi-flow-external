@@ -43,6 +43,14 @@ jobs:
           path: _pig_agent
           persist-credentials: false
 
+      - name: Cache verified PiG and Node download archives
+        uses: actions/cache@v4
+        with:
+          # The builder checks every cached archive against source-lock SHA-256
+          # before use. Cache misses download pinned archives normally.
+          path: _pig_agent/dist/shell/cache
+          key: pig-flow-native-assets-${{ runner.os }}-${{ runner.arch }}-pig0.5.3-node24.15.0-v1
+
       - name: Set only Flow source pin to this PR commit for test build
         working-directory: _pig_agent
         env:
@@ -65,7 +73,23 @@ jobs:
 
       - name: Build full native PiG shell with real upstream Flow source
         working-directory: _pig_agent
-        run: node shell/build.mjs
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            echo "Full pinned shell build, attempt $attempt"
+            if node shell/build.mjs 2>&1 | tee "build-attempt-$attempt.log"; then
+              exit 0
+            fi
+            # A transport 502/503/504 is not a Flow or PiG test failure.
+            # Only retry this exact transient download class; any other
+            # build/type/checksum failure must fail immediately.
+            if [ "$attempt" -lt 3 ] && grep -Eq 'curl:.*(502|503|504)' "build-attempt-$attempt.log"; then
+              sleep "$((attempt * 10))"
+            else
+              echo "Native shell build failed; retaining the failure log."
+              exit 1
+            fi
+          done
 
       - name: Run original PiG shell smoke
         working-directory: _pig_agent
@@ -86,5 +110,6 @@ jobs:
             _pig_agent/dist/shell/smoke-report.json
             _pig_agent/dist/shell/bundle/release.json
             _pig_agent/dist/shell/*.sha256
+            _pig_agent/build-attempt-*.log
           retention-days: 14
           if-no-files-found: warn
