@@ -90,11 +90,22 @@ export function codexSubscriptionRoutingProblem(toml: string): string | undefine
     const heading = /^\[([^\]]+)\]\s*(?:#.*)?$/.exec(trimmed);
     if (heading) {
       table = heading[1].trim();
+      // The built-in OpenAI provider may itself be overridden within a
+      // model_providers.openai table. A saved ChatGPT login does not prove
+      // that a configured custom endpoint won't be used for exec.
+      if (/^model_providers\\s*\\.\\s*["']?openai["']?(?:\\s*\\.|$)/.test(table)) {
+        return "overridden OpenAI provider";
+      }
       continue;
     }
-    // Only root values apply without --profile, which Flow does not set.
-    // A selected profile itself must be rejected, as it loads other config
-    // files and would require a full Codex config resolution to verify.
+    // Dotted and inline TOML provider overrides may appear at the top
+    // level too. Reject their routing ambiguity for explicit subscriptions.
+    if (!table && /^(?:model_providers\\s*\\.|model_providers\\s*=)/.test(trimmed)) {
+      return "overridden OpenAI provider";
+    }
+    // An unused custom provider table is fine; only active root options,
+    // a selected profile, or overrides of the builtin OpenAI provider can
+    // affect a default ChatGPT subscription route.
     if (table) continue;
     const redirect = /^(?:openai_base_url|chatgpt_base_url|"openai_base_url"|"chatgpt_base_url"|\'openai_base_url\'|\'chatgpt_base_url\')\s*=/.test(trimmed);
     if (redirect) return "custom endpoint";
