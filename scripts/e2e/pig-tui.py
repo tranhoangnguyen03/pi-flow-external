@@ -47,7 +47,7 @@ report = {
     "checks": [],
 }
 CSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
-OSC = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.S)
+OSC = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 
 def readable(raw):
@@ -55,6 +55,10 @@ def readable(raw):
 
 
 def run_case(name, command, expected, navigation=None):
+    def on_timeout(_signum, _frame):
+        raise TimeoutError(name + " exceeded 45s; terminal UI did not settle")
+    prior_alarm = signal.signal(signal.SIGALRM, on_timeout)
+    signal.alarm(45)
     pid, fd = pty.fork()
     if pid == 0:
         args = [
@@ -121,6 +125,8 @@ def run_case(name, command, expected, navigation=None):
                 raise AssertionError(name + " modal navigation did not open " + repr(navigation["expected"]) + ":\n" + shown[-2200:])
         report["checks"].append({"name": name, "status": "PASS", "keyboard": command, "navigation": bool(navigation)})
     finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prior_alarm)
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -130,10 +136,15 @@ def run_case(name, command, expected, navigation=None):
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        try:
-            os.waitpid(pid, 0)
-        except ChildProcessError:
-            pass
+        # An unresponsive wrapper must not pin the CI runner indefinitely.
+        for _ in range(20):
+            try:
+                done, _status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if done:
+                break
+            time.sleep(0.05)
         os.close(fd)
 
 
