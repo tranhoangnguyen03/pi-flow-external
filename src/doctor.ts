@@ -1,7 +1,7 @@
 import { open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolveCliChildAccount, classifyCliLogin } from "./core/cli-account.ts";
+import { resolveCliChildAccount, classifyCliLogin, verifyCodexSubscriptionRoute } from "./core/cli-account.ts";
 import { runCliProcess } from "./core/cli-process.ts";
 
 // Summary-only, bounded reads: never scan potentially huge backend event logs.
@@ -70,7 +70,17 @@ export async function diagnoseCli(exec: ExtensionAPI["exec"], backend: string, e
   // environment as the child. Pi's exec() does not expose an env override.
   let account;
   try { account = backend === "claude" || backend === "codex" ? resolveCliChildAccount(backend, env) : undefined; }
-  catch { return backend + ":\n  Invalid child account-source selection; no CLI was probed."; }
+  catch { return backend + ":\\n  Invalid child account-source selection; no CLI was probed."; }
+  if (backend === "codex" && account?.source === "subscription") {
+    try {
+      await verifyCodexSubscriptionRoute(account.env);
+    } catch {
+      // Do not call any CLI for an explicit subscription that could route
+      // through a custom provider or endpoint. Status alone cannot prove
+      // where the next request will go; execution uses this same preflight.
+      return "codex:\\n  Child subscription routing: blocked (selected Codex config may redirect requests). No CLI was probed or task launched.";
+    }
+  }
   const probe = async (args: string[]) => {
     if (!account || account.source === "inherit") return exec(backend, args, { timeout: 10_000 });
     try {
