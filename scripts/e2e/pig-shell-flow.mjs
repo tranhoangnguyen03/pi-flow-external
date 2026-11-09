@@ -60,10 +60,10 @@ process.stdin.on("end", () => {
     ? Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)
     : Boolean(process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY);
   fs.appendFileSync(process.env.FLOW_FIXTURE_EVENT_LOG,
-    JSON.stringify({ name, selected, hasKey, argv, gotPrompt:body.length > 0 }) + "\n");
+    JSON.stringify({ name, selected, hasKey, argv, pid:process.pid, shutdownProbe:body.includes("FLOW_SHUTDOWN_HANG"), gotPrompt:body.length > 0 }) + "\n");
   if (hasKey || !selected) { console.error("auth scope failure"); process.exit(17); }
   if (body.includes("FLOW_CHILD_ERROR")) { console.error("FLOW_SYNTHETIC_ERROR"); process.exit(41); }
-  if (body.includes("FLOW_CHILD_HANG")) { setInterval(() => {}, 1000); return; }
+  if (body.includes("FLOW_CHILD_HANG") || body.includes("FLOW_SHUTDOWN_HANG")) { setInterval(() => {}, 1000); return; }
   if (name === "claude") {
     console.log(JSON.stringify({ type:"assistant", message:{id:"fixture", content:[{type:"text", text:"fixture streaming activity"}]} }));
     console.log(JSON.stringify({ type:"result", subtype:"success", is_error:false,
@@ -129,6 +129,7 @@ const checks = [
   { marker:"FLOW_NATIVE_WORKFLOW", tool:"external_workflow", params:{script, background:false}, expect:"SHELL_CLAUDE_DONE", stage:"final" },
   { marker:"FLOW_NATIVE_ERROR", tool:"external_delegate", params:{description:"Fixture child error reporting",prompt:"FLOW_CHILD_ERROR",role:"worker",harness:"claude",permission:"readonly"}, expect:"FLOW_SYNTHETIC_ERROR", negative:true, stage:"final" },
   { marker:"FLOW_NATIVE_CANCEL", tool:"external_delegate", params:{description:"Fixture running cancellation",prompt:"FLOW_CHILD_HANG",role:"worker",harness:"claude",permission:"readonly",background:true}, negative:true, stage:"cancel" },
+  { marker:"FLOW_NATIVE_UNWAITED_SHUTDOWN", tool:"external_delegate", params:{description:"Fixture session shutdown cleanup",prompt:"FLOW_SHUTDOWN_HANG",role:"worker",harness:"claude",permission:"readonly",background:true}, stage:"unwaited" },
   { marker:"FLOW_NATIVE_TIMEOUT", tool:"external_delegate", params:{description:"Fixture child deadline expiry",prompt:"FLOW_CHILD_HANG",role:"worker",harness:"claude",permission:"readonly"}, negative:true, stage:"timeout" },
 ];
 const served = new Map(checks.map(check => [check.marker, []]));
@@ -178,6 +179,20 @@ try {
       const results = payload.messages.filter(m => m.role === "tool");
       if (results.length === 0) {
         answer(res,check);
+      } else if (results.length === 1 && check.stage === "unwaited") {
+        // The background child has genuinely started. Return the parent's
+        // response without wait/cancel and let PiG session_shutdown own cleanup.
+        const id = parseRunId(JSON.stringify(results[0]));
+        let found = false;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const records = (await fs.readFile(eventLog,"utf8").catch(() => "")).trim()
+            .split("\n").filter(Boolean).map(line => JSON.parse(line));
+          if (records.some(row => row.shutdownProbe === true && row.pid > 0)) { found = true; break; }
+          await new Promise(resolve => setTimeout(resolve,100));
+        }
+        assert.ok(found,"Background child never started before session shutdown; cleanup cannot be verified for " + id);
+        served.get(check.marker).push({tool:check.tool, checks:results.length});
+        answer(res,null);
       } else if (results.length === 1 && check.stage === "cancel") {
         const id = parseRunId(JSON.stringify(results[0]));
         answer(res,{tool:"external_runs",params:{action:"cancel",runIds:[id],reason:"fixture user cancellation"}});
@@ -249,6 +264,19 @@ try {
       }
       assert.match(output,check.negative ? /FLOW_NATIVE_FAILURE_REPORTED/ : /FLOW_NATIVE_FIXTURE_ACCEPTED/);
       assert.ok(served.get(check.marker).length >= 1, "Model tool was never completed");
+      if (check.stage === "unwaited") {
+        const records = (await fs.readFile(eventLog,"utf8")).trim().split("\n")
+          .filter(Boolean).map(line => JSON.parse(line));
+        const child = records.find(entry => entry.shutdownProbe === true);
+        assert.ok(child?.pid > 0,"No running child PID was recorded for shutdown test");
+        let stopped = false;
+        for (let attempt = 0; attempt < 50; attempt++) {
+          try { process.kill(child.pid,0); }
+          catch (error) { if (error?.code === "ESRCH") { stopped = true; break; } throw error; }
+          await new Promise(resolve => setTimeout(resolve,100));
+        }
+        assert.ok(stopped,"PiG session shutdown left a launched Flow CLI process alive: " + child.pid);
+      }
       report.checks.push({name:check.marker,status:"PASS",parent:check.negative?"reported_failure":"accepted_result",ms:Date.now()-started});
     } catch (error) {
       report.checks.push({name:check.marker,status:"FAIL",ms:Date.now()-started,error:String(error)});
