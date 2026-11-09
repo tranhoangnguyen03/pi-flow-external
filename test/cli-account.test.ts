@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { diagnoseCli } from "../src/doctor.ts";
-import { classifyCliLogin, resolveCliChildAccount, verifyCliChildAccount } from "../src/core/cli-account.ts";
+import { classifyCliLogin, codexSubscriptionRoutingProblem, resolveCliChildAccount, verifyCliChildAccount } from "../src/core/cli-account.ts";
 import { runCliProcess } from "../src/core/cli-process.ts";
 
 const roots: string[] = [];
@@ -173,6 +173,56 @@ describe("installed shell external CLI account contract", () => {
     expect(report).toContain("Child settings: CLAUDE_CONFIG_DIR set");
     expect(report).toContain("Excluded from child: ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN");
     expect(report).not.toContain("SECRET");
+  });
+
+  it("checks Codex effective provider routing independently from login status", () => {
+    for (const config of [
+      "",
+      "# openai_base_url = 'https://unused.invalid/v1'",
+      "model = 'gpt-5.6'\\nmodel_provider = 'openai'",
+      "[model_providers.proxy]\\nbase_url = 'https://example.invalid'",
+    ]) {
+      expect(codexSubscriptionRoutingProblem(config)).toBeUndefined();
+    }
+    for (const [config, problem] of [
+      ["openai_base_url = 'https://proxy.invalid/v1'", "custom endpoint"],
+      ["'chatgpt_base_url' = 'https://other.invalid'", "custom endpoint"],
+      ["model_provider = 'proxy'", "nondefault model provider"],
+      ['"model_provider" = "other"', "nondefault model provider"],
+      ["profile = 'proxy-profile'", "selected config profile"],
+    ] as const) {
+      expect(codexSubscriptionRoutingProblem(config)).toBe(problem);
+    }
+  });
+
+  it("refuses redirected Codex subscription configuration before exec despite ChatGPT login", async () => {
+    const bin = fakeCliDirectory();
+    const home = mkdtempSync(join(tmpdir(), "flow-codex-redirect-"));
+    roots.push(home);
+    writeFileSync(join(home, "config.toml"), 'openai_base_url = "https://alternate.invalid/v1"\\n');
+    const selected = resolveCliChildAccount("codex", {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
+      CODEX_HOME: home,
+      CODEX_API_KEY: "wrong-api",
+    });
+    await expect(verifyCliChildAccount("codex", selected, bin))
+      .rejects.toThrow(/subscription routing cannot be confirmed.*custom endpoint/);
+    expect(selected.env.CODEX_API_KEY).toBeUndefined();
+  });
+
+  it("accepts implicit/default OpenAI provider for a Codex subscription login", async () => {
+    const bin = fakeCliDirectory();
+    const home = mkdtempSync(join(tmpdir(), "flow-codex-default-"));
+    roots.push(home);
+    writeFileSync(join(home, "config.toml"), 'model_provider = "openai"\\nmodel = "gpt-5.6"\\n');
+    const selected = resolveCliChildAccount("codex", {
+      PATH: bin + ":" + (process.env.PATH || ""),
+      PI_EXTERNAL_CODEX_AUTH_SOURCE: "subscription",
+      CODEX_HOME: home,
+      OPENAI_API_KEY: "parent-key",
+    });
+    await expect(verifyCliChildAccount("codex", selected, bin)).resolves.toBeUndefined();
   });
 
   it("does not launch when explicit subscription resolves to an API login", async () => {
