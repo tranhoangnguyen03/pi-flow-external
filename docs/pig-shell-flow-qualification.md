@@ -1,84 +1,57 @@
-# Flow inside the independently installed PiG shell — #112
+# Flow inside independently installed PiG — qualification #112
 
-Status: **qualification candidate, not accepted**. This document accompanies the upstream changes in the unmerged PR. It does not claim that a passing unit test equals a live subscriber account or a functional human TUI.
+**Status: automated native compatibility PASS on Linux x64 and macOS ARM64; live account and human acceptance NOT RUN.** Keep [Flow PR #114](https://github.com/tranhoangnguyen03/pi-flow-external/pull/114) and [PiG-Agent PR #4](https://github.com/tranhoangnguyen03/PiG-Agent/pull/4) draft/unmerged. No Flow fork. No main Pi automatic specialist startup (#113).
 
-## Exact baseline
+## Exact tested versions and sources
 
-- Initial inspected PiG-Agent shell PR #2: `3f121638feaf9c8a551a2d7001481cd7d936a8c9`, PiG **0.5.3**, Node **24.15.0**. The current tested shell source is **`dcae9e35ba8dec105e2bab9b590d9d9ce43e930a`**, with Bro **0.36.1** at `738e69f6f7cba6f828b27859c172bcf69100e829` and Comms **0.2.0** at `39ad5a7888981efbeb4c819b13d31e2f8a7576a7`. Its builder records immutable extension commits and archive checksums.
-- Original Flow main: `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, package **6.3.0-external.0**. This qualification PR deliberately bumps the candidate Flow package to **6.3.0-external.1**. The baseline remains recorded.
-- Qualification CI checks out current explicitly pinned PiG PR #2 commit `dcae9e35ba8dec105e2bab9b590d9d9ce43e930a`, changes **only** the test build's Flow source commit and expected candidate package version in the shell lock, and creates a **local, CI-only** shell provenance commit. Its generated `release.json` contains the exact tested Flow commit. This does not amend PiG-Agent PR #2 or publish a release. The Flow package version bump belongs to this PR.
-- The CI script rebuilds the *entire* PiG shell on Linux x64 and macOS ARM64; runs the original shell smoke and then `scripts/e2e/pig-shell-flow.mjs`. The latter installs a relocated shell, launches genuine Flow model tools with a synthetic parent model and fake child CLIs, and writes a structured report. This is **fixture evidence**, not a live-account test.
+- Flow base `83314a17e34b6d84796a1d88cf6c1ced30d4d3ab`, candidate **6.3.0-external.1** in [PR #114](https://github.com/tranhoangnguyen03/pi-flow-external/pull/114). The [passing native run](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42756857238) tested code commit **`3312ed8ab49207828f246d958481ae0202cd38a3`**.
+- Shell owner [PiG-Agent PR #4](https://github.com/tranhoangnguyen03/PiG-Agent/pull/4) exact commit **`943a23ceb70678e3d2908b090adced05fa297c48`**, stacked on PiG-Agent PR #2. This source includes the verified asset API fallback and macOS canonical session path fix.
+- Runtime **PiG 0.5.3**, **Node 24.15.0**; installed **Bro 0.36.1**, **Comms 0.2.0**, **Flow 6.3.0-external.1**. CI locally rewrites only Flow's entry in the pinned shell source lock to the checked-out Flow commit/version, then makes a test-only local git commit so the shell builder's clean checkout rule remains intact. The published release is not changed.
 
-## Account ownership and child execution
+## Ownership and behavior
 
-PiG-Agent owns account-source selection and private model configuration. Flow consumes the resulting **process environment** and does not add an account picker, duplicate CLI account registry, or global `process.env` mutation. The default is `inherit`, which preserves normal native Pi and host CLI behavior. Shared host login and shared API keys remain supported.
+**PiG-Agent owns** the installed home, shell launcher, private `models.json` and account/profile choices. Its [issue #5](https://github.com/tranhoangnguyen03/PiG-Agent/issues/5) tracks the still-missing user-facing account selection and optional model seeding. The shell does **not** copy the whole main Pi home.
 
-For a selected **Claude Code subscription**, the shell may set `PI_EXTERNAL_CLAUDE_AUTH_SOURCE=subscription` and `CLAUDE_CONFIG_DIR=/selected/claude-home`. For a **Codex ChatGPT subscription**, it may set `PI_EXTERNAL_CODEX_AUTH_SOURCE=subscription` and `CODEX_HOME=/selected/codex-home`. Both env homes apply to the selected CLI only; don't infer different accounts from two different directories. Explicit `api` and default `inherit` are also supported.
+**Flow owns** external child execution, models resolved through the Pi SDK, supervision, receipts, cancellation, resumption and observations. The default child CLI auth source `inherit` preserves host behavior. For explicitly selected `subscription` or `api`, Flow creates a per-child environment and uses it for account status probes and actual execution. No parent `process.env` mutation, no account selection UI in Flow.
 
-When `subscription` is explicit, Flow builds a *child-only* env. It removes Claude's inherited `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, API base URL, alternate `CLAUDE_CODE_OAUTH_TOKEN`/refresh-token settings and Bedrock/Vertex/Foundry switches. For Codex, it removes `CODEX_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, alternate `CODEX_ACCESS_TOKEN`, and workload-identity variables. These overrides otherwise risk another account or billing source. It then runs **that CLI's** auth-status command with **that exact env** and refuses execution if the reported method cannot be confirmed as subscription. Claude's reported email can be compared to optional `PI_EXTERNAL_CLAUDE_EXPECTED_EMAIL`; a mismatch blocks launch. Codex CLI login status presently confirms the **login type**, not a unique ChatGPT account identity: this remains a live-host verification item. The CLI may change its status schema; unknown status fails closed for explicit selection.
+A subscription choice remains a **request**, not proof of who will pay:
+- Claude child filters inherited API key/token/endpoint variables, but Claude's user, project and managed settings and `apiKeyHelper` can affect the effective credential. `claude auth status` is not a billable-request receipt.
+- Codex child filters inherited API keys/endpoint variables. For explicit ChatGPT subscription selection, Flow also checks a narrow set of root `CODEX_HOME/config.toml` selectors (`openai_base_url`, `chatgpt_base_url`, nondefault `model_provider`, selected `profile`). `codex login status` alone cannot establish an effective account or request endpoint. Neither can the static scan.
+- Reviewed `openai/codex` **rust-v0.165.0** source: default provider is `openai`; configured `model_providers.openai` does not replace that built-in provider in the inspected provider merge. The valid form `[model_providers]\nopenai = { base_url = "..." }` does **not**, by itself, prove a redirected billable request in that version. Flow no longer rejects provider-map shapes on a false inference. CLI version drift and higher-priority configuration need re-qualification.
+- Custom Pi SDK providers belong in the installed private `PI_CODING_AGENT_DIR/models.json`; external CLI model catalogs are not interchangeable with that registry.
 
-For explicit `api`, Flow respects an explicitly inherited API key but removes conflicting OAuth/workload credentials from that child. For `inherit`, it does not strip or select anything. No child-scoped key or subscription rule changes the parent PiG model's auth storage. CLI execution, resume and workflow children all pass through the same launcher. Doctor reports reported login method and warns when a requested source differs. **A login-status probe is not proof of a charged request or quota.** Exercise one actual model request and inspect the account in the provider's usage/billing UI before accepting an account-routing claim.
+## Evidence matrix
 
-## Model and storage boundary
-
-- Pi SDK children resolve the installed private `PI_CODING_AGENT_DIR/models.json` and `auth.json` via `ModelRuntime.create`; `ctx.modelRegistry` retains parent runtime registrations. A dedicated fixture adds a `study/probe` model **only** to the installed agent's `.pi/models.json`, registers `pi-local`, and uses a real Pi SDK child.
-- Claude Code and Codex maintain their own model registries and subscriptions. A Pi `models.json` entry does not change CLI model catalogs.
-- Flow settings live under `<private-agent-dir>/pi-flow-external/settings.json`; its run evidence remains under the private Flow run directory. Installed shell release code does not share the whole user's main Pi home.
-- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` must be chosen by the installed-shell launcher or user's explicit host environment. **PiG-Agent PR #2 does not yet implement a user-facing account-source/profile selector or a models.json seed/share policy**; this Flow PR does not claim to deliver them.
-
-## Evidence gate
-
-Mark individual journeys PASS only after the named test actually completes, with machine/OS, commit SHA, release ID and logs attached. FAIL retains diagnostic evidence. NOT RUN covers any unavailable live account, no local shell, or a human TUI action not exercised. Never infer one from another.
-
-| Journey | Verified scope and evidence | Result |
+| Gate | Result | Evidence |
 |---|---|---|
-| Source pins and separation from #113 | Inspected original PiG and Flow heads | PASS |
-| Unit/typecheck and release metadata | [Flow CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942945), Node 22/26 and release rules | PASS at that revision; recheck final head |
-| Installed PiG rebuilt on Linux/macOS | [Earlier PiG shell CI at 105a015c](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42350942967) used original PiG head 3f121638; current head eef71622 adds Comms 0.2.0 | PASS earlier; current pin needs its own run |
-| Flow delegate/workflow/runs/help, foreground/background and inspect/wait | Native installed shell, synthetic model and fake CLIs | PASS (fixture), NOT RUN (live) |
-| Private models.json custom Pi SDK child | Native installed shell with private-only study/probe provider | PASS (fixture) |
-| CLI auth source, concurrent isolated homes, inherited keys, bad account | Fixture/unit tests; no live subscribed CLI | PASS (fixture), NOT RUN (live) |
-| Child errors, cancel and deadline | [Linux native fixture at 75a5011](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42351331887) passed; other platform/final revision separate | PASS (Linux fixture); NOT RUN (live) |
-| Human PiG modal navigation: /external, pickers, doctor and inspection | No interactive terminal user in CI | NOT RUN |
-| Actual Claude host login, selected account and billed request | Live subscription and billing receipt unavailable | NOT RUN |
-| Actual Codex ChatGPT identity, effective auth and billed request | CLI status does not prove unique ChatGPT identity; live billing unavailable | NOT RUN |
-| Shutdown/reload cleanup and manual main Pi/specialist pairing | Needs host and two running agent sessions | NOT RUN |
+| Flow Node 22/26 unit tests, typecheck and release metadata | **PASS** for tested runtime code | [CI 42756857221](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42756857221) |
+| PiG-Agent owner-side unit tests, native shell builds and package/RPC smoke on Linux x64 + macOS ARM64 | **PASS** | [PR #4 run 42756789789](https://github.com/tranhoangnguyen03/PiG-Agent/actions/runs/42756789789) |
+| Full installed PiG shell + Flow tools (`external_delegate`, `external_workflow`, `external_runs`, `external_help`), synthetic Claude/Codex children, structured receipts, foreground/background, streaming evidence, inspect/wait, cancel, resume, timeout, error and shutdown | **PASS — fixture, Linux + macOS** | [Flow native run 42756857238](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42756857238) |
+| Installed-only custom `models.json` Pi SDK child | **PASS — synthetic provider on both OS** | Same Flow native run |
+| Native PiG TUI keyboard for `/external`, configuration/roles, mode, doctor and runs | **PASS — automated on both OS** | Same Flow native run, not a human visual review |
+| Real Claude Code and Codex authenticated model calls, chosen account, effective billing source/charges | **NOT RUN** | No authorized signed-in CLI accounts on CI hosts |
+| Full human TUI review, real account rotation/reload, manual main Pi ↔ installed specialist pairing | **NOT RUN** | Requires target host; separate from fixture |
 
-### Manual acceptance on a real host
+**Full native build IDs for code commit `3312ed8...`:**
+- Linux x64: `0.1.0-preview.1-linux-x64-bbce3db3e823f324` ([artifact](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42756857238/artifacts/13736071511)).
+- macOS ARM64: `0.1.0-preview.1-darwin-arm64-2ab9f46fe1c40e25` ([artifact](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42756857238/artifacts/13736660344)).
 
-1. Install a shell built with the **exact Flow PR head** (check `info`/`release.json`), under an independent `PIG_AGENT_HOME`. Use a non-default directory containing a space; run `new`, another `new`, `doctor`, and exact `resume`. Confirm settings and run receipts remain in that home's private `.pi`.
-2. In the **real terminal**, run `/external`, navigate the control center, switch modes, edit configuration, select a role, run `/external doctor`, and inspect runs. Test input, Esc, scroll, resize, cancellation and shutdown/reload. Record actual observations, not screenshots of registered commands.
-3. Configure host/default Claude and Codex logins, then do **actual** `external_delegate` foreground and background calls and `external_workflow`. Inspect/wait/cancel using `external_runs` and inspect error/timeout receipts. Confirm the child completed and the parent accepted the result separately; check that shutdown/reload does not leave orphaned work.
-4. Configure a second explicit named account directory for each backend. Set the shell-provided source to `subscription`. Repeat checks with a deliberately inherited API key and with concurrent children. Verify status **and actual account-side usage** (Claude reported identity when available; Codex identity may require a direct human account check). Do not call the choice safe until there is evidence no request was billed to the wrong account. Preserve the parent model credential.
-5. Switch to explicit API source and confirm an intentional shared key still works. Test absent CLI and absent/invalid auth without blocking parent TUI, then resume/retry and relocate the package away from the developer checkout.
-6. Repeat the private `models.json` custom-provider Pi SDK child with a real, authorized provider if available. Do not infer external CLI supports the same model from this check.
+### Historical failure and correction
 
-## 10 November 2026 continuation
+[Run 42674933619](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42674933619) **FAILED on macOS** in the PiG lifecycle test comparing `/var/...` with `/private/var/...`. Six new archive tests passed, but native compilation, Flow fixtures and TUI were **NOT RUN** in that failed job. PiG-Agent PR #4 now compares canonical paths in the test **and** fixes `resume`: compare a realpath transcript to a realpath sessions root so macOS aliases work without accepting outside files. A dedicated symlinked-home regression preserves the private-home boundary. The new run **42756857238 passed fully on both OS**; the old failure remains recorded.
 
-The Flow candidate remains **6.3.0-external.1**, with source changes reviewed in [draft Flow PR #114](https://github.com/tranhoangnguyen03/pi-flow-external/pull/114), not merged. Flow's `main` had not moved when this continuation began.
+### Ongoing compatibility policy
 
-### Native shell download and TUI
+Expensive native builds run on the qualification PR while it is open, then **weekly (Monday 03:17 UTC)** and by manual `workflow_dispatch` after merge. They do **not** run on every ordinary subsequent PR. The fixture reads the checked-out Flow version from `package.json`. The PiG-Agent source stays pinned to a reviewed exact SHA until someone deliberately updates it. This is periodic compatibility coverage, not automatic testing against every newest upstream shell or CLI.
 
-- The original browser release URL intermittently returned HTTP 504. [Flow native CI 42669090302](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42669090302) passed on Linux x64 and macOS ARM64 after an optional GitHub release-asset API prefetch. The API download and normal builder both enforce the original PiG **0.5.3** SHA-256. No different release is substituted.
-- The durable fix belongs to the shell builder. [PiG-Agent draft PR #4](https://github.com/tranhoangnguyen03/PiG-Agent/pull/4) is a small, unmerged change that makes its builder use the same verified GitHub API route with direct-release fallback and offline integrity tests.
-- A separate native pseudo-terminal test launches the **installed PiG TUI** and sends real keyboard commands for `/external`, the control center, configuration/roles, mode, doctor, and runs. This is stronger than RPC registration, but it is **automated TUI verification**, not human review. [Linux TUI CI 42669819492](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42669819492) passed. Check that run's macOS job separately; do not infer its status from Linux.
-- The latest shell pin adds Bro **0.36.1**. The installed fixture explicitly checks Bro, Comms, PiG, Node, and the Flow commit before exercising tools.
+## Required live host acceptance (still NOT RUN)
 
-### Effective Codex subscription routing
-
-`codex login status` can report a saved ChatGPT login while user-level `config.toml` sends the built-in provider through a custom `openai_base_url` or selects another `model_provider`. Therefore explicit `PI_EXTERNAL_CODEX_AUTH_SOURCE=subscription` now checks the selected `CODEX_HOME/config.toml` **before any Codex CLI probe or execution**. A custom endpoint, nondefault provider, selected config profile, unreadable file, or relative `CODEX_HOME` fails closed. Omitted `model_provider` and explicit `model_provider = "openai"` remain supported. `/external doctor` uses the same check. This is a narrowly scoped routing guard, **not** a full Codex TOML interpreter or a claim that billing was verified. Use a clean account home for explicit subscription selection; choose inherited/API behavior only deliberately.
-
-### Outstanding gates
-
-The CI environment has no installed, logged-in Claude Code or Codex subscription sessions. Actual completed model calls, verified account identity, and charges/usage remain **NOT RUN**. Likewise, an automated TUI pass does not replace hands-on visual review. Full live reload and account rotation still require the target machine; #113 and team auto-start are independent.
-
-## Reviewer reconciliation — macOS, Codex route, and ongoing gate
-
-- **macOS current-head evidence correction:** [native run 42674933619](https://github.com/tranhoangnguyen03/pi-flow-external/actions/runs/42674933619) completed with **FAIL** in the PiG-Agent shell lifecycle test, *before* native compilation, installed Flow fixture or TUI. On macOS, `/var/...` resolves to `/private/var/...`; the test compared those paths as raw strings. The six new shell archive tests **PASS** on that runner. PiG-Agent [PR #4](https://github.com/tranhoangnguyen03/PiG-Agent/pull/4) now compares canonical paths in the test and fixes an associated real shell bug: the `resume` path was canonicalized but the agent session-root path was not. That could reject a valid macOS session. The Flow native workflow is pinned to the amended PiG-Agent source. **A new macOS run must pass before acceptance**; the old failure is not rewritten as a PASS.
-- **Supported Codex behavior, not TOML guesswork:** Inspected upstream `openai/codex` tag **`rust-v0.165.0`**, in `codex-rs/model-provider-info/src/lib.rs` (`merge_configured_model_providers`) and `codex-rs/core/src/config/mod.rs`. The default provider is `openai` when no provider is selected. `openai_base_url` is passed into the built-in provider constructor. The configured provider merge leaves an existing built-in `openai` entry unchanged (and some config validation also disallows reserved IDs). A table like `[model_providers]\nopenai = { base_url = "..." }` does **not** establish redirected billing in this version. The preflight no longer claims that such provider-table shapes override the built-in provider. It checks the narrower root options `openai_base_url`, `chatgpt_base_url`, `model_provider`, and explicit `profile`. This remains **only a partial static check**, not an interpreter for all layered Codex configuration or an account/billing guarantee. Version drift requires re-qualification.
-- **Claude Code:** Official Claude settings can specify `apiKeyHelper` and load user, project, or managed settings in addition to environment variables. Removing inherited `ANTHROPIC_API_KEY` does **not** prove the effective Claude request uses a subscription. Neither the CLI status probe nor the configured account directory is a billing receipt. Do not claim otherwise. Live tests must inspect effective settings, make one authorized request and check account-side usage for both Claude and Codex.
-- **CI lifetime:** Expensive full native builds run automatically only on this qualification branch while the PR is open. After merge, the native workflow has a **weekly Monday 03:17 UTC** schedule and a **manual dispatch** gate, not automatic execution on every unrelated PR. The script derives the Flow candidate version from the checked-out `package.json` rather than keeping `6.3.0-external.1` forever. The PiG-Agent source remains an **exact, reviewed SHA pin**, so any new shell version needs a deliberate update. Fast Flow unit checks remain on normal PRs.
+1. Install an exact pinned shell under a separate `PIG_AGENT_HOME` with a space in its path. Exercise first use, fresh session, exact resume, rollback and release change while checking private state.
+2. In a **human-operated terminal**, open `/external`, configure agents/roles/mode, diagnose auth, browse runs/workflows/help; check rendering, Esc, scroll, resize, loading and reload.
+3. Run actual Claude Code and Codex foreground/background delegates, workflow, resume and cancellation with known host logins. Check child completion and parent acceptance separately; confirm shutdown cleanup.
+4. Deliberately select different authenticated account homes, run concurrent children with an inherited API key in the parent, and compare the **actual effective account and account-side usage** to expected subscription/API billing. Include Claude `apiKeyHelper` and managed/project settings, and Codex layered config. A status command or config scan alone is not evidence.
+5. Verify intentional API-key sharing, absent CLI, invalid auth, private custom Pi provider/model with an actual authorized endpoint and fresh/resumed sessions. Do not copy the main Pi home or silently change its credentials.
 
 ## Acceptance decision
 
-An unmerged PR and pin-ready commit are **implementation output**, not accepted qualification. Native CI checks only fixture coverage. Human TUI and live account checks stay **NOT RUN** until someone runs them on the target host. Report any failure precisely, then fix upstream without muting test assertions. #113, automatic specialists and future team wrappers stay out of scope.
+**Automated native compatibility is green. Full #112 qualification is not complete.** Keep the issue and both PRs open/draft until live account/billing and human interaction checks are independently recorded. #113 and future team startup remain separate, non-blocking work.
