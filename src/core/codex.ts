@@ -13,6 +13,7 @@ import type { PermissionTier, SubagentProfile, SubagentUsage, ThinkingLevel } fr
 import { selectorHarness } from "../profiles.ts";
 import { buildPermissionArgs } from "./permissions.ts";
 import { runCliProcess } from "./cli-process.ts";
+import { resolveCliChildAccount, verifyCliChildAccount } from "./cli-account.ts";
 
 const CODEX_COMMAND = "codex";
 
@@ -400,12 +401,15 @@ export async function spawnCodexSubagent(params: {
       resumeSessionId: params.resumeSessionId,
     });
 
+    const childAccount = resolveCliChildAccount("codex");
+    await verifyCliChildAccount("codex", childAccount, params.ctx.cwd, params.signal);
     emitter.emit();
     emitter.startHeartbeat();
     const closeResult = await runCliProcess({
       label: "codex",
       command: CODEX_COMMAND,
       args,
+      env: childAccount.env,
       cwd: params.ctx.cwd,
       stdin: taskPrompt,
       signal: params.signal,

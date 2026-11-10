@@ -2,6 +2,16 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.3.0-external.1] - 2026-11-07
+
+### Fixed
+- Explicit Claude/Codex subscription selection now builds a child-scoped environment, strips conflicting inherited API overrides and verifies the CLI-reported authentication method before a task. Default inherited host/API authentication and the parent's Pi model credentials are unchanged.
+- External CLI execution and resume paths use the same isolated environment; `/external doctor` tests explicit selections under it.
+
+### Verification
+- Add parallel child environment and status-mismatch regression tests, plus a full PiG 0.5.3 / Node 24.15.0 installed-shell test against the Flow source commit. Fixture mode executes Flow's four model tools and a private `models.json` Pi SDK child; real host login, interactive TUI and account-side billing remain separate acceptance gates.
+- See `docs/pig-shell-flow-qualification.md` for evidence limits and manual verification requirements.
+
 ## [6.3.0-external.0] - 2026-11-05
 
 ### Added
