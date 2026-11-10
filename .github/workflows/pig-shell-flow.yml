@@ -4,6 +4,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # After merge, keep a low-frequency native compatibility check. Every
+  # ordinary PR still uses fast unit CI; manual dispatch is the release gate.
+  schedule:
+    - cron: '17 3 * * 1'
 
 permissions:
   contents: read
@@ -14,7 +18,7 @@ concurrency:
 
 jobs:
   native-flow:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/pig-shell-flow-qualification-112' }}
+    if: ${{ github.event_name != 'pull_request' || github.head_ref == 'feat/pig-shell-flow-qualification-112' }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -41,11 +45,11 @@ jobs:
       - name: Verify TUI fixture syntax
         run: python3 -c "import ast; ast.parse(open('scripts/e2e/pig-tui.py').read())"
 
-      - name: Checkout current pinned PiG-Agent PR 2 shell
+      - name: Checkout exact PiG-Agent shell compatibility source
         uses: actions/checkout@v4
         with:
           repository: tranhoangnguyen03/PiG-Agent
-          ref: 8053ad9c6882450977e2bedf17a1dc7e1ef43c52
+          ref: 797d322130f72c116b3d31bb36a58d3f88e61ee5
           path: _pig_agent
           persist-credentials: false
 
@@ -70,10 +74,11 @@ jobs:
             import fs from "node:fs";
             const p="shell/source-lock.json";
             const lock=JSON.parse(fs.readFileSync(p,"utf8"));
+            const pkg=JSON.parse(fs.readFileSync("../package.json","utf8"));
             const ext=lock.extensions.find(x=>x.id==="external");
-            if (!ext || ext.version!=="6.3.0-external.0" || !/^[a-f0-9]{40}$/.test(process.env.FLOW_SHA)) throw new Error("Unexpected Flow pin");
+            if (!ext || ext.package!==pkg.name || !/^[a-f0-9]{40}$/.test(process.env.FLOW_SHA)) throw new Error("Unexpected Flow source or shell pin");
             ext.commit=process.env.FLOW_SHA;
-            ext.version="6.3.0-external.1";
+            ext.version=pkg.version;
             fs.writeFileSync(p,JSON.stringify(lock,null,2)+"\n");
           '
           # The shell build intentionally rejects dirty checkouts. Commit the
