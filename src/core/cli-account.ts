@@ -78,9 +78,11 @@ export function classifyCliLogin(backend: CliAccountBackend, stdout: string, std
  * redirect the builtin provider to another endpoint. Do not assert an
  * explicit ChatGPT subscription source while the effective route is unclear.
  *
- * This is a conservative guard, not a TOML account manager: the shell owns
- * account profiles. Unused provider definitions are allowed; active provider,
- * endpoint, and config-profile overrides are not.
+ * This narrow guard catches a few known root-level selectors for Codex
+ * 0.165.0. A model_providers.openai table is not an effective override in
+ * that version. Config can also come from higher-precedence sources and
+ * change between preflight and exec, so status + this scan CANNOT prove the
+ * actual request endpoint, account, or billing method.
  */
 export function codexSubscriptionRoutingProblem(toml: string): string | undefined {
   let table = "";
@@ -90,22 +92,13 @@ export function codexSubscriptionRoutingProblem(toml: string): string | undefine
     const heading = /^\[([^\]]+)\]\s*(?:#.*)?$/.exec(trimmed);
     if (heading) {
       table = heading[1].trim();
-      // The built-in OpenAI provider may itself be overridden within a
-      // model_providers.openai table. A saved ChatGPT login does not prove
-      // that a configured custom endpoint won't be used for exec.
-      if (/^model_providers\s*\.\s*["']?openai["']?(?:\s*\.|$)/.test(table)) {
-        return "overridden OpenAI provider";
-      }
       continue;
     }
-    // Dotted and inline TOML provider overrides may appear at the top
-    // level too. Reject their routing ambiguity for explicit subscriptions.
-    if (!table && /^(?:model_providers\s*\.|model_providers\s*=)/.test(trimmed)) {
-      return "overridden OpenAI provider";
-    }
-    // An unused custom provider table is fine; only active root options,
-    // a selected profile, or overrides of the builtin OpenAI provider can
-    // affect a default ChatGPT subscription route.
+    // Codex 0.165.0 keeps the compiled-in "openai" provider when an entry
+    // with the same ID appears in model_providers; some config versions reject
+    // reserved IDs even earlier. Such a table does not prove API billing.
+    // Only inspect effective root routing selectors here. This guard is not a
+    // full TOML interpreter or a provider/billing attestation.
     if (table) continue;
     const redirect = /^(?:openai_base_url|chatgpt_base_url|"openai_base_url"|"chatgpt_base_url"|\'openai_base_url\'|\'chatgpt_base_url\')\s*=/.test(trimmed);
     if (redirect) return "custom endpoint";
