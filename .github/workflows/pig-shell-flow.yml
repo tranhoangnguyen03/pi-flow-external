@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tranhoangnguyen03/PiG-Agent
-          ref: 797d322130f72c116b3d31bb36a58d3f88e61ee5
+          ref: 943a23ceb70678e3d2908b090adced05fa297c48
           path: _pig_agent
           persist-credentials: false
 
