@@ -12,11 +12,12 @@ import { createServer } from "node:http";
 
 const bundle = path.resolve(process.argv[2] || "_pig_agent/dist/shell/bundle");
 const release = JSON.parse(await fs.readFile(path.join(bundle, "release.json"), "utf8"));
+const expectedFlowVersion = JSON.parse(await fs.readFile(new URL("../../package.json", import.meta.url), "utf8")).version;
 const selectedFlow = release.extensions.find(extension => extension.id === "external");
 assert.ok(selectedFlow, "Installed PiG has no Flow package");
 assert.ok(/^[a-f0-9]{40}$/.test(process.env.FLOW_EXPECTED_SHA || ""), "Must supply the exact Flow commit under test");
 assert.equal(selectedFlow.sourceCommit,process.env.FLOW_EXPECTED_SHA,"Installed Flow commit is not the PR head");
-assert.equal(selectedFlow.version,"6.3.0-external.1","Installed Flow package version is not the candidate");
+assert.equal(selectedFlow.version,expectedFlowVersion,"Installed Flow package version differs from checked-out Flow source");
 assert.equal(release.runtime.pig,"0.5.3","PiG version silently changed");
 assert.equal(release.runtime.node,"24.15.0","Node version silently changed");
 const installedLock = JSON.parse(await fs.readFile(path.join(bundle,"source-lock.json"),"utf8"));
