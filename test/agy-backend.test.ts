@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { installFakeCli } from "./helpers/fake-cli.ts";
@@ -61,6 +62,43 @@ describe("pi-subagent agy backend", () => {
     for (const effort of ["backend-specific", "", "native", "parent"]) {
       expect(() => normalizeAgyEffort(effort)).toThrow(/unsupported.*effort/i);
     }
+  });
+
+  it("requires explicit benchmark opt-in and preserves danger in both CLI comparison modes", () => {
+    const binDir = join(tempDir, "agy-bench-bin");
+    const callsPath = join(tempDir, "agy-bench-calls.ndjson");
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }) + '\\n');
+console.log(JSON.stringify({ event: 'init', conversation_id: 'fixture-benchmark' }));
+console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS',
+  response: process.env.AGY_BENCH_FAKE_WRONG_ANSWER ? 'WRONG_ANSWER' : 'AGY_LATENCY_CHECK' } }));
+`, originalPathEnv);
+    const script = join(process.cwd(), "scripts", "e2e", "agy-latency.mjs");
+    const help = execFileSync(process.execPath, [script], { encoding: "utf8" });
+    expect(help).toContain("No provider calls occur");
+    expect(existsSync(callsPath)).toBe(false);
+    const output = execFileSync(process.execPath, [script, "--execute", "--rounds", "1", "--timeout-ms", "1000"], { encoding: "utf8" });
+    const results = output.trim().split("\n").map((line) => JSON.parse(line));
+    expect(results.filter((result) => result.success)).toHaveLength(2);
+    const calls = readFileSync(callsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.args.includes("--dangerously-skip-permissions"))).toBe(true);
+    const stdinCall = calls.find((call) => call.args.includes("--input-format"));
+    const printCall = calls.find((call) => call.args.includes("--print"));
+    expect(stdinCall?.stdin).toContain("AGY_LATENCY_CHECK");
+    expect(printCall?.args.some((arg: string) => arg.includes("AGY_LATENCY_CHECK"))).toBe(true);
+    expect(printCall?.stdin).toBe("");
+    const invalid = spawnSync(process.execPath, [script, "--execute", "--rounds", "1", "--timeout-ms", "1000"], {
+      encoding: "utf8", env: { ...process.env, AGY_BENCH_FAKE_WRONG_ANSWER: "1" },
+    });
+    expect(invalid.status).toBe(1);
+    const invalidResult = JSON.parse(invalid.stdout.trim().split("\n")[0]!);
+    expect(invalidResult).toMatchObject({
+      success: false, terminalResponseMatched: false, terminalCount: 1,
+    });
   });
 
   it("maps the subagent timeout to agy's Go duration print timeout", () => {
@@ -147,6 +185,8 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'IN_PROGRESS', step_type: 'agent_response', text_delta: 'agy child ' } }));
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'DONE', step_type: 'agent_response', text_delta: 'done' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-test-session', status: 'SUCCESS', response: 'agy child done', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 25, cache_read_tokens: 200, total_tokens: 1075 } } }));
+// Simulate CLI cleanup after the model has already produced its terminal event.
+await new Promise((resolve) => setTimeout(resolve, 80));
 `, originalPathEnv);
 
     const { session, registration } = await createSession();
@@ -206,6 +246,15 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
     expect(summary.summary.effectiveTimeoutMs).toBeGreaterThan(summary.summary.configuredTimeoutMs);
     expect(events.match(/"type":"backend_event"/g)).toHaveLength(5);
     expect(events).toContain('"type":"nested_timeout_extended"');
+    const timingEvents = events.trim().split("\n").map((line) => JSON.parse(line))
+      .filter((event) => event.type === "agy_attempt_timing");
+    expect(timingEvents).toHaveLength(1);
+    expect(timingEvents[0].data).toMatchObject({
+      attempt: 1, eventCount: 5, processStarted: true, terminalSeen: true, exitCode: 0,
+    });
+    expect(timingEvents[0].data.spawnToInitMs).toBeGreaterThanOrEqual(0);
+    expect(timingEvents[0].data.terminalToExitMs).toBeGreaterThanOrEqual(50);
+    expect(timingEvents[0].data).not.toHaveProperty("prompt");
     let output = "";
     let cursor: string | undefined;
     do {
@@ -366,6 +415,13 @@ if (count === 1) {
     expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
     const secondAttemptArgs = JSON.parse(readFileSync(`${argsPath}.2`, "utf8")).args as string[];
     expect(secondAttemptArgs).toContain("--conversation");
+    // Retry timing must expose two separate launches, not one misleading slow run.
+    const timingRecordDir = join(agentDir, "pi-flow-external", "runs");
+    const timingRunId = readdirSync(timingRecordDir)[0]!;
+    const timingEvents = readFileSync(join(timingRecordDir, timingRunId, "events.ndjson"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line))
+      .filter((event) => event.type === "agy_attempt_timing");
+    expect(timingEvents.map((event) => event.data.attempt)).toEqual([1, 2]);
     expect(secondAttemptArgs[secondAttemptArgs.indexOf("--conversation") + 1]).toBe("agy-retry");
     const serialized = JSON.stringify(rootContinuationContext?.messages);
     expect(serialized).toContain("agy child done after retry");

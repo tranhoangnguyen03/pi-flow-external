@@ -15,6 +15,27 @@ export interface AgyTokenUsage {
   totalTokens: number;
 }
 
+/** Durations use a monotonic clock and carry no prompts, credentials, or model output. */
+export interface AgyAttemptTiming {
+  attempt: number;
+  eventCount: number;
+  processStarted: boolean;
+  terminalSeen: boolean;
+  exitCode?: number | null;
+  adapterElapsedMs: number;
+  adapterToSpawnMs?: number;
+  spawnToFirstEventMs?: number;
+  spawnToInitMs?: number;
+  spawnToFirstActivityMs?: number;
+  spawnToTerminalMs?: number;
+  terminalToExitMs?: number;
+  adapterToExitMs?: number;
+}
+
+function phaseMs(start: number | undefined, end: number | undefined): number | undefined {
+  return start === undefined || end === undefined ? undefined : Math.max(0, Math.round(end - start));
+}
+
 export interface AgyTerminalResult {
   status?: string;
   response?: string;
@@ -257,6 +278,9 @@ export async function spawnAgySubagent(params: {
   onUsage: (usage: SubagentUsage) => void;
   onBackendEvent?: (event: unknown) => void;
   onProcessStart?: (pid: number | undefined) => void;
+  /** One bounded timing snapshot per attempt, even on failure. Observation only. */
+  onTiming?: (timing: AgyAttemptTiming) => void;
+  attempt?: number;
   appendInstructions?: string;
   outputSchema?: unknown;
   permission?: PermissionTier;
@@ -284,8 +308,43 @@ export async function spawnAgySubagent(params: {
   let conversationId: string | undefined;
   let protocolError: string | undefined;
   let sawTerminalEvent = false;
+  const attemptStartedAt = performance.now();
+  let processStartedAt: number | undefined;
+  let firstEventAt: number | undefined;
+  let initAt: number | undefined;
+  let firstActivityAt: number | undefined;
+  let terminalAt: number | undefined;
+  let processExitedAt: number | undefined;
+  let exitCode: number | null | undefined;
+  let eventCount = 0;
+
+  // Emit once after the child has settled, before the parent finalizes its run
+  // record. Avoid per-event timing writes on the hot streaming path.
+  const emitTiming = () => {
+    const endedAt = performance.now();
+    const timing: AgyAttemptTiming = {
+      attempt: params.attempt ?? 1,
+      eventCount,
+      processStarted: processStartedAt !== undefined,
+      terminalSeen: terminalAt !== undefined,
+      adapterElapsedMs: phaseMs(attemptStartedAt, endedAt) ?? 0,
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(phaseMs(attemptStartedAt, processStartedAt) !== undefined ? { adapterToSpawnMs: phaseMs(attemptStartedAt, processStartedAt) } : {}),
+      ...(phaseMs(processStartedAt, firstEventAt) !== undefined ? { spawnToFirstEventMs: phaseMs(processStartedAt, firstEventAt) } : {}),
+      ...(phaseMs(processStartedAt, initAt) !== undefined ? { spawnToInitMs: phaseMs(processStartedAt, initAt) } : {}),
+      ...(phaseMs(processStartedAt, firstActivityAt) !== undefined ? { spawnToFirstActivityMs: phaseMs(processStartedAt, firstActivityAt) } : {}),
+      ...(phaseMs(processStartedAt, terminalAt) !== undefined ? { spawnToTerminalMs: phaseMs(processStartedAt, terminalAt) } : {}),
+      ...(phaseMs(terminalAt, processExitedAt) !== undefined ? { terminalToExitMs: phaseMs(terminalAt, processExitedAt) } : {}),
+      ...(phaseMs(attemptStartedAt, processExitedAt) !== undefined ? { adapterToExitMs: phaseMs(attemptStartedAt, processExitedAt) } : {}),
+    };
+    try { params.onTiming?.(timing); } catch { /* Diagnostics must not alter execution. */ }
+  };
 
   const handleEvent = (event: Record<string, unknown>) => {
+    const now = performance.now();
+    eventCount++;
+    if (event.event === "init") initAt ??= now;
+    if (event.event === "result") terminalAt ??= now;
     try {
       params.onBackendEvent?.(event);
     } catch {
@@ -303,6 +362,7 @@ export async function spawnAgySubagent(params: {
 
     const activity = agyActivityFromEvent(event);
     if (activity) {
+      firstActivityAt ??= now;
       emitter.addActivity(activity);
       emitter.emitSoon();
     }
@@ -362,16 +422,20 @@ export async function spawnAgySubagent(params: {
       stdin: `${JSON.stringify({ event: "user", message: { content: taskPrompt } })}\n`,
       signal: params.signal,
       onSpawn: (pid) => {
+        processStartedAt = performance.now();
         if (progress) progress.processStartedAt = Date.now();
         params.onProcessStart?.(pid);
       },
       onLine: (line) => {
         if (!line.trim()) return;
+        firstEventAt ??= performance.now();
         const event = parseAgyJsonLine(line);
         if (event) handleEvent(event);
         else protocolError ??= "agy emitted invalid stream-json output";
       },
     });
+    processExitedAt = performance.now();
+    exitCode = closeResult.code;
     if (protocolError) {
       throw new Error(protocolError);
     }
@@ -448,5 +512,6 @@ export async function spawnAgySubagent(params: {
     });
   } finally {
     emitter.stop();
+    emitTiming();
   }
 }
