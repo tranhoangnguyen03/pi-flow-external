@@ -67,6 +67,8 @@ async function run(mode, options, round) {
   let spawned, firstLine, init, firstActivity, terminal, exited;
   let events = 0, malformed = 0, stderrBytes = 0;
   let terminalStatus;
+  let terminalResponseMatched = false;
+  let terminalCount = 0;
   let timedOut = false;
   let pending = "";
   let protocolOverrun = false;
@@ -81,8 +83,11 @@ async function run(mode, options, round) {
     if (event.event === "step_update" &&
       (event.step_update?.tool_name || event.step_update?.text_delta)) firstActivity ??= performance.now();
     if (event.event === "result") {
+      terminalCount++;
       terminal ??= performance.now();
       terminalStatus = event.result?.status;
+      terminalResponseMatched = typeof event.result?.response === "string"
+        && event.result.response.trim() === "AGY_LATENCY_CHECK";
     }
   };
   child.once("spawn", () => { spawned = performance.now(); });
@@ -109,8 +114,11 @@ async function run(mode, options, round) {
     if (pending.trim()) processLine(pending);
     exited = performance.now();
     return {
-      round, mode, success: !timedOut && !protocolOverrun && code === 0 && terminalStatus === "SUCCESS",
-      exitCode: code, exitSignal: signal, timedOut, protocolOverrun, events, malformed, stderrBytes,
+      round, mode,
+      success: !timedOut && !protocolOverrun && code === 0 && malformed === 0
+        && terminalCount === 1 && terminalStatus === "SUCCESS" && terminalResponseMatched,
+      exitCode: code, exitSignal: signal, timedOut, protocolOverrun,
+      events, malformed, terminalCount, terminalResponseMatched, stderrBytes,
       elapsedMs: delta(started, exited),
       adapterToSpawnMs: delta(started, spawned),
       spawnToFirstEventMs: delta(spawned, firstLine),
@@ -145,7 +153,7 @@ try {
         rows.push(result);
         process.stdout.write(JSON.stringify(result) + "\n");
         if (!result.success) {
-          process.stderr.write("A run failed; stopping to avoid misleading comparisons. Inspect AGY logs privately.\n");
+          process.stderr.write("A run failed, returned the wrong answer, or emitted invalid JSON; stopping the comparison. Inspect AGY logs privately.\n");
           process.exitCode = 1;
           break;
         }
