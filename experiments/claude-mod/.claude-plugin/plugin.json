@@ -1,0 +1,8 @@
+{
+  "name": "flow-codex-experimental",
+  "version": "0.1.0",
+  "description": "Experimental Codex delegation and run inspection from Claude Code",
+  "author": {
+    "name": "pi-flow-external contributors"
+  }
+}
