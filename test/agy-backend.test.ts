@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { installFakeCli } from "./helpers/fake-cli.ts";
@@ -73,7 +73,8 @@ let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }) + '\\n');
 console.log(JSON.stringify({ event: 'init', conversation_id: 'fixture-benchmark' }));
-console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'AGY_LATENCY_CHECK' } }));
+console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS',
+  response: process.env.AGY_BENCH_FAKE_WRONG_ANSWER ? 'WRONG_ANSWER' : 'AGY_LATENCY_CHECK' } }));
 `, originalPathEnv);
     const script = join(process.cwd(), "scripts", "e2e", "agy-latency.mjs");
     const help = execFileSync(process.execPath, [script], { encoding: "utf8" });
@@ -90,6 +91,14 @@ console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', respo
     expect(stdinCall?.stdin).toContain("AGY_LATENCY_CHECK");
     expect(printCall?.args.some((arg: string) => arg.includes("AGY_LATENCY_CHECK"))).toBe(true);
     expect(printCall?.stdin).toBe("");
+    const invalid = spawnSync(process.execPath, [script, "--execute", "--rounds", "1", "--timeout-ms", "1000"], {
+      encoding: "utf8", env: { ...process.env, AGY_BENCH_FAKE_WRONG_ANSWER: "1" },
+    });
+    expect(invalid.status).toBe(1);
+    const invalidResult = JSON.parse(invalid.stdout.trim().split("\n")[0]!);
+    expect(invalidResult).toMatchObject({
+      success: false, terminalResponseMatched: false, terminalCount: 1,
+    });
   });
 
   it("maps the subagent timeout to agy's Go duration print timeout", () => {
