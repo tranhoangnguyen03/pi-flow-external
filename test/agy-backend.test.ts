@@ -208,7 +208,7 @@ await new Promise((resolve) => setTimeout(resolve, 80));
     expect(summary.summary.effectiveTimeoutMs).toBeGreaterThan(summary.summary.configuredTimeoutMs);
     expect(events.match(/"type":"backend_event"/g)).toHaveLength(5);
     expect(events).toContain('"type":"nested_timeout_extended"');
-    const timingEvents = events.trim().split("\\n").map((line) => JSON.parse(line))
+    const timingEvents = events.trim().split("\n").map((line) => JSON.parse(line))
       .filter((event) => event.type === "agy_attempt_timing");
     expect(timingEvents).toHaveLength(1);
     expect(timingEvents[0].data).toMatchObject({
@@ -381,7 +381,7 @@ if (count === 1) {
     const timingRecordDir = join(agentDir, "pi-flow-external", "runs");
     const timingRunId = readdirSync(timingRecordDir)[0]!;
     const timingEvents = readFileSync(join(timingRecordDir, timingRunId, "events.ndjson"), "utf8")
-      .trim().split("\\n").map((line) => JSON.parse(line))
+      .trim().split("\n").map((line) => JSON.parse(line))
       .filter((event) => event.type === "agy_attempt_timing");
     expect(timingEvents.map((event) => event.data.attempt)).toEqual([1, 2]);
     expect(secondAttemptArgs[secondAttemptArgs.indexOf("--conversation") + 1]).toBe("agy-retry");
