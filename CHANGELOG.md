@@ -2,6 +2,16 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.3.0-external.2] - 2026-11-11
+
+### Added
+- Antigravity's existing headless CLI path now records one monotonic timing snapshot per attempt: process startup, first event, init, first activity, terminal result, and process exit. Retries receive separate attempt numbers. The event contains only timing counters, not prompts, credentials or outputs.
+- An opt-in maintainer benchmark compares the single-prompt `agy --print` and Flow-style stdin `stream-json` modes, with matched models and effort. It prints no responses or sensitive prompts. See `docs/maintainer/agy-latency.md`.
+
+### Compatibility and limits
+- Keep the production invocation, timeout, resume, stdout parsing, cancellation, result verification and `--dangerously-skip-permissions` unchanged. No persistent process, transport switch, permission downgrade or assumed speedup.
+- The live Antigravity benchmark requires a separately authenticated operator and is not run in CI; fixture tests verify timing receipts, post-terminal exit delay and retry attribution.
+
 ## [6.3.0-external.1] - 2026-11-07
 
 ### Fixed

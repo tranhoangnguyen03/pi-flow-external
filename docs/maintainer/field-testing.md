@@ -105,6 +105,16 @@ npm run e2e -- --backend opencode --model <provider/model> --interrupt
 
 The runner calls the `external_delegate` tool executor directly with `background: true`, polls `external_runs` until the run is observed `running`, cancels its stable ID with an explicit reason, waits for its `cancelled` outcome, and asks `external_runs` for every available output and diagnostic page. A very early cancellation may legitimately have diagnostics but no assistant text; the durable receipt must still be `aborted` with the exact reason. Do not retry a failure automatically. Use `--keep` for one deliberate evidence inspection, then remove the printed run root and temporary files.
 
+## Antigravity latency diagnosis
+
+When Antigravity feels slower through Flow than through another host, follow
+[the AGY latency runbook](agy-latency.md). It separates queue time, CLI startup,
+model/task time, terminal-to-exit delay and receipt processing. A repeatable,
+**explicitly opt-in** direct CLI comparison is available at
+`node scripts/e2e/agy-latency.mjs --execute --rounds 3`; it preserves
+`--dangerously-skip-permissions` in both CLI modes. No real calls occur without
+`--execute`. This is a maintainer experiment, not a new runtime transport.
+
 ## Natural-language routing smoke
 
 There are two levels of routing check:

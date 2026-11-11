@@ -147,6 +147,8 @@ console.log(JSON.stringify({ event: 'step_update', step_update: { state: 'DONE',
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'IN_PROGRESS', step_type: 'agent_response', text_delta: 'agy child ' } }));
 console.log(JSON.stringify({ event: 'step_update', step_update: { step_id: 'answer', state: 'DONE', step_type: 'agent_response', text_delta: 'done' } }));
 console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-test-session', status: 'SUCCESS', response: 'agy child done', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 25, cache_read_tokens: 200, total_tokens: 1075 } } }));
+// Simulate CLI cleanup after the model has already produced its terminal event.
+await new Promise((resolve) => setTimeout(resolve, 80));
 `, originalPathEnv);
 
     const { session, registration } = await createSession();
@@ -206,6 +208,15 @@ console.log(JSON.stringify({ event: 'result', result: { conversation_id: 'agy-te
     expect(summary.summary.effectiveTimeoutMs).toBeGreaterThan(summary.summary.configuredTimeoutMs);
     expect(events.match(/"type":"backend_event"/g)).toHaveLength(5);
     expect(events).toContain('"type":"nested_timeout_extended"');
+    const timingEvents = events.trim().split("\\n").map((line) => JSON.parse(line))
+      .filter((event) => event.type === "agy_attempt_timing");
+    expect(timingEvents).toHaveLength(1);
+    expect(timingEvents[0].data).toMatchObject({
+      attempt: 1, eventCount: 5, processStarted: true, terminalSeen: true, exitCode: 0,
+    });
+    expect(timingEvents[0].data.spawnToInitMs).toBeGreaterThanOrEqual(0);
+    expect(timingEvents[0].data.terminalToExitMs).toBeGreaterThanOrEqual(50);
+    expect(timingEvents[0].data).not.toHaveProperty("prompt");
     let output = "";
     let cursor: string | undefined;
     do {
@@ -366,6 +377,13 @@ if (count === 1) {
     expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
     const secondAttemptArgs = JSON.parse(readFileSync(`${argsPath}.2`, "utf8")).args as string[];
     expect(secondAttemptArgs).toContain("--conversation");
+    // Retry timing must expose two separate launches, not one misleading slow run.
+    const timingRecordDir = join(agentDir, "pi-flow-external", "runs");
+    const timingRunId = readdirSync(timingRecordDir)[0]!;
+    const timingEvents = readFileSync(join(timingRecordDir, timingRunId, "events.ndjson"), "utf8")
+      .trim().split("\\n").map((line) => JSON.parse(line))
+      .filter((event) => event.type === "agy_attempt_timing");
+    expect(timingEvents.map((event) => event.data.attempt)).toEqual([1, 2]);
     expect(secondAttemptArgs[secondAttemptArgs.indexOf("--conversation") + 1]).toBe("agy-retry");
     const serialized = JSON.stringify(rootContinuationContext?.messages);
     expect(serialized).toContain("agy child done after retry");

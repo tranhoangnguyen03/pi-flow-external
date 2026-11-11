@@ -645,6 +645,9 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       onUsage: params.onUsage,
       onBackendEvent: params.onBackendEvent,
       onProcessStart: params.onProcessStart,
+      // A single metrics-only event per attempt; no synchronous disk I/O on each streamed chunk.
+      onTiming: (timing: import("./agy.ts").AgyAttemptTiming) => { void params.runRecord?.event("agy_attempt_timing", timing); },
+      attempt: 1,
       appendInstructions: params.appendInstructions,
       outputSchema: params.outputSchema,
       permission: params.permission,
@@ -656,6 +659,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
     };
     let retryOf: string | undefined;
     for (let attempt = 1; ; attempt++) {
+      agyParams.attempt = attempt;
       const result = await spawnAgySubagent(agyParams);
       const details = result.details as SubagentToolDetails;
       const transientFailure =
