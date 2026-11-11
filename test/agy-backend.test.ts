@@ -80,9 +80,9 @@ console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', respo
     expect(help).toContain("No provider calls occur");
     expect(existsSync(callsPath)).toBe(false);
     const output = execFileSync(process.execPath, [script, "--execute", "--rounds", "1", "--timeout-ms", "1000"], { encoding: "utf8" });
-    const results = output.trim().split("\\n").map((line) => JSON.parse(line));
+    const results = output.trim().split("\n").map((line) => JSON.parse(line));
     expect(results.filter((result) => result.success)).toHaveLength(2);
-    const calls = readFileSync(callsPath, "utf8").trim().split("\\n").map((line) => JSON.parse(line));
+    const calls = readFileSync(callsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => call.args.includes("--dangerously-skip-permissions"))).toBe(true);
     const stdinCall = calls.find((call) => call.args.includes("--input-format"));
