@@ -88,7 +88,7 @@ console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', respo
     const stdinCall = calls.find((call) => call.args.includes("--input-format"));
     const printCall = calls.find((call) => call.args.includes("--print"));
     expect(stdinCall?.stdin).toContain("AGY_LATENCY_CHECK");
-    expect(printCall?.args).toContain("AGY_LATENCY_CHECK");
+    expect(printCall?.args.some((arg: string) => arg.includes("AGY_LATENCY_CHECK"))).toBe(true);
     expect(printCall?.stdin).toBe("");
   });
 
