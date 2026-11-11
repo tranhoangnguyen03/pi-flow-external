@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { installFakeCli } from "./helpers/fake-cli.ts";
@@ -61,6 +62,34 @@ describe("pi-subagent agy backend", () => {
     for (const effort of ["backend-specific", "", "native", "parent"]) {
       expect(() => normalizeAgyEffort(effort)).toThrow(/unsupported.*effort/i);
     }
+  });
+
+  it("requires explicit benchmark opt-in and preserves danger in both CLI comparison modes", () => {
+    const binDir = join(tempDir, "agy-bench-bin");
+    const callsPath = join(tempDir, "agy-bench-calls.ndjson");
+    installFakeCli(binDir, "agy", `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ args: process.argv.slice(2), stdin }) + '\\n');
+console.log(JSON.stringify({ event: 'init', conversation_id: 'fixture-benchmark' }));
+console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'AGY_LATENCY_CHECK' } }));
+`, originalPathEnv);
+    const script = join(process.cwd(), "scripts", "e2e", "agy-latency.mjs");
+    const help = execFileSync(process.execPath, [script], { encoding: "utf8" });
+    expect(help).toContain("No provider calls occur");
+    expect(existsSync(callsPath)).toBe(false);
+    const output = execFileSync(process.execPath, [script, "--execute", "--rounds", "1", "--timeout-ms", "1000"], { encoding: "utf8" });
+    const results = output.trim().split("\\n").map((line) => JSON.parse(line));
+    expect(results.filter((result) => result.success)).toHaveLength(2);
+    const calls = readFileSync(callsPath, "utf8").trim().split("\\n").map((line) => JSON.parse(line));
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.args.includes("--dangerously-skip-permissions"))).toBe(true);
+    const stdinCall = calls.find((call) => call.args.includes("--input-format"));
+    const printCall = calls.find((call) => call.args.includes("--print"));
+    expect(stdinCall?.stdin).toContain("AGY_LATENCY_CHECK");
+    expect(printCall?.args).toContain("AGY_LATENCY_CHECK");
+    expect(printCall?.stdin).toBe("");
   });
 
   it("maps the subagent timeout to agy's Go duration print timeout", () => {
