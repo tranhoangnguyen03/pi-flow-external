@@ -75,7 +75,7 @@ The detailed [orchestration skill](skills/pi-flow-orchestration/SKILL.md) and `e
 
 ### 4. Run your first delegation
 
-Ask Pi in chat:
+For a read-only first run, pick an installed harness that supports `readonly`, such as Claude Code or Codex. Name it explicitly: the default, Antigravity, cannot enforce `readonly`.
 
 > **You:** "Use Claude Code to explore this repository and map key modules read-only."
 

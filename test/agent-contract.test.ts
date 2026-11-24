@@ -415,7 +415,7 @@ setInterval(() => {}, 1000);
     chmodSync(fakeCodex, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
-    const { session, model, modelRegistry } = await createSession({ subagentTimeoutMs: 2_000 });
+    const { session, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }) as any;
     context.sessionManager.getBranch = () => [];
     const agent = session.getToolDefinition("external_delegate") as any;
@@ -452,6 +452,8 @@ setInterval(() => {}, 1000);
     expect(waitedWorkflow.details.outcomes).toEqual([expect.objectContaining({ outcome: "cancelled", error: "workflow superseded" })]);
     expect(readFileSync(launchedWorkflow.details.journalPath, "utf8")).toContain('"error":"workflow superseded","outcome":"cancelled"');
 
+    // Give the cancellation cases time to start under load; only this run needs a short deadline.
+    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({ version: 5, subagentTimeoutMs: 250 }));
     const timedWorkflow = await workflow.execute(
       "timeout-workflow",
       {

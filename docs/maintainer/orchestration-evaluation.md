@@ -59,3 +59,26 @@ follow [field testing](field-testing.md), including the optional
 `npm run e2e -- --routing-smoke --backend <backend>` lane when actual parent
 tool selection matters. A prompted routing smoke is narrower than evidence
 that the parent autonomously discovered a useful delegation.
+
+## Guidance comparison — 2026-11-24
+
+Baseline `8908fe8` vs. candidate `68acec6`. Fresh Pi 1.6.0 sessions on
+Node 22.23.3 used the same live parent model (`openai-codex/gpt-6.2-sol`,
+low thinking) and synthetic workspace. The child CLIs were local fixtures, not
+live model calls. Results below were checked against tool traces and child logs.
+
+| Matched task | Baseline and candidate |
+| --- | --- |
+| First read-only delegation, after consulting usage help | Both called `external_help` for `usage`, then selected Codex with explicit `readonly` and delegated once. Both cited `order-parser.js:1` and returned the exact fixture tag. Flow defaults were intact; neither harness nor tier was set by the trial. |
+| One coordinated review, after consulting run contract help | Both read the `external_runs` contract, ran one workflow with two read-only children assigned distinct files, and used Codemode to follow five 120-byte inspection pages via `data.page.nextCursor`. Both final answers contained the two exact evidence tags. Neither needed a correction. |
+| Partial failure (initial trial) | Both used the successful idempotency finding, reported the missing audit evidence, and did not retry or switch harnesses. This pair did not consult help and used preset Codex/read-only settings; it is recovery evidence, not a test of the help changes. |
+
+The initial direct/review pairs were inconclusive: the parser fixture rejected
+valid briefs, and the review fixture treated an exclusion as a second assignment.
+The first two rows report the corrected reruns. Fixture files stayed unchanged.
+
+The native `external_runs` Codemode declaration dropped from 10,832 to 8,788
+UTF-8 bytes (19%). Both versions handled the two prompted help tasks with the
+same tool-call counts. This does not show a usability improvement or measure
+prompt-token savings. The trial did not test unprompted help discovery, early
+`wait` returns, or real child providers.

@@ -11,13 +11,14 @@ import { Value } from "typebox/value";
 import { createWorkflowJournalWriter, createWorkflowRunIdentity, getSessionWorkflowDir } from "../src/workflow/journal.ts";
 
 /** An expected failure is returned, not thrown: typed code, readable message, and a schema-valid envelope. */
-async function expectFailure(pending: Promise<any>, code: string, message: RegExp): Promise<void> {
+async function expectFailure(pending: Promise<any>, code: string, message: RegExp): Promise<string> {
   const failure = await pending;
   expect(failure.isError).toBe(true);
   expect(Value.Check(externalRunsOutputSchema, failure.structuredContent)).toBe(true);
   expect(failure.structuredContent).toMatchObject({ ok: false, data: null, error: { code } });
   expect(failure.structuredContent.error.message).toMatch(message);
   expect(failure.content[0].text).toMatch(message);
+  return failure.structuredContent.error.message;
 }
 
 describe("external_runs", () => {
@@ -98,6 +99,8 @@ describe("external_runs", () => {
 
     // A genuinely non-empty runId AND runIds together is a real conflict.
     await expectFailure(execute({ action: "inspect", runId: first.runId, runIds: [first.runId] }), "request_invalid", /either runId or runIds/i);
+    const defaultSummary = await execute({ action: "inspect", runIds: [first.runId] });
+    expect(defaultSummary.structuredContent.data).toMatchObject({ mode: "batch", entries: [{ runId: first.runId }] });
     // Single-entry runIds inspect supports output/diagnostics/final views without forcing the caller to switch to runId.
     const singleOutput = await execute({ action: "inspect", runIds: [first.runId], view: "output" });
     expect(singleOutput.content[0].text).toBe("answer");
@@ -145,7 +148,7 @@ describe("external_runs", () => {
   });
 
   it("paginates a small batch limitBytes one target at a time without dropping any target, bounding the FULL returned text (entries wrapper and nextCursor, not just entry sizes) including under multi-byte UTF-8, and fails actionably rather than overflowing or returning a non-advancing empty page when even one entry cannot fit", async () => {
-    const { execute, runsDirectory } = setup();
+    const { execute, runsDirectory, tool } = setup();
     // Multi-byte descriptions make Buffer.byteLength meaningfully diverge
     // from string .length, so a byte-based bound that was accidentally
     // checking character length (or only the entries array, not the full
@@ -180,7 +183,10 @@ describe("external_runs", () => {
     // Below the boundary: no entry fits even with the envelope. Must fail
     // actionably (naming the run and how to proceed) rather than silently
     // omitting the target or returning a zero-entry, non-advancing page.
-    await expectFailure(execute({ action: "inspect", runIds, limitBytes: limitBytes - 1 }), "page_too_small", new RegExp(`${first.runId}.*limitBytes.*envelope.*increase limitBytes or inspect`, "i"));
+    const message = await expectFailure(execute({ action: "inspect", runIds, limitBytes: limitBytes - 1 }), "page_too_small", new RegExp(`${first.runId}.*limitBytes.*envelope.*increase limitBytes or inspect`, "i"));
+    const recovery = JSON.parse(message.slice(message.indexOf("{")));
+    expect(Value.Check(tool.parameters, recovery)).toBe(true);
+    expect((await execute(recovery)).structuredContent.data).toMatchObject({ mode: "single", runId: first.runId, view: "output" });
 
     // At and above the boundary: normal one-entry-per-page pagination, and
     // the ACTUAL serialized response text — not merely the entries array —
@@ -206,14 +212,18 @@ describe("external_runs", () => {
     await expectFailure(execute({ action: "inspect", runIds: [first.runId, second.runId], limitBytes, cursor: firstPage.details.nextCursor }), "cursor_invalid", /does not match the requested run ids/i);
   });
 
-  it("waits for one/any/all outcomes, returns workflow failure early, and repeats terminal waits immediately", async () => {
+  it.each(["failed", "timed_out"] as const)("waits for one/any/all outcomes and returns early when a workflow is %s", async (outcome) => {
     const { execute, registry } = setup();
     let finishOne!: (value: string) => void;
     let finishTwo!: (value: string) => void;
     let failWorkflow!: (error: Error) => void;
     const one = registry.start({ runId: "run_one", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise((resolve) => { finishOne = resolve; }) });
     registry.start({ runId: "run_two", kind: "agent", sessionId: "session-a", project: "/project", run: () => new Promise((resolve) => { finishTwo = resolve; }) });
-    registry.start({ runId: "wf_failed", kind: "workflow", sessionId: "session-a", project: "/project", run: () => new Promise((_resolve, reject) => { failWorkflow = reject; }) });
+    registry.start({
+      runId: "wf_failed", kind: "workflow", sessionId: "session-a", project: "/project",
+      run: () => new Promise((_resolve, reject) => { failWorkflow = reject; }),
+      failure: () => ({ status: outcome === "failed" ? "error" : "aborted", outcome }),
+    });
 
     const anyWait = execute({ action: "wait", runIds: ["run_one", "run_two"], mode: "any" });
     finishOne("one");
@@ -222,7 +232,9 @@ describe("external_runs", () => {
 
     const allWait = execute({ action: "wait", runIds: ["wf_failed", "run_two"], mode: "all" });
     failWorkflow(new Error("workflow failed"));
-    await expect(allWait).resolves.toMatchObject({ details: { outcomes: [{ runId: "wf_failed", status: "error" }], pending: ["run_two"] } });
+    await expect(allWait).resolves.toMatchObject({ structuredContent: { ok: true, data: {
+      completed: [{ runId: "wf_failed", state: { outcome } }], pending: ["run_two"],
+    } } });
     finishTwo("two");
     await Promise.allSettled([one.result]);
   });

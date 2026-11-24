@@ -1015,7 +1015,7 @@ export function createExternalRunsTool(
             // cannot advance: name the run and how to proceed.
             if (index === startIndex) {
               throw new ExpectedFlowError("page_too_small",
-                `Batch summary for ${runIds[index]} does not fit within limitBytes (${limit}) including the pagination envelope; increase limitBytes or inspect this run individually with { action: "inspect", runId: "${runIds[index]}" }.`,
+                `Batch summary for ${runIds[index]} does not fit within limitBytes (${limit}) including the pagination envelope; increase limitBytes or inspect paged output: ${JSON.stringify({ action: "inspect", runIds: [runIds[index]], view: "output" })}`,
               );
             }
             break;

@@ -2,6 +2,16 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [6.3.0-external.2] - 2026-11-24
+
+### Changed
+- Shorten `external_runs` tool guidance while documenting cursor locations by response shape and when `wait` can return with pending work.
+- Use explicit `readonly` tiers in read-only examples and suggest switching to a compatible harness when Antigravity cannot enforce the requested tier. Defaults and permission enforcement are unchanged.
+
+### Fixed
+- `page_too_small` now suggests a valid, pageable `runIds` inspection rather than the legacy `runId` field.
+- Separate the cancellation test's startup wait from the short deadline used to exercise timeout behavior.
+
 ## [6.3.0-external.1] - 2026-11-07
 
 ### Fixed
