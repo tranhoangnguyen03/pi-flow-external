@@ -26,7 +26,7 @@ import {
   formatPermissionHelp,
 } from "./core/capabilities.ts";
 import { ExpectedFlowError, type FlowErrorCode } from "./core/errors.ts";
-import { disabledHarnessMessage, loadExternalCatalog } from "./profiles.ts";
+import { disabledHarnessMessage, loadExternalCatalog, retiredHarnessMessage } from "./profiles.ts";
 import {
   EXTERNAL_HELP_PROMPT_SNIPPET,
   formatExternalRoleHelp,
@@ -34,7 +34,7 @@ import {
   formatUsagePlaybook,
 } from "./prompts.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
+import { EXTERNAL_HARNESSES, isRetiredHarness } from "./types.ts";
 
 export { externalHelpParameters, type ExternalHelpParams } from "./contract/help.ts";
 
@@ -64,6 +64,7 @@ function isProjectTrusted(ctx: ExtensionContext): boolean {
  */
 function validateHarnessFilter(harness: string | undefined, configuredPiHarnesses: ReadonlySet<string>): void {
   if (harness === undefined) return;
+  if (isRetiredHarness(harness)) throw new ExpectedFlowError("selection_invalid", retiredHarnessMessage(harness));
   if ((EXTERNAL_HARNESSES as readonly string[]).includes(harness) || configuredPiHarnesses.has(harness)) return;
   const configured = [...EXTERNAL_HARNESSES, ...configuredPiHarnesses].sort();
   throw new ExpectedFlowError(

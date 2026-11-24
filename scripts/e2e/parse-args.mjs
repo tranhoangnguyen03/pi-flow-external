@@ -9,12 +9,7 @@ const defaults = {
   claude: { model: "claude-sonnet-5", thinking: "high" },
   codex: { model: "gpt-5.6-sol", thinking: "high" },
   agy: { model: "gemini-3.7-flash-high", thinking: "high" },
-  grok: { model: "grok-4.6", thinking: "high" },
   muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
-  // OpenCode needs no pinned model (its own configured default applies; pass
-  // --model provider/model to pin one). Thinking is a model variant, so it
-  // needs --model too.
-  opencode: {},
   // No fixed model/thinking default: a named pi harness pins its own model and
   // thinking in the caller's real settings.json (version 5) harnesses map;
   // --harness names which one.
@@ -59,14 +54,13 @@ export function parseArgs(argv) {
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
-  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, grok, muse, opencode, or pi");
+  if (!Object.hasOwn(defaults, options.backend)) throw new Error("--backend must be claude, codex, agy, muse, or pi");
   if (options.backend === "pi" && !options.harness) throw new Error("--backend pi requires --harness <name>, a pi-* harness already registered in your own real settings.json version 5");
   if (options.backend !== "pi" && options.harness) throw new Error("--harness only applies to --backend pi");
-  if (options.backend === "opencode" && options.thinking !== undefined && options.model === undefined) throw new Error("--thinking on --backend opencode names a model variant and needs --model provider/model");
   if (options.permission !== undefined && !PERMISSION_TIERS.includes(options.permission)) {
     throw new Error("--permission must be readonly, edit, or danger");
   }
-  // Field runs, including Grok, request a tier on the child call. Omit the
+  // Field runs request a tier on the child call. Omit the
   // flag to keep this runner's existing explicit danger tier.
   options.permission ??= "danger";
   if (options.workflow && options.interrupt) throw new Error("--workflow and --interrupt are separate checks");
@@ -79,7 +73,7 @@ export function parseArgs(argv) {
   if (!options.routingSmoke && (rootModelProvided || rootThinkingProvided)) {
     throw new Error("--root-model and --root-thinking only apply to --routing-smoke");
   }
-  // Only claude/codex/agy/grok/muse/opencode get an isolated, disposable agent dir by
+  // Only claude/codex/agy/muse get an isolated, disposable agent dir by
   // default: this script writes their temporary profile file into it itself,
   // so isolation is safe and desirable. This default is unconditional — an
   // inherited PI_CODING_AGENT_DIR from the caller's shell is deliberately

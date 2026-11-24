@@ -19,12 +19,12 @@ process.once("exit", () => {
 function help() {
   console.log(`Usage: npm run e2e -- [options]
 
-  --backend <claude|codex|agy|grok|muse|opencode|pi>  external backend (default: codex)
+  --backend <claude|codex|agy|muse|pi>  external backend (default: codex)
   --harness <name>              required with --backend pi: a pi-* harness already registered in your own real settings.json version 5
   --model <id>                  child model (backend default when omitted; ignored for pi, which pins its own)
   --thinking <level>            child thinking (default: high; ignored for pi, which pins its own)
   --permission <readonly|edit|danger>
-                                explicit child permission request (default: danger). Grok field runs pass this on the child call; omit it to keep danger.
+                                explicit child permission request (default: danger).
   --workflow                    test a blocking two-child workflow instead of a single direct external_delegate call
   --interrupt                   launch a background external_delegate, then cancel/wait/inspect it through external_runs
   --agent-dir <dir>             Pi agent directory (default: isolated under run root; real dir for --backend pi)
@@ -195,7 +195,7 @@ function removeCliFixture(fixture) {
 // never told to the child in the prompt — only written into the file it must
 // read. A prior version derived the file content from options.model/thinking,
 // which was also embedded (as a suffix) in the very token the child was asked
-// to prefix its answer with; against real grok that self-referential overlap
+// to prefix its answer with; that self-referential overlap
 // let a child that only echoed the token (never actually reading the file)
 // still land a plausible-looking but wrong reply, and in one observed
 // workflow run one of two parallel children in fact dropped the file-content
@@ -561,13 +561,6 @@ async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, p
 }
 
 /**
- * Grok reports native session/cost accounting (unlike codex/claude/agy,
- * which estimate or omit cost) — see AGENTS.md's "Grok supports `resume` via
- * its own `--resume <sessionId>` flag and reports native cost". A successful
- * grok receipt should therefore always carry a real sessionId and a known,
- * non-estimated, non-zero cost; other backends keep whatever cost semantics
- * their own tests already cover and are not asserted here.
- *
  * Muse reports a real, resumable sessionId (verified: a second real
  * `exec --session-id` call recalled a fact only told to the first) but has
  * never been observed to report usage/cost on any run; a successful receipt
@@ -575,20 +568,6 @@ async function runInterrupt({ agentTool, runsTool, ctx }, { role, harnessName, p
  * rather than a fabricated zero-known or estimated cost.
  */
 function assertReceiptSemantics(options, summary) {
-  if (options.backend === "grok") {
-    assert(typeof summary?.sessionId === "string" && summary.sessionId.length > 0, `Grok receipt missing a non-empty sessionId: ${JSON.stringify(summary)}`);
-    const usage = summary?.usage;
-    assert(usage?.costKnown === true, `Grok receipt usage.costKnown was not true: ${JSON.stringify(usage)}`);
-    assert(usage?.costEstimated === false, `Grok receipt usage.costEstimated was not false: ${JSON.stringify(usage)}`);
-    assert(typeof usage?.cost === "number" && usage.cost > 0, `Grok receipt usage.cost was not a positive number: ${JSON.stringify(usage)}`);
-    return;
-  }
-  if (options.backend === "opencode") {
-    // Tokens and cost come from OpenCode's own step_finish parts, not a local estimate.
-    assert(typeof summary?.sessionId === "string" && summary.sessionId.startsWith("ses_"), `OpenCode receipt missing a ses_ sessionId: ${JSON.stringify(summary)}`);
-    assert(summary?.usage?.costEstimated === false, `OpenCode receipt usage.costEstimated was not false: ${JSON.stringify(summary?.usage)}`);
-    return;
-  }
   if (options.backend === "muse") {
     assert(typeof summary?.sessionId === "string" && summary.sessionId.length > 0, `Muse receipt missing a non-empty sessionId: ${JSON.stringify(summary)}`);
     const usage = summary?.usage;

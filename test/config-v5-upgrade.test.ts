@@ -65,7 +65,8 @@ describe("explicit v4 to v5 conversion", () => {
     expect(after.profiles.get("pi-check/worker")).toMatchObject({ model: "p/model", thinking: "high", tools: ["read", "grep"], maxBudgetUsd: 3 });
     for (const copy of plan.copies) {
       const key = `${basename(dirname(copy.destinationPath))}/${basename(copy.destinationPath, ".md")}`;
-      expect(after.profiles.get(key)?.description).toBe("Custom description");
+      if (key.startsWith("opencode/")) expect(after.profiles.has(key)).toBe(false);
+      else expect(after.profiles.get(key)?.description).toBe("Custom description");
       expect(readFileSync(copy.destinationPath, "utf8")).toBe(copy.contents);
       expect(parseFrontmatter(copy.contents).frontmatter).toEqual({ description: "Custom description" });
     }
@@ -134,7 +135,7 @@ describe("explicit v4 to v5 conversion", () => {
     const catalog = loadExternalCatalog(root);
     expect(catalog.profiles.get("codex/audit-only")).toMatchObject({ systemPrompt: "Custom instructions.", thinking: "parent" });
     expect(catalog.profiles.has("claude/audit-only")).toBe(false);
-    expect(catalog.profiles.get("grok/future")).toMatchObject({ thinking: "parent", systemPrompt: "Future instructions." });
+    expect(catalog.profiles.has("grok/future")).toBe(false);
   });
 
   it("pins effective Pi defaults on exact records and preserves ambiguous identities without widening exact gates", () => {

@@ -116,7 +116,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
         for(const [id,label] of models){const row=`${label} · ${id}${id===current?' · Current':''}`;choices.push(row);listed.set(row,id);}
         choices.push('Enter a custom model ID…','About this model list');
       }else if(field==='model')choices.push('Choose a Pi model…');
-      else choices.push(...(name==='opencode'?['Enter model variant…']:[`Match my Pi session (currently ${options.getThinkingLevel?.()??'unknown'})${current==='parent'?' · Current':''}`,...reasoningLevels(name).filter(v=>name==='agy'?['low','medium','high'].includes(v):name==='grok'?['low','medium','high','xhigh'].includes(v):true).map(v=>`${v==='xhigh'?'Extra high':valueLabel(v,name)}${v===current?' · Current':''}`)]));
+      else choices.push(`Match my Pi session (currently ${options.getThinkingLevel?.()??'unknown'})${current==='parent'?' · Current':''}`,...reasoningLevels(name).filter(v=>name!=='agy'||['low','medium','high'].includes(v)).map(v=>`${v==='xhigh'?'Extra high':valueLabel(v,name)}${v===current?' · Current':''}`));
       const chosen=await select(`${scope} › ${field==='model'?'Model':'Reasoning'}\nCurrent: ${summary}${field==='model'&&cliHarness(name)?'\nListed names are not a guarantee of account access. / searches the list.':''}`,choices);if(!chosen)return;
       if(chosen==='About this model list'){await show('Model list',note);return changeField(name,field,role);}
       if(chosen.startsWith(inherit+' ·')){await resetRoleField(role!,name,field);return;}
@@ -125,7 +125,7 @@ export async function openConfigHub(pi:Pick<ExtensionAPI,'exec'>,ctx:ExtensionCo
       else if(chosen.startsWith(native))value='native';
       else if(chosen==='Choose a Pi model…')value=await pickModel(current);
       else if(chosen.startsWith('Match my Pi session'))value='parent';
-      else if(chosen==='Enter a custom model ID…'||chosen==='Enter model variant…')value=(await ctx.ui.input(field==='model'?'Model ID — checked by the CLI on the next run':'OpenCode variant — requires a pinned model',field==='model'&&name==='opencode'?'provider/model':'Exact identifier'))?.trim();
+      else if(chosen==='Enter a custom model ID…')value=(await ctx.ui.input('Model ID — checked by the CLI on the next run','Exact identifier'))?.trim();
       else {const level=chosen.split(' · ')[0]!;value=level==='Extra high'?'xhigh':level.toLowerCase();}
       if(!value)return;
       if(role)setBindingFields(dir,role,name,{[field]:value});

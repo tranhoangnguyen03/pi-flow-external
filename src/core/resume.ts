@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { SubagentBackend } from "../types.ts";
+import { isRetiredHarness, type SubagentBackend } from "../types.ts";
 
 export interface ResumedSession {
   runId: string;
@@ -36,6 +36,7 @@ export async function resolveResume(
   if (!sessionId || !backend) {
     return { error: `Run record "${runId}" has no session id to resume.` };
   }
+  if (isRetiredHarness(backend)) return { error: `Run "${runId}" used the retired backend "${backend}". Inspect its receipt or start a new run on a supported harness.` };
   if (backend !== expectedBackend) {
     return { error: `Run "${runId}" used backend "${backend}"; resume must use the same backend (expected "${expectedBackend}").` };
   }

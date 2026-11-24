@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { loadExternalCatalog, resolveExternalProfile, externalRoleAvailability } from '../src/profiles.ts';
-import { parseSettings } from '../src/settings.ts';
+import { parseSettings, resolveDefaultHarness } from '../src/settings.ts';
+import { setDefaultHarness, planRoleDelete, applyRoleDelete } from '../src/config-lifecycle.ts';
 import { EXTERNAL_HARNESSES } from '../src/types.ts';
 const roots: string[] = [];
 function fixture(settings: object, files: Record<string,string> = {}) {
@@ -55,16 +56,28 @@ it('preserves explicit exact selection and exclusions while keeping structured b
  expect(()=>resolveExternalProfile(c.profiles,{subagentType:'codex-reviewer'},'agy')).toThrow(/disabled/);
  expect(select(c,'reviewer','codex').backend).toBe('codex');
 });
-it('uses identical validity gates for exact records and rejects invalid OpenCode variants',()=>{
- const c=fixture({disabledProfiles:['special'],exact:{special:{harness:'codex',description:'Exact',instructions:'x'},bad:{harness:'opencode',description:'Bad',instructions:'x',thinking:'high'}}});
- expect(c.profiles.get('special')?.configurationError).toMatch(/disabled/);
- expect(c.profiles.get('bad')?.configurationError).toMatch(/model/);
- const broken=fixture({harnesses:{opencode:{model:'a/b#x',thinking:'high'}}});
- expect(broken.profiles.get('opencode/reviewer')?.configurationError).toMatch(/variant|#/);
- // A binding that supplies the missing model (or returns to native effort) stays enabled.
- const fixed=fixture({harnesses:{opencode:{thinking:'high',roles:{worker:{model:'a/b'}}}}});
- expect(fixed.profiles.get('opencode/worker')?.configurationError).toBeUndefined();
- expect(fixed.profiles.get('opencode/explorer')?.configurationError).toMatch(/model/);
+it('does not advertise retired settings or let an exact selector fall through to a live binding',()=>{
+ const settings={version:5,defaultHarness:'grok',harnesses:{grok:{roles:{audit:{model:'old-grok'}}},opencode:{model:'a/b#x',thinking:'high'}},exact:{'codex-reviewer':{harness:'opencode',description:'Old exact',instructions:'old'}},disabledProfiles:['codex-reviewer']};
+ const instructions='---\ndescription: Audit\n---\nKeep the old override.';
+ const c=fixture(settings,{'roles/audit.md':instructions,'overrides/grok/audit.md':instructions});
+ const root=roots.at(-1)!;
+ const file=join(root,'pi-flow-external','settings.json');
+ expect(readFileSync(file,'utf8')).toBe(JSON.stringify(settings));
+ const options={retiredExact:c.retiredExact};
+ expect(c.blocked).toBe(false);
+ expect(c.profiles.has('opencode/reviewer')).toBe(false);
+ expect(()=>resolveExternalProfile(c.profiles,{role:'reviewer'},'grok',options)).toThrow(/Default harness "grok" was retired/);
+ expect(()=>resolveExternalProfile(c.profiles,{subagentType:'codex-reviewer'},'agy',options)).toThrow(/"opencode" was retired/);
+ expect(()=>resolveExternalProfile(c.profiles,{role:'reviewer',harness:'opencode'},'agy',options)).toThrow(/retired/);
+ expect(select(c,'reviewer','codex').backend).toBe('codex');
+ setDefaultHarness(root,'codex');
+ applyRoleDelete(root,planRoleDelete(root,'audit'));
+ expect(JSON.parse(readFileSync(file,'utf8'))).toEqual({...settings,defaultHarness:'codex'});
+ expect(readFileSync(join(root,'pi-flow-external','overrides','grok','audit.md'),'utf8')).toBe(instructions);
+ mkdirSync(join(root,'.pi','pi-flow-external'),{recursive:true});
+ writeFileSync(join(root,'.pi','pi-flow-external','settings.json'),'{"defaultHarness":"opencode"}');
+ expect(resolveDefaultHarness('codex',root,true)).toMatchObject({harness:'opencode',source:'project'});
+ expect(resolveDefaultHarness('codex',root,false)).toMatchObject({harness:'codex',source:'global'});
 });
 it('lets a valid instruction replacement supersede invalid shared instructions and rejects linked directories',()=>{
  const c=fixture({}, {'roles/reviewer.md':'bad','overrides/codex/reviewer.md':'---\ndescription: Valid\n---\n'});

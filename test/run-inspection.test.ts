@@ -167,6 +167,19 @@ describe("run evidence inspection", () => {
     expect(projection.output).toEqual({ available: true, status: "preliminary", finalAvailable: false });
   });
 
+  it("keeps retired OpenCode stream evidence and verified final results readable", async () => {
+    const runsDirectory = await temporaryRoot();
+    const record = createRunRecord({ directory: runsDirectory, metadata: { backend: "opencode", harness: "opencode" } });
+    const inspect = (view: "output" | "diagnostics" | "final") => inspectRun({ runsDirectory, runId: record.runId, view });
+    await record.event("backend_event", { backend: "opencode", event: { type: "text", sessionID: "ses_old", part: { id: "msg", sessionID: "ses_old", text: "streamed progress" } } });
+    await record.event("backend_event", { backend: "opencode", event: { type: "tool_use", sessionID: "ses_old", part: { sessionID: "ses_old", tool: "read", state: { title: "old.txt" } } } });
+    expect((await inspect("output")).items).toEqual([{ id: "msg", text: "streamed progress" }]);
+    expect((await inspect("diagnostics")).items.map(({ text }) => text).join("\n")).toContain('"title":"old.txt"');
+    expect((await inspect("final")).finalAvailable).toBe(false);
+    await record.finish({ status: "done", result: "verified old answer" });
+    expect((await inspect("final")).items).toEqual([{ text: "verified old answer" }]);
+  });
+
   it("concatenates muse run.output.delta chunks into one growing item and registers status narration as activity", async () => {
     const root = await temporaryRoot();
     const record = createRunRecord({ directory: root });

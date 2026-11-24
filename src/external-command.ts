@@ -10,7 +10,7 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { disabledHarnessMessage, loadExternalCatalog } from "./profiles.ts";
+import { disabledHarnessMessage, loadExternalCatalog, retiredHarnessMessage } from "./profiles.ts";
 import { loadHarnessConfigs } from "./harnesses.ts";
 import { loadExternalSettings, saveExternalSettings, type ExternalSettings } from "./settings.ts";
 import { projectExternalSettingsPath, resolveCtxDefaultHarness, type LoadedExternalSettings } from "./settings.ts";
@@ -49,7 +49,7 @@ import {
   type BindingField,
   type HarnessField,
 } from "./config-lifecycle.ts";
-import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST } from "./types.ts";
+import { EXTERNAL_HARNESSES as EXTERNAL_HARNESSES_LIST, isRetiredHarness } from "./types.ts";
 import type { SubagentProfile } from "./types.ts";
 import { pruneRunRecords, runRecordsDirectory } from "./core/retention.ts";
 import { createExternalRunsTool, type ExternalRunsParams } from "./external-runs.ts";
@@ -221,6 +221,7 @@ function harnessStateLines(catalog: ExternalCatalog, defaultHarness: string, set
 }
 
 function defaultHarnessProblems(catalog: ExternalCatalog, harness: string): string[] {
+  if (isRetiredHarness(harness)) return [retiredHarnessMessage(harness, true)];
   const harnessConfigs = catalog.harnessConfigs ?? new Map();
   if (!(EXTERNAL_HARNESSES_LIST as readonly string[]).includes(harness) && !harnessConfigs.has(harness)) {
     return [`Configured default harness "${harness}" is not currently registered.`];
@@ -296,12 +297,6 @@ function backendAuthority(backend: string, permission: string): string {
   }
   if (backend === "codex") {
     return `Codex --sandbox axis · call tier ${permission}; never automatically retried by this extension.`;
-  }
-  if (backend === "grok") {
-    return `Grok --sandbox axis (read-only/workspace/off) + bypassPermissions · call tier ${permission}; readonly network-blocking is Linux-only.`;
-  }
-  if (backend === "opencode") {
-    return `OpenCode 2 standalone run · permission rules · call tier ${permission}; readonly/edit use an injected deny-by-default agent (not an OS sandbox; plugins and MCP servers still load), danger uses --auto.`;
   }
   return `Muse exec approvals bypassed headless · call tier ${permission}; readonly adds --disable-write --disable-shell, danger uses --yolo (also trusts the workspace).`;
 }
@@ -670,7 +665,7 @@ function roleInspectText(options: ExternalCommandOptions, role: string, harness:
     `Instructions: ${origins.instructions ?? profile.source ?? "built-in"}`,
     `Model: ${profile.model ?? "native"} · ${origins.model ?? "backend default"}`,
     `Reasoning effort: ${profile.thinking === 'parent' ? `parent → ${options.getThinkingLevel?.() ?? 'unavailable outside session'}` : profile.thinking ?? 'native'} · ${origins.thinking ?? 'backend default'}`,
-    `Adapter: ${profile.backend === 'opencode' ? (profile.thinking === 'native' ? 'native model variant; no effort override' : `model variant ${profile.thinking}`) : profile.backend === 'agy' ? 'minimal → low; xhigh/max → high; off omits effort' : profile.backend === 'grok' ? 'off/minimal → low' : profile.backend === 'pi' ? 'SDK may clamp effort to model capabilities; recorded at launch' : 'explicit effort forwarded; native omits the override'}`,
+    `Adapter: ${profile.backend === 'agy' ? 'minimal → low; xhigh/max → high; off omits effort' : profile.backend === 'pi' ? 'SDK may clamp effort to model capabilities; recorded at launch' : 'explicit effort forwarded; native omits the override'}`,
     'Readiness: not tested here; configuration validity does not prove account/model access.',
     `Budget: ${profile.maxBudgetUsd ?? settings.defaultMaxBudgetUsd ?? 'unlimited'}${profile.maxBudgetUsd !== undefined || settings.defaultMaxBudgetUsd !== null ? ' USD' : ''} · ${profile.maxBudgetUsd !== undefined ? origins.max_budget_usd ?? 'binding' : 'global default'}`,
     ...(profile.tools ? [`Tools: ${profile.tools.join(", ")} · ${origins.tools ?? ""}`] : []),

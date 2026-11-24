@@ -41,15 +41,13 @@ describe("resume resolution", () => {
     expect(resolved.error).toMatch(/same backend/);
   });
 
-  it("resolves a recorded grok session id and rejects resuming it from another backend", async () => {
+  it("refuses to resume a recorded run from a retired backend", async () => {
     const root = tempRoot();
     const runsDir = join(root, "runs");
     writeRecord(runsDir, "run_grok", { backend: "grok", sessionId: "grok-sess-1" });
-    const resolved = await resolveResume(runsDir, "run_grok", "grok");
-    expect(resolved.session).toEqual({ runId: "run_grok", sessionId: "grok-sess-1", backend: "grok" });
 
     const mismatched = await resolveResume(runsDir, "run_grok", "claude");
-    expect(mismatched.error).toMatch(/same backend/);
+    expect(mismatched).toEqual({ error: expect.stringMatching(/retired backend "grok"/) });
   });
 
   it("resolves a recorded muse session id (verified against a real muse exec --session-id recall) and rejects resuming it from another backend", async () => {

@@ -149,7 +149,7 @@ describe("/external command", () => {
         // Overview names the default, role/harness counts, and settings path.
         await command?.handler("", ctx);
         expect(notices.at(-1)).toContain("Default: agy (global)");
-        expect(notices.at(-1)).toContain("Harnesses: 6 CLI");
+        expect(notices.at(-1)).toContain("Harnesses: 4 CLI");
         expect(notices.at(-1)).toContain(options.settings.path);
 
         // Roles list one row per role instead of the harness × role product.

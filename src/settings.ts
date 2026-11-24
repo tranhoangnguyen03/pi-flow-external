@@ -4,7 +4,7 @@ import { CONFIG_NAME, executionProblems, knownHarnessShape, objectRecord, type H
 import { join } from "node:path";
 import { HARNESS_NAME_PATTERN, parseHarnessEntry, VALID_THINKING_LEVELS, type HarnessConfig } from "./harnesses.ts";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { EXTERNAL_HARNESSES, PI_RESOURCE_PRESETS, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
+import { EXTERNAL_HARNESSES, isRetiredHarness, PI_RESOURCE_PRESETS, type ExternalHarness, type PermissionTier, type SubagentExtensionOptions } from "./types.ts";
 
 export const DEFAULT_EXTERNAL_SETTINGS = {
   version: 5,
@@ -80,15 +80,11 @@ function isExternalHarness(value: unknown): value is ExternalHarness {
 }
 
 /**
- * Shape-only validation for a `defaultHarness` selector: one of the five
- * external CLI harnesses, or a `pi-*` name matching the named-Pi-harness
- * registry's key pattern. This is pure and synchronous, matching
- * parseSettings's existing contract; whether a named `pi-*` harness is
- * actually registered is a live-registry question resolved at delegation
- * time by the caller, not here.
+ * Retain retired defaults so selection can report them instead of falling
+ * back or blocking settings edits. Named Pi registration is checked at selection.
  */
 function isValidHarnessSelectorShape(value: unknown): value is string {
-  return isExternalHarness(value) || (typeof value === "string" && HARNESS_NAME_PATTERN.test(value));
+  return isExternalHarness(value) || isRetiredHarness(value) || (typeof value === "string" && HARNESS_NAME_PATTERN.test(value));
 }
 
 /** Parse the canonical v4 shape. Diagnostics retain defaults for inspection;
@@ -154,6 +150,8 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
       settings.harnesses = {};
       for (const [name, raw] of Object.entries(record.harnesses)) {
         if (record.version === 5) {
+          // Retired entries stay in the raw document, outside the execution catalog.
+          if (isRetiredHarness(name)) continue;
           const errors = knownHarnessShape(name) ? executionProblems(raw, name, 'harness') : ['invalid harness name'];
           if (errors.length) diagnostics.push(`Invalid v5 harness "${name}": ${errors.join('; ')}`);
           else {
@@ -187,6 +185,10 @@ export function parseSettings(value: unknown): { settings: ExternalSettings; dia
       else {
         settings.exact = {};
         for (const [name, raw] of Object.entries(record.exact)) {
+          if (CONFIG_NAME.test(name) && objectRecord(raw) && isRetiredHarness(raw.harness)) {
+            settings.exact[name] = raw as unknown as ExactSettings;
+            continue;
+          }
           if (!CONFIG_NAME.test(name) || !objectRecord(raw) || typeof raw.harness !== 'string' || !knownHarnessShape(raw.harness) || typeof raw.description !== 'string' || typeof raw.instructions !== 'string') { diagnostics.push(`Invalid exact selector "${name}"`); continue; }
           const { harness, instructions, description, ...fields } = raw;
           const errors = executionProblems(fields, harness);
@@ -222,8 +224,8 @@ export function loadExternalSettings(agentDir: string): LoadedExternalSettings {
           if (!name.endsWith(".md")) return false;
           try {
             const { frontmatter } = parseFrontmatter<Record<string, unknown>>(readFileSync(join(legacyDir, name), "utf8"));
-            return EXTERNAL_HARNESSES.includes(frontmatter.backend as ExternalHarness) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && (frontmatter.harness === "pi-*" || name.startsWith(`${frontmatter.harness}-`)));
-          } catch { return /^(agy|claude|codex|grok|muse)-/.test(name); }
+            return isExternalHarness(frontmatter.backend) || isRetiredHarness(frontmatter.backend) || (frontmatter.backend === "pi" && typeof frontmatter.harness === "string" && (frontmatter.harness === "pi-*" || name.startsWith(`${frontmatter.harness}-`)));
+          } catch { return /^(agy|claude|codex|grok|muse|opencode)-/.test(name); }
         }));
         return { path, settings: defaults(), blocked: legacy, upgradeRequired: legacy, diagnostics: legacy ? [PRE_V4_MESSAGE] : [] };
       } catch (probeError) {

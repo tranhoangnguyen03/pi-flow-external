@@ -6,10 +6,8 @@ Supported harnesses:
 
 - **Claude Code** (`claude`)
 - **Codex CLI** (`codex`)
-- **Grok Build CLI** (`grok`)
 - **Muse Code** (`muse`)
 - **Antigravity** (`agy`)
-- **OpenCode** (`opencode`)
 - **Named Pi harnesses** (`pi-<label>`) — in-process, per-model configs you register yourself
 
 ---
@@ -31,7 +29,7 @@ You ask Pi to delegate work in plain chat. Every delegation combines three eleme
 ## Requirements &amp; Install
 
 1. **Host:** Pi `~1.3.0`.
-2. **External CLIs:** Install and authenticate any external CLI you want to use (`claude`, `codex`, `agy`, `grok`, `muse`, or `opencode`). Pi and external CLIs manage authentication independently.
+2. **External CLIs:** Install and authenticate any external CLI you want to use (`claude`, `codex`, `agy`, or `muse`). Pi and external CLIs manage authentication independently.
 
 Install globally:
 
@@ -114,9 +112,7 @@ Or using the default harness (`agy` — runs with full host access):
 | ---------- | ----------------------------------- | ------------------------- | ---------------------------------- | -------------------------------------------- |
 | `claude`   | ✅ `--permission-mode plan`          | ✅ `acceptEdits` (no bash) | ✅ `--dangerously-skip-permissions` | Root UID falls back to `auto`                |
 | `codex`    | ✅ `--sandbox read-only`             | ✅ `workspace-write`       | ✅ `danger-full-access`             | Native kernel sandbox                        |
-| `grok`     | ✅ `--sandbox read-only`             | ✅ `workspace`             | ✅ `off`                            | Readonly network block is Linux-only         |
 | `muse`     | ✅ `--disable-write --disable-shell` | ✅ Sandbox ON              | ✅ `--yolo`                         | Danger trusts workspace                      |
-| `opencode` | ✅ Deny-by-default rules             | ✅ Edit/write tools        | ✅ `--auto`                         | Standalone server; native tool rules         |
 | `agy`      | ❌ Rejected                          | ❌ Rejected                | ✅ Supported                        | Full host CLI; 1 infra retry on auth/network |
 | `pi-*`     | ✅ Curated read tools                | ✅ Curated edit tools      | ✅ Full SDK tools                   | Curated tool lists; not an OS sandbox        |
 
@@ -224,6 +220,12 @@ return { arch, coverage };
 
 ---
 
+## Upgrading to Flow 7
+
+Grok (`grok`) and OpenCode (`opencode`) no longer launch or resume through Flow. Their saved settings, instruction overrides, and run receipts remain in place; existing runs can still be inspected. Update explicit harness selections, exact selectors, and saved workflows to use a supported harness, or pin `6.3.0-external.2` to keep launching those backends.
+
+If either was your global default, choose another with `/external config harness default <harness>`. If a trusted project sets the retired default in `.pi/pi-flow-external/settings.json`, edit or remove that project's `defaultHarness` key. A retired default is never silently replaced; you can still pass a supported harness explicitly. No settings conversion is required for existing v5 installs.
+
 ## Upgrading from v4
 
 Settings use version 5. If upgrading from version 4:
@@ -242,7 +244,7 @@ The direct delegation tool `Agent` is now `external_delegate`, with no alias. Up
 
 ## Documentation
 
-- **[Harness Reference](docs/harness-reference.md):** Deep CLI flags, OpenCode 2 standalone server details, Muse session resume, Grok sandbox notes, and Pi in-process presets.
+- **[Harness Reference](docs/harness-reference.md):** CLI permission flags, session resume, and Pi in-process presets.
 - **[Configuration Reference](docs/configuration-reference.md):** Settings v5 JSON schema, sparse inheritance, role overrides, and full command reference.
 - **[Supervision &amp; Runtime](docs/supervision-and-runtime.md):** `external_runs` actions, cursor pagination, batch inspect, and byte budgets.
 - **[Workflows](docs/workflows.md):** `external_workflow`, plain-language plans, live phases, error handling (`ChildRunError`), and replay cache.

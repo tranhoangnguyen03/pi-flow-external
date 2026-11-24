@@ -8,7 +8,6 @@ import { agyActivityFromEvent } from "../src/core/agy.ts";
 import { claudeActivityFromEvent } from "../src/core/claude.ts";
 import { codexActivityFromEvent } from "../src/core/codex.ts";
 import { getBackendAgentLabel } from "../src/core/display.ts";
-import { grokActivityFromEvent } from "../src/core/grok.ts";
 import { museActivityFromEvent } from "../src/core/muse.ts";
 import { createProgressEmitter } from "../src/core/progress.ts";
 import { hasNestedAgentActivity, spawnSubagent } from "../src/core/spawn.ts";
@@ -39,10 +38,6 @@ describe("external nested-agent observation", () => {
       },
     }, "agy")).toBe(true);
 
-    expect(hasNestedAgentActivity({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", name: "spawn_subagent" }] },
-    }, "grok")).toBe(true);
   });
 
   it("ignores generic values and terminal structured output", () => {
@@ -55,10 +50,6 @@ describe("external nested-agent observation", () => {
       event: "result",
       result: { status: "SUCCESS", structured_output: { type: "agent" } },
     }, "agy")).toBe(false);
-    expect(hasNestedAgentActivity({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "no tool use here" }] },
-    }, "grok")).toBe(false);
 
     expect(hasNestedAgentActivity({
       payload_type: "task.lifecycle.proposed",
@@ -77,7 +68,6 @@ describe("external nested-agent observation", () => {
     expect(claudeActivityFromEvent({ type: "system", subtype: "init" })).toBeUndefined();
     expect(codexActivityFromEvent({ type: "thread.started" })).toBeUndefined();
     expect(agyActivityFromEvent({ event: "init" })).toBeUndefined();
-    expect(grokActivityFromEvent({ type: "system", subtype: "init", session_id: "grok-sess" })).toBeUndefined();
     expect(museActivityFromEvent({ payload_type: "run.model.configured", payload: { provider_id: "meta" } })).toBeUndefined();
 
     vi.useFakeTimers();
@@ -115,7 +105,7 @@ describe("spawn validation evidence", () => {
   it("finishes an unlaunched receipt when effort normalization rejects a value", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-flow-effort-"));
     try {
-      for (const backend of ["agy", "grok", "muse", "claude", "codex"] as const) {
+      for (const backend of ["agy", "muse", "claude", "codex"] as const) {
         const runRecord = createRunRecord({ directory, metadata: { backend } });
         const result = await spawnSubagent({
           toolCallId: "invalid-effort", description: "Invalid effort", prompt: "Do the task.",

@@ -3,11 +3,12 @@ import { lstatSync, readdirSync, readFileSync, mkdirSync, writeFileSync, linkSyn
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { CONFIG_NAME, cliHarness, objectRecord, executionProblems, reasoningLevels, type HarnessSettings, type ExactSettings, type BindingSettings } from "./config-v5.ts";
-import { parseSubagentProfileContent, opencodeProfileProblem } from "./profiles.ts";
+import { parseSubagentProfileContent, opencodeProfileProblem, type LegacyProfile } from "./profiles.ts";
 import type { HarnessConfig } from "./harnesses.ts";
-import type { SubagentProfile } from "./types.ts";
 import { externalSettingsPath, loadExternalSettings, parseSettings, PRE_V4_MESSAGE, saveExternalSettings } from "./settings.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
+import { EXTERNAL_HARNESSES, RETIRED_HARNESSES, isRetiredHarness } from "./types.ts";
+
+const legacyCliHarness = (name: string) => cliHarness(name) || isRetiredHarness(name);
 
 export interface V5UpgradeFile {
   sourcePath: string;
@@ -39,7 +40,7 @@ export interface V5UpgradeApplyResult extends Omit<V5UpgradePlan, "status"> {
 
 function digest(bytes: string | Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
 /** A v4 Pi override inherits its registration's model/thinking; a differing pin is a conflict. */
-function reconcileV4PiProfile(profile: SubagentProfile, configs: ReadonlyMap<string, HarnessConfig>): { profile: SubagentProfile; conflict?: string } {
+function reconcileV4PiProfile(profile: LegacyProfile, configs: ReadonlyMap<string, HarnessConfig>): { profile: LegacyProfile; conflict?: string } {
   if (profile.backend !== "pi" || !profile.harness) return { profile };
   const config = configs.get(profile.harness);
   if (!config) return { profile, conflict: `Harness "${profile.harness}" is not registered.` };
@@ -117,15 +118,15 @@ function plan(root: string): V5UpgradePlan {
   }
   const legacy = parseSettings(raw).settings;
   const piConfigs = new Map(Object.entries(legacy.harnesses ?? {}));
-  if (!cliHarness(legacy.defaultHarness) && !piConfigs.has(legacy.defaultHarness)) throw new Error(`Default Pi harness ${legacy.defaultHarness} is not registered.`);
+  if (!legacyCliHarness(legacy.defaultHarness) && !piConfigs.has(legacy.defaultHarness)) throw new Error(`Default Pi harness ${legacy.defaultHarness} is not registered.`);
   const harnesses: Record<string, HarnessSettings> = {};
-  for (const harness of EXTERNAL_HARNESSES) harnesses[harness] = { thinking: harness === "opencode" ? "native" : "parent" };
+  for (const harness of [...EXTERNAL_HARNESSES, ...RETIRED_HARNESSES]) harnesses[harness] = { thinking: harness === "opencode" ? "native" : "parent" };
   for (const [harness, config] of piConfigs) harnesses[harness] = { ...config };
   const settings: V5UpgradeSettings = { ...raw, version: 5, harnesses };
   const result: V5UpgradePlan = { ...inactive(root, "ready"), settings };
   result.impact.disabledProfiles = [...legacy.disabledProfiles ?? []];
   result.impact.disabledHarnesses = [...legacy.disabledHarnesses ?? []];
-  result.notes.push("CLI harness effort defaults retain parent inheritance (OpenCode retains native effort), including future shared roles. No full overrides are consolidated.");
+  result.notes.push("CLI harness effort defaults retain parent inheritance (OpenCode retains native effort), including future shared roles. Retired Grok/OpenCode settings are copied but inactive. No full overrides are consolidated.");
   const sources: [string, string][] = [[settingsPath, digest(bytes)]];
   const base = join(root, "pi-flow-external");
   result.backups.push({ sourcePath: settingsPath, destinationPath: join(base, "settings.v4.backup.json"), fingerprint: digest(bytes), contents: bytes.toString("utf8") });
@@ -156,13 +157,14 @@ function plan(root: string): V5UpgradePlan {
     if (!profile || Object.keys(frontmatter).some(key => !allowed.includes(key))) throw new Error(`Invalid legacy override ${sourcePath}: unsupported profile or metadata.`);
     const harness = profile.backend === "pi" ? profile.harness : profile.backend;
     if (!harness || !harnesses[harness]) throw new Error(`Pi harness ${harness ?? "(missing)"} in ${sourcePath} is not registered.`);
-    if (cliHarness(harness) && profile.harness !== undefined && profile.harness !== harness) throw new Error(`Override ${sourcePath} declares a mismatched execution harness ${profile.harness}.`);
+    const isCli = legacyCliHarness(harness);
+    if (isCli && profile.harness !== undefined && profile.harness !== harness) throw new Error(`Override ${sourcePath} declares a mismatched execution harness ${profile.harness}.`);
     const reconciled = reconcileV4PiProfile(profile, piConfigs);
     if (reconciled.conflict) throw new Error(`${sourcePath}: ${reconciled.conflict}`);
     const opencodeProblem = opencodeProfileProblem(profile);
     if (opencodeProblem) throw new Error(opencodeProblem);
     const fields: BindingSettings = {};
-    if (cliHarness(harness)) {
+    if (isCli) {
       fields.model = profile.model ?? "native";
       fields.thinking = profile.thinking ?? (harness === "opencode" ? "native" : "parent");
       if (profile.thinking && ["native", "parent"].includes(profile.thinking)) throw new Error(`${sourcePath}: legacy effort ${profile.thinking} conflicts with a v5 policy keyword.`);
@@ -173,12 +175,12 @@ function plan(root: string): V5UpgradePlan {
       if (profile.thinking !== undefined) fields.thinking = profile.thinking;
     }
     if (profile.tools !== undefined) {
-      if (cliHarness(harness)) result.notes.push(`${sourcePath}: tools omitted — CLI harnesses never enforced this metadata; v4 only recorded it.`);
+      if (isCli) result.notes.push(`${sourcePath}: tools omitted — CLI harnesses never enforced this metadata; v4 only recorded it.`);
       else fields.tools = profile.tools;
     }
     if (profile.maxBudgetUsd !== undefined) fields.max_budget_usd = profile.maxBudgetUsd;
     const problems = executionProblems(fields, harness);
-    if (problems.length) throw new Error(`${sourcePath}: ${problems.join('; ')}. Supported effort for ${harness}: ${reasoningLevels(harness).join(', ')}${cliHarness(harness) && harness !== 'opencode' ? ', or remove thinking to retain parent inheritance' : ''}. Edit the original override, then preview again. Originals were not changed.`);
+    if (problems.length) throw new Error(`${sourcePath}: ${problems.join('; ')}. Supported effort for ${harness}: ${reasoningLevels(harness).join(', ')}${isCli && harness !== 'opencode' ? ', or remove thinking to retain parent inheritance' : ''}. Edit the original override, then preview again. Originals were not changed.`);
     if (legacy.disabledProfiles?.includes(name)) fields.enabled = false;
     const prefixes = harnessNames.filter(h => name.startsWith(`${h}-`) && CONFIG_NAME.test(name.slice(h.length + 1)));
     const role = name.startsWith(`${harness}-`) ? name.slice(harness.length + 1) : undefined;
@@ -190,9 +192,9 @@ function plan(root: string): V5UpgradePlan {
     }
     if (!canonicalRole || prefixes.length > 1) {
       (settings.exact ??= {})[name] = { harness, description: profile.description, instructions: body.trim(), ...fields,
-        ...(!cliHarness(harness) ? { model: reconciled.profile.model, thinking: reconciled.profile.thinking } : {}) };
+        ...(!isCli ? { model: reconciled.profile.model, thinking: reconciled.profile.thinking } : {}) };
       result.impact.exactSelectors.push(name);
-      if (!cliHarness(harness)) result.notes.push(`${sourcePath}: exact Pi selector ${name} pins its current effective model/effort for compatibility; later harness-default changes do not update these pins.`);
+      if (!isCli) result.notes.push(`${sourcePath}: exact Pi selector ${name} pins its current effective model/effort for compatibility; later harness-default changes do not update these pins.`);
     }
     for (const prefix of prefixes) {
       if (prefix === harness && canonicalRole) continue;

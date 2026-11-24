@@ -18,14 +18,8 @@ import {
   buildCodexArgs,
 } from "../src/core/codex.ts";
 import {
-  buildGrokArgs,
-} from "../src/core/grok.ts";
-import {
   buildMuseArgs,
 } from "../src/core/muse.ts";
-import {
-  buildOpencodeArgs,
-} from "../src/core/opencode.ts";
 import {
   PARENT_CONTEXT_MAX_BYTES,
 } from "../src/core/parent-context.ts";
@@ -42,9 +36,7 @@ const ALL_BACKENDS: readonly SubagentBackend[] = [
   "claude",
   "codex",
   "agy",
-  "grok",
   "muse",
-  "opencode",
   "pi",
 ];
 
@@ -68,30 +60,25 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
       claude: (extra: object) => buildClaudeArgs({ profile: profile("claude"), thinkingLevel: undefined, ...extra }),
       codex: (extra: object) => buildCodexArgs({ prompt: "p", profile: profile("codex"), thinkingLevel: undefined, ...extra }),
       agy: (extra: object) => buildAgyArgs({ profile: profile("agy"), thinkingLevel: undefined, ...extra }),
-      grok: (extra: object) => buildGrokArgs({ profile: profile("grok"), ...extra }),
       muse: (extra: object) => buildMuseArgs({ promptFilePath: "/tmp/p", workspace: "/tmp", profile: profile("muse"), thinkingLevel: "low", ...extra }),
-      opencode: (extra: object) => buildOpencodeArgs({ profile: profile("opencode"), ...extra }),
     };
-    const schemaOption = { claude: { outputSchema: schema }, agy: { outputSchema: schema }, grok: { outputSchema: schema },
+    const schemaOption = { claude: { outputSchema: schema }, agy: { outputSchema: schema },
       codex: { outputSchemaPath: "/tmp/schema.json" }, muse: { schemaFilePath: "/tmp/schema.json" } } as const;
     const resumeOption = { claude: { resumeSessionId: "sess-1" }, codex: { resumeSessionId: "sess-1" }, agy: { resumeConversationId: "sess-1" },
-      grok: { resumeSessionId: "sess-1" }, muse: { resumeSessionId: "sess-1" }, opencode: { resumeSessionId: "sess-1" } } as const;
+      muse: { resumeSessionId: "sess-1" } } as const;
     const nested = {
       claude: { type: "assistant", message: { content: [{ type: "tool_use", name: "Agent" }] } },
       codex: { type: "item.completed", item: { type: "collab_tool_call" } },
       agy: { event: "step_update", step_update: { step_type: "subagent", subagent_info: { id: "sub-1" } } },
-      grok: { type: "assistant", message: { content: [{ type: "tool_use", name: "spawn_subagent" }] } },
       muse: { payload_type: "task.lifecycle.started", payload: { task_kind: "reminder.agent.skills" } },
-      opencode: { type: "tool_use", sessionID: "s1", part: { sessionID: "s1", tool: "subagent" } },
       pi: { type: "tool_execution_start", toolName: "external_delegate" },
     } as const;
-    const costKind = { claude: "native", grok: "native", pi: "native", codex: "estimated", opencode: "partial", agy: "unknown", muse: "unknown" };
+    const costKind = { claude: "native", pi: "native", codex: "estimated", agy: "unknown", muse: "unknown" };
     for (const backend of ALL_BACKENDS) {
       const cap = BACKEND_CAPABILITIES[backend];
       const build = backend === "pi" ? undefined : args[backend];
       // Structured output: the advertised flag appears only when a schema is requested.
       if (backend === "pi") expect(cap.workflowChildSchema).toEqual({ support: "supported", mechanism: "injected_tool" });
-      else if (backend === "opencode") expect(cap.workflowChildSchema.support).toBe("unsupported");
       else {
         const flag = backend === "codex" || backend === "muse" ? "--output-schema" : "--json-schema";
         expect(build!(schemaOption[backend]), backend).toContain(flag);
@@ -119,7 +106,7 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
 
   it("derives permission, context and Pi resource claims from canonical helpers", () => {
     for (const backend of ALL_BACKENDS) {
-      const tiers = buildPermissionTierCapabilities(backend, { effectiveUid: 501, platform: "linux" });
+      const tiers = buildPermissionTierCapabilities(backend, { effectiveUid: 501 });
       for (const tier of PERMISSION_TIERS) {
         const unsupported = unsupportedPermissionReason(tier, backend);
         const resolved = resolvePermission(tier, backend);
@@ -135,14 +122,10 @@ describe("BACKEND_CAPABILITIES adapter conformance", () => {
     }
 
     // Claude effective UID 0 condition matches buildPermissionArgs
-    const claudeRootTiers = buildPermissionTierCapabilities("claude", { effectiveUid: 0, platform: "linux" });
+    const claudeRootTiers = buildPermissionTierCapabilities("claude", { effectiveUid: 0 });
     expect(buildPermissionArgs("danger", "claude", { effectiveUid: 0 })).toEqual(["--permission-mode", "auto"]);
     expect(claudeRootTiers.danger.caveat).toContain("--permission-mode auto");
     expect(claudeRootTiers.danger.caveat).toContain("effective UID 0");
-
-    // Grok non-Linux platform condition
-    const grokDarwinTiers = buildPermissionTierCapabilities("grok", { effectiveUid: 501, platform: "darwin" });
-    expect(grokDarwinTiers.readonly.caveat).toContain("Linux-only (inactive on darwin)");
 
     // Generated permission help for pi lists per-tier tools from PI_TIER_ACTIVE_TOOLS, not a flat union
     const piHelp = formatBackendPermissionHelp("pi");

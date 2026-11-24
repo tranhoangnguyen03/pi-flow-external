@@ -84,8 +84,8 @@ Inspect the dry-run manifest: expected version and files, including
 operational docs. Development E2E scripts and tests must not be shipped.
 
 Run the essential real-provider gate from [`field-testing.md`](field-testing.md)
-before merging: all six direct backends are mandatory (`agy`, `claude`,
-`codex`, `grok`, `muse`, `opencode`), plus their workflow receipts, and one named Pi
+before merging: all four direct CLI checks are mandatory (`agy`, `claude`,
+`codex`, `muse`), plus their workflow receipts, and one named Pi
 harness direct plus workflow receipt when a real harness is registered. Add the routing smoke when
 discovery, coordinator guidance, or slash commands changed, the configuration
 surface check and task-based modal/RPC/headless checks when settings, roles, or conversion changed, and the nested
@@ -140,7 +140,7 @@ PI_CODING_AGENT_DIR="$VERIFY_AGENT_DIR" pi
 # In Pi:
 # /external (opens guided modal in TUI, or text overview in headless)
 # /external doctor (checks catalog and reports CLI/Pi readiness)
-# /external config harness list (lists all 6 built-in CLIs and any pi-* entries)
+# /external config harness list (lists all four built-in CLIs and any pi-* entries)
 # /external config role list (lists the 6 built-in roles)
 # Confirm removed routes (/external settings, /external roles, /external role create, /external profile create)
 # report current usage and point to /external help, which lists replacement mappings.

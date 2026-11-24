@@ -2,6 +2,12 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [7.0.0-external.0] - 2026-11-25
+
+### Breaking
+- Grok (`grok`) and OpenCode (`opencode`) are no longer execution backends. Use a supported harness for new tasks and update saved workflows and exact selectors that select either backend. There is no automatic replacement or cross-backend resume. Use `6.3.0-external.2` if you still need those adapters.
+- Existing v5 settings, instruction overrides, and receipts are not migrated or removed. Retired entries stay inactive, and old receipts remain inspectable. Explicit calls to supported harnesses still work with a retired default. Choose a new global default with `/external config harness default <harness>`, or update the `defaultHarness` key in trusted project settings if it overrides that choice.
+
 ## [6.3.0-external.2] - 2026-11-24
 
 ### Changed

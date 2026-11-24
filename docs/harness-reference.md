@@ -10,9 +10,7 @@ Detailed specifications, sandbox mappings, resume capabilities, and runtime beha
 |---|---|---|---|---|---|
 | `claude` | Claude Code CLI | ✅ Native permission modes | ✅ Native (`--resume`) | ✅ Native (`--max-budget-usd`) | ❌ None |
 | `codex` | Codex CLI | ✅ Kernel sandbox | ✅ Native (`exec resume`) | ⚠️ Unenforceable (estimated) | ❌ None |
-| `grok` | Grok Build CLI | ✅ Kernel sandbox (Linux) | ✅ Native (`--resume`) | ⚠️ Unenforceable (reported) | ❌ None |
 | `muse` | Muse Code CLI | ✅ Process sandbox | ✅ Native (`--session-id`) | ❌ Unknown cost | ❌ None |
-| `opencode` | OpenCode 2 CLI | ⚠️ Injected agent rules | ✅ Native (`--session`) | ⚠️ Unenforceable | ❌ None |
 | `agy` | Antigravity | ❌ Unsandboxed only | ✅ Native (`--conversation`) | ❌ Unknown cost | ✅ 1 infra retry |
 | `pi-*` | In-process Pi SDK | ⚠️ Curated tool lists | ❌ Not supported | ⚠️ Unenforceable | ❌ None |
 
@@ -44,24 +42,7 @@ Detailed specifications, sandbox mappings, resume capabilities, and runtime beha
 
 ---
 
-## 3. Grok Build CLI (`grok`)
-
-- **CLI Check:** `grok --version` (verified against 1.0.40).
-- **Install & Login:** `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login` or `XAI_API_KEY`.
-- **Permission Mapping:**
-  - `readonly`: `--sandbox read-only`
-  - `edit`: `--sandbox workspace`
-  - `danger`: `--sandbox off`
-  - All tiers pass `--permission-mode bypassPermissions` to prevent interactive prompts in headless runs.
-- **Caveats:**
-  - The read-only network-blocking sandbox is Linux-only (a no-op on macOS).
-  - On some macOS systems, sandbox startup can fail closed if `/var/run/docker.sock` resolves to a symlink.
-- **Budgets:** Reports native token cost (`total_cost_usd`). Budget limits are unenforced.
-- **Session Resume:** Supports `resume: "<runId>"` via `--resume <sessionId>`.
-
----
-
-## 4. Muse Code (`muse`)
+## 3. Muse Code (`muse`)
 
 - **CLI Check:** `muse --version` (verified against 1.3.0 on `meta` provider).
 - **Permission Mapping:**
@@ -74,26 +55,7 @@ Detailed specifications, sandbox mappings, resume capabilities, and runtime beha
 
 ---
 
-## 5. OpenCode (`opencode`)
-
-- **CLI Check:** `opencode --version` (targets **OpenCode 2** only; `@opencode/cli` 2.0.16).
-- **Standalone Server Isolation:** Every run launches `opencode run --standalone --format json`. This starts a private, ephemeral server owned solely by that run. It never touches or interrupts your background service (`opencode service`).
-- **Permission Mapping:**
-  - `danger`: `--auto`.
-  - `readonly` / `edit`: Injects an ephemeral, deny-by-default primary agent via `OPENCODE_CONFIG_CONTENT` and selects it with `--agent <name>`.
-  - Allowed tools: `read`, `grep`, `glob` (at `readonly`), plus `edit`, `write`, `patch` (at `edit`). Shell, subagents, and web access are blocked.
-  - Note: These are **native tool permission rules, not an OS sandbox**.
-- **Reasoning Variants:** Thinking is passed as a model variant (`--model provider/model#variant`). It requires a pinned model and a variant recognized by that model.
-- **Session Verification:** The streamed JSON event output is progress only. Because OpenCode exits 0 even after interruptions, the adapter validates a bounded `opencode session export --standalone <id>` ensuring:
-  1. The reported session ID matches.
-  2. A new user turn contains the exact briefing prompt.
-  3. The session completed with terminal `succeeded`.
-  4. The assistant message completed with `stop` and non-empty text.
-- **Resume Restrictions:** A `danger` resume of a session created by an injected restricted agent is refused to prevent running with an undefined agent.
-
----
-
-## 6. Antigravity (`agy`)
+## 4. Antigravity (`agy`)
 
 - **CLI Check:** `agy --version`
 - **Permission Mapping:** Only supports `--dangerously-skip-permissions`. Requests for `readonly` or `edit` are rejected.
@@ -103,7 +65,7 @@ Detailed specifications, sandbox mappings, resume capabilities, and runtime beha
 
 ---
 
-## 7. Named Pi Harnesses (`pi-<label>`)
+## 5. Named Pi Harnesses (`pi-<label>`)
 
 A named Pi harness runs in-process using Pi's own SDK, targeting any provider and model supported by Pi's model registry.
 

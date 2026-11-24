@@ -87,7 +87,7 @@ describe("external_help unknown harness filter", () => {
       const result = await tool.execute("call-1", { topic: "roles", harness: "not-a-real-harness" }, undefined, undefined, fakeCtx(agentDir));
       expect(result.isError).toBe(true);
       expect((result.content[0] as { text: string }).text).toMatch(
-        /Unknown harness "not-a-real-harness"\. Configured harnesses: agy, claude, codex, grok, muse, opencode\./,
+        /Unknown harness "not-a-real-harness"\. Configured harnesses: agy, claude, codex, muse\./,
       );
       expect(result.structuredContent).toMatchObject({
         contractVersion: 1,
@@ -129,7 +129,7 @@ describe("external_help unknown harness filter", () => {
       const result = await tool.execute("call-3", { topic: "permissions", harness: "pi-missing" }, undefined, undefined, fakeCtx(agentDir));
       expect(result.isError).toBe(true);
       expect((result.content[0] as { text: string }).text).toMatch(
-        /Configured harnesses: agy, claude, codex, grok, muse, opencode, pi-deepseek\./,
+        /Configured harnesses: agy, claude, codex, muse, pi-deepseek\./,
       );
       expect(result.structuredContent).toMatchObject({
         ok: false,
@@ -556,7 +556,7 @@ describe("external_help contracts discovery and workflow helpers", () => {
     mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
     const settingsPath = join(agentDir, "pi-flow-external", "settings.json");
     writeFileSync(settingsPath, JSON.stringify({
-      version: 5, defaultPermission: "edit", disabledHarnesses: ["grok"],
+      version: 5, defaultPermission: "edit", disabledHarnesses: ["muse"],
       harnesses: { "pi-skills": { model: "anthropic/claude-sonnet-4-5", thinking: "high", preset: "skills" } },
     }));
     await withAgentDir(agentDir, async () => {
@@ -564,13 +564,13 @@ describe("external_help contracts discovery and workflow helpers", () => {
       const index = await tool.execute("cap-index", { topic: "capabilities", harness: "   " }, undefined, undefined, { cwd: agentDir, isProjectTrusted: () => true } as never);
       expect(Value.Check(externalHelpOutputSchema, index.structuredContent)).toBe(true);
       const records = (index.structuredContent as any).data.harnesses;
-      expect(records.map((h: any) => h.harness)).toEqual(["agy", "claude", "codex", "grok", "muse", "opencode", "pi-skills"]);
+      expect(records.map((h: any) => h.harness)).toEqual(["agy", "claude", "codex", "muse", "pi-skills"]);
       for (const record of records) {
         expect(Value.Check(capabilityRecordSchema, record)).toBe(true);
         expect(record.readiness).toBe("not_probed");
         expect(record.permissions.default).toBe("edit");
       }
-      expect(records.find((h: any) => h.harness === "grok").configuration).toEqual({ state: "built_in", enabled: false });
+      expect(records.find((h: any) => h.harness === "muse").configuration).toEqual({ state: "built_in", enabled: false });
       expect(records.find((h: any) => h.harness === "pi-skills")).toMatchObject({
         boundary: "pi_sdk", configuration: { state: "registered", enabled: true, preset: "skills" }, resources: { skills: "user_and_project" },
       });
@@ -585,7 +585,7 @@ describe("external_help contracts discovery and workflow helpers", () => {
       const blocked = await tool.execute("cap-blocked", { topic: "capabilities" }, undefined, undefined, fakeCtx(agentDir));
       const records = (blocked.structuredContent as any).data.harnesses;
       // A malformed file never guesses registered Pi names.
-      expect(records.map((r: any) => r.harness)).toEqual(["agy", "claude", "codex", "grok", "muse", "opencode"]);
+      expect(records.map((r: any) => r.harness)).toEqual(["agy", "claude", "codex", "muse"]);
       expect(records.every((r: any) => r.configuration.state === "invalid" && r.configuration.enabled === false)).toBe(true);
     });
   });

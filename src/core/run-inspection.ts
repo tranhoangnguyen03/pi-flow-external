@@ -5,9 +5,8 @@ import { join } from "node:path";
 import { agyActivityFromEvent } from "./agy.ts";
 import { claudeActivityFromEvent, extractClaudeFinalText } from "./claude.ts";
 import { codexActivityFromEvent, extractCodexFinalText } from "./codex.ts";
-import { extractGrokFinalText, grokActivityFromEvent } from "./grok.ts";
+import { extractGrokAssistantText, grokActivityFromEvent, extractOpencodeText, opencodeActivityFromEvent } from "./retired-evidence.ts";
 import { museActivityFromEvent } from "./muse.ts";
-import { extractOpencodeText, opencodeActivityFromEvent } from "./opencode.ts";
 import { ExpectedFlowError } from "./errors.ts";
 import { extractTextContent } from "./progress.ts";
 
@@ -498,7 +497,7 @@ function outputFromEvent(event: EvidenceEvent): ({ kind: "claude" | "codex" | "a
     return text ? { kind: "claude", ...(id ? { id } : {}), text } : undefined;
   }
   if (envelope?.backend === "grok" && backendEvent.type === "assistant") {
-    const text = extractGrokFinalText(backendEvent);
+    const text = extractGrokAssistantText(backendEvent);
     const id = asString(asRecord(backendEvent.message)?.id);
     return text ? { kind: "grok", ...(id ? { id } : {}), text } : undefined;
   }
