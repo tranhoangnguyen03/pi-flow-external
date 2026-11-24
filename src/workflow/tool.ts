@@ -29,7 +29,7 @@ import { loadExternalCatalog, resolveExternalProfile, selectorHarness, unknownEx
 import { resolveExecutionProfile } from '../execution-config.ts';
 import { effectivePiResourcePreset, loadHarnessConfigs } from "../harnesses.ts";
 import { WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import { EXTERNAL_HARNESSES, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
+import { EXTERNAL_HARNESSES, isRetiredHarness, type PermissionTier, type SubagentProfile, type SubagentToolDetails, type SubagentUsage, type WorkflowAgentSnapshot, type WorkflowToolDetails } from "../types.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
@@ -419,7 +419,7 @@ export function createWorkflowTool(
           },
           defaultSubagentType: null,
           resolveSubagentType: (selection) => {
-            if (selection.role && !selection.harness && !configuredHarnessNames.has(defaultHarness)) {
+            if (selection.role && !selection.harness && !isRetiredHarness(defaultHarness) && !configuredHarnessNames.has(defaultHarness)) {
               throw new Error(
                 `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`,
               );
@@ -428,7 +428,7 @@ export function createWorkflowTool(
               profiles,
               selection,
               defaultHarness,
-              { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses },
+              { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses, retiredExact: catalog.retiredExact },
             ).name;
           },
           describeSubagentType: (name) => descriptors.get(name),

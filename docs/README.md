@@ -11,7 +11,7 @@ Core reference guides for configuring and using the extension with Pi:
 
 | Document | Purpose |
 |---|---|
-| **[Harness Reference](harness-reference.md)** | Sandboxing mechanisms, permission flags, session resume, and adapter specifics for Claude, Codex, Grok, Muse, OpenCode, Antigravity, and Pi. |
+| **[Harness Reference](harness-reference.md)** | Sandboxing mechanisms, permission flags, session resume, and adapter specifics for Claude, Codex, Muse, Antigravity, and Pi. |
 | **[Configuration Reference](configuration-reference.md)** | Interactive TUI navigation, settings v5 schema, sparse overrides, and full command reference. |
 | **[Supervision & Runtime](supervision-and-runtime.md)** | Live terminal intent cards, background execution, the `external_runs` tool, and local evidence storage. |
 | **[Workflows](workflows.md)** | Scripting API, parallel fan-out (`parallel()`), `ChildRunError` handling, structured schemas, and replay cache. |

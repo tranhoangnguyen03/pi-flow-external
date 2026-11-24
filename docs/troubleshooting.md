@@ -23,8 +23,6 @@ Solutions to common issues, authentication questions, and environment quirks whe
 - **Fix:** Verify host login directly in your terminal:
   - Claude: `claude login`
   - Codex: `codex login`
-  - Grok: `grok login` or set `XAI_API_KEY`
-  - OpenCode: `opencode auth login`
   Run `/external doctor` to inspect diagnostic status.
 
 ### 5. Model Missing from Picker

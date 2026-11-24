@@ -45,7 +45,7 @@ import { createWorkflowTool } from "./workflow/tool.ts";
 import { registerProfileCreator, startRoleInterview, startHarnessInterview } from "./profile-creator.ts";
 import { registerExternalCommand } from "./external-command.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, loadExternalSettings, resolveCtxDefaultHarness, resolveExternalSettings, renderDefaultHarness } from "./settings.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
+import { EXTERNAL_HARNESSES, isRetiredHarness } from "./types.ts";
 import { EXTERNAL_DELEGATE_TOOL, EXTERNAL_WORKFLOW_TOOL } from "./tool-names.ts";
 import type {
   PermissionTier,
@@ -111,7 +111,7 @@ interface CreateAgentToolOptions {
 }
 
 const PROGRESS_STATUSES: SubagentProgressNode["status"][] = ["queued", "running", "done", "error", "aborted"];
-const SUBAGENT_BACKENDS: SubagentBackend[] = ["pi", "codex", "claude", "agy", "grok", "muse", "opencode"];
+const SUBAGENT_BACKENDS: readonly string[] = ["pi", ...EXTERNAL_HARNESSES];
 
 function shouldEnableProgress(ctx: ExtensionContext): boolean {
   if (!ctx.hasUI) {
@@ -177,7 +177,7 @@ function isProgressStatus(value: unknown): value is SubagentProgressNode["status
 }
 
 function isSubagentBackend(value: unknown): value is SubagentBackend {
-  return typeof value === "string" && SUBAGENT_BACKENDS.includes(value as SubagentBackend);
+  return typeof value === "string" && SUBAGENT_BACKENDS.includes(value);
 }
 
 function isSubagentProgressNode(value: unknown): value is SubagentProgressNode {
@@ -373,7 +373,7 @@ function createAgentTool(
   return defineTool({
     name: EXTERNAL_DELEGATE_TOOL,
     label: EXTERNAL_DELEGATE_TOOL,
-    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Grok CLI, Muse Code, OpenCode, or registered Pi harness role.",
+    description: "Delegate one task to an external Claude Code, Codex CLI, Antigravity, Muse Code, or registered Pi harness role.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     parameters: agentToolParameters,
     outputSchema: agentOutputSchema,
@@ -410,7 +410,7 @@ function createAgentTool(
       const profiles = allProfiles;
       const requestedDefault = resolveCtxDefaultHarness(effectiveState.defaultHarness, ctx);
       const defaultHarness = requestedDefault.harness;
-      if (params.role && !params.harness && !configuredHarnessNames.has(defaultHarness)) {
+      if (params.role && !params.harness && !isRetiredHarness(defaultHarness) && !configuredHarnessNames.has(defaultHarness)) {
         const error = `Default harness "${defaultHarness}" is not registered (missing from settings.json); pass harness explicitly or recreate it via /external config harness create.`;
         return receipt(textResult(error, {
           description: params.description,
@@ -425,7 +425,7 @@ function createAgentTool(
           role: params.role,
           harness: params.harness,
           subagentType: params.subagent_type,
-        }, defaultHarness, { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses });
+        }, defaultHarness, { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses, retiredExact: catalog.retiredExact });
       } catch (error) {
         if (!(error instanceof ExpectedFlowError)) throw error;
         const message = error.message;
@@ -662,7 +662,7 @@ function createAgentTool(
               subagentType: typeof args.subagent_type === "string" ? args.subagent_type : undefined,
             },
             defaultHarness,
-            { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses },
+            { configuredHarnessNames, disabledHarnesses: catalog.disabledHarnesses, retiredExact: catalog.retiredExact },
           );
         } catch {
           profile = undefined;

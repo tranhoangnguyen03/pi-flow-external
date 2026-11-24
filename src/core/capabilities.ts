@@ -126,30 +126,6 @@ export const BACKEND_CAPABILITIES: Readonly<Record<SubagentBackend, BackendCapab
       "readonly and edit are rejected instead of being broadened to danger.",
     ],
   },
-  grok: {
-    boundary: "external_cli",
-    workflowChildSchema: { support: "supported", mechanism: "cli_flag" },
-    resume: {
-      support: "supported",
-      mechanism: "--resume",
-      conditions: [
-        "Requires a completed grok run record with a sessionId.",
-        "Cannot be combined with context sharing (recent/full).",
-      ],
-    },
-    budget: "not_enforced",
-    cost: {
-      kind: "native",
-      conditions: [
-        "Reported natively by Grok CLI (total_cost_usd or modelUsage costUSD); costKnown is false when absent.",
-      ],
-    },
-    retries: { extension: "none", native: "unknown" },
-    nestedAgentDetection: true,
-    permissionCaveats: [
-      "Enforced by a kernel sandbox alongside --permission-mode bypassPermissions, but readonly network blocking is Linux-only.",
-    ],
-  },
   muse: {
     boundary: "external_cli",
     workflowChildSchema: { support: "supported", mechanism: "schema_file" },
@@ -173,38 +149,6 @@ export const BACKEND_CAPABILITIES: Readonly<Record<SubagentBackend, BackendCapab
     permissionCaveats: [
       "danger (--yolo) disables approval and the sandbox and additionally trusts this workspace (loads its skills/rules) for this run — a broader grant than an unsandboxed run alone.",
       "Native provider retries (up to 10 attempts) are disclosed via activity narration, not performed by this extension.",
-    ],
-  },
-  opencode: {
-    boundary: "external_cli",
-    workflowChildSchema: { support: "unsupported", mechanism: "none" },
-    resume: {
-      support: "supported",
-      mechanism: "--session",
-      conditions: [
-        "Requires a completed opencode run record with a sessionId.",
-        "Refused at readonly/edit when the saved session carries its own permission rules.",
-        "Refused at danger when the session was last run by an injected restricted agent.",
-        "Cannot be combined with context sharing (recent/full).",
-      ],
-    },
-    budget: "not_enforced",
-    cost: {
-      kind: "partial",
-      conditions: [
-        "Summed from exported turn assistant messages; costKnown is false when any message lacks usage/cost or ran subagent.",
-      ],
-    },
-    retries: { extension: "none", native: "internal" },
-    nestedAgentDetection: true,
-    permissionCaveats: [
-      "Every run is opencode run --standalone, a private server this run owns, never the shared background service.",
-      "readonly and edit run under a per-run agent injected through OPENCODE_CONFIG_CONTENT and selected with --agent on every run, resumes included; shell, subagent, web, MCP, and plugin tools are hidden, and edits outside the workspace are denied.",
-      "Resuming a session with its own permission rules at readonly/edit, or a restricted session at danger, is refused.",
-      "These are OpenCode application rules, not an OS sandbox, and project or user plugins and MCP servers still load and run their code.",
-      "Existing OPENCODE_CONFIG_CONTENT in the environment blocks restricted (readonly/edit) launches.",
-      "danger uses --auto, which approves every permission ask except explicit denies.",
-      "OpenCode retries transient provider errors itself (up to 10 retries); this extension does not retry.",
     ],
   },
   pi: {
@@ -297,25 +241,21 @@ export interface CapabilityRecord {
 
 export interface CapabilityEnvironmentOptions {
   effectiveUid?: number;
-  platform?: NodeJS.Platform;
   projectTrusted?: boolean;
   defaultPermission?: PermissionTier;
 }
 
 export function buildPermissionTierCapabilities(
   backend: SubagentBackend,
-  options: Pick<CapabilityEnvironmentOptions, "effectiveUid" | "platform"> = {},
+  options: Pick<CapabilityEnvironmentOptions, "effectiveUid"> = {},
 ): Record<PermissionTier, PermissionTierCapability> {
   const effectiveUid = options.effectiveUid ?? process.geteuid?.();
-  const platform = options.platform ?? process.platform;
   const buildTier = (tier: PermissionTier): PermissionTierCapability => {
     const unsupported = unsupportedPermissionReason(tier, backend);
     const resolved = resolvePermission(tier, backend);
     let caveat = resolved.caveat;
     if (backend === "claude" && tier === "danger" && effectiveUid === 0) {
       caveat = "uses --permission-mode auto under effective UID 0";
-    } else if (backend === "grok" && tier === "readonly" && platform !== "linux") {
-      caveat = `${resolved.caveat} (inactive on ${platform})`;
     }
     const tools = backend === "pi" ? [...PI_TIER_ACTIVE_TOOLS[tier]] : undefined;
     return {
@@ -415,7 +355,6 @@ export function buildCapabilityRecords(options: BuildCapabilitiesOptions): Capab
   const defaultPermission = options.defaultPermission ?? loadedSettings.settings.defaultPermission;
   const envOptions: CapabilityEnvironmentOptions = {
     effectiveUid: options.effectiveUid,
-    platform: options.platform,
     projectTrusted: options.projectTrusted,
     defaultPermission,
   };
@@ -575,7 +514,7 @@ export function formatCapabilityDetail(record: CapabilityRecord): string {
 
 export function formatBackendPermissionHelp(
   backend: SubagentBackend,
-  options: Pick<CapabilityEnvironmentOptions, "effectiveUid" | "platform"> = {},
+  options: Pick<CapabilityEnvironmentOptions, "effectiveUid"> = {},
 ): string {
   const descriptor = BACKEND_CAPABILITIES[backend];
   const effectiveUid = options.effectiveUid ?? process.geteuid?.();
@@ -600,7 +539,7 @@ export function formatBackendPermissionHelp(
 export function formatPermissionHelp(
   harness: string | undefined,
   configuredPiHarnesses: ReadonlySet<string>,
-  options: Pick<CapabilityEnvironmentOptions, "effectiveUid" | "platform"> = {},
+  options: Pick<CapabilityEnvironmentOptions, "effectiveUid"> = {},
 ): string {
   const resolveBackend = (name: string): SubagentBackend =>
     (EXTERNAL_HARNESSES as readonly string[]).includes(name) ? (name as ExternalHarness) : "pi";

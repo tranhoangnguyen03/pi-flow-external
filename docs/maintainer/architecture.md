@@ -8,7 +8,7 @@ Dated files under `docs/archive/plans/` and released changelog sections are hist
 
 `index.ts` loads `src/pi-subagent.ts`. The ordinary driver sees `external_delegate`, `external_help`, `external_runs`, and optional `external_workflow`. Assisted authoring finalizers are exposed only during `/external config role assist` or `/external config harness assist`.
 
-Six built-in CLI harnesses (`agy`, `claude`, `codex`, `grok`, `muse`, `opencode`) and registered `pi-*` harnesses share the same role-selection path. Pi harnesses run in-process through the SDK with the parent's model registry, not through a spawned CLI. Native Pi `subagents/` files are outside this catalog and are never modified.
+Four built-in CLI harnesses (`agy`, `claude`, `codex`, `muse`) and registered `pi-*` harnesses share the same role-selection path. Pi harnesses run in-process through the SDK with the parent's model registry, not through a spawned CLI. Native Pi `subagents/` files are outside this catalog and are never modified.
 
 ## 2. Configuration ownership and resolution
 
@@ -54,7 +54,7 @@ Opening the hub does not probe installations, contact providers, send prompts or
 
 - Codex: local cache under `$CODEX_HOME` or `~/.codex`.
 - Claude: CLI aliases, not an account-specific catalog.
-- Antigravity/Grok/OpenCode: bounded CLI metadata listing, potentially networked, with no prompt.
+- Antigravity: bounded CLI metadata listing, potentially networked, with no prompt.
 - Muse: existing/configured IDs and custom entry fallback.
 - Pi: registry models grouped by provider, initially filtering to configured credentials, with an all-provider option.
 
@@ -80,12 +80,12 @@ Workflow frozen catalog ─────┘                                      
 
 `src/pi-subagent.ts` registers tools and owns the session limiter, runtime flags, coordinator guidance and shutdown. `src/core/spawn.ts` handles effective permissions, resume, timeout, records, backend dispatch and terminal mapping. `src/core/permissions.ts` owns tier mapping and Pi tool allow-lists. Queue time is excluded from the normal run timeout; confirmed nested activity may extend it once, capped at twice the base. Every CLI child runs through `src/core/cli-process.ts` (detached process group, whole-tree kill on abort, oversized-output kill, bounded stderr); Pi cancellation is cooperative.
 
-Adapters are `src/core/{claude,codex,agy,grok,muse,opencode}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in [contracts.md](contracts.md); important distinctions are:
+Adapters are `src/core/{claude,codex,agy,muse}.ts`; the Pi branch uses `createAgentSession`. All require verified terminal success and nonempty output, not progress narration. Backend-specific trust and receipt details are in [contracts.md](contracts.md); important distinctions are:
 
 - Antigravity supports full/danger access only and refuses narrower tiers.
-- Codex/Grok use native sandbox axes; Grok readonly network isolation is Linux-only, and sandbox startup failures remain fail-closed.
+- Codex uses its native sandbox.
 - Claude edit denies shell headlessly. Muse tiers use its own approval/sandbox controls; danger also trusts workspace resources for that run.
-- OpenCode targets v2 only, uses a private `--standalone` server and verifies the completed invocation through bounded session exports. Restricted agents are explicitly selected on resume; plugins/MCP still load, so this is not an OS sandbox.
+- Grok and OpenCode are retired. Their configuration is preserved but inactive; `retired-evidence.ts` decodes old events for inspection without launching either CLI.
 - Pi has curated tools, not an OS sandbox; minimal/skills presets both leave extensions, templates and themes unloaded. Project skills require trust. Retry is disabled call-scoped. Pi has no persisted resume or enforced budget cap.
 
 Only Claude enforces the requested spending cap. Other backends record it without enforcement; unknown usage is not fabricated as zero. The extension does not retry failed/aborted runs except one disclosed Antigravity infrastructure retry. Backend-internal retries are separate.

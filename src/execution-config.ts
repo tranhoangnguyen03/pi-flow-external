@@ -5,7 +5,7 @@ export function resolveExecutionProfile(profile: SubagentProfile, parentThinking
  return {
   ...profile,
   model: profile.model === 'native' ? undefined : profile.model,
-  thinking: profile.thinking === 'native' ? undefined : profile.thinking === 'parent' ? parentThinking : profile.thinking ?? (profile.configVersion === 5 || profile.backend === 'opencode' ? undefined : profile.backend === 'pi' ? 'off' : parentThinking),
+  thinking: profile.thinking === 'native' ? undefined : profile.thinking === 'parent' ? parentThinking : profile.thinking ?? (profile.configVersion === 5 ? undefined : profile.backend === 'pi' ? 'off' : parentThinking),
   maxBudgetUsd: profile.maxBudgetUsd ?? defaultBudget,
  };
 }

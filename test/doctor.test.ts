@@ -62,7 +62,7 @@ describe("doctor CLI diagnostics", () => {
     expect(await diagnoseCli(exec, "agy", {})).toContain("not found");
   });
 
-  it.each(["agy", "grok", "muse"] as const)("does not invent a login probe for %s", async backend => {
+  it.each(["agy", "muse"] as const)("does not invent a login probe for %s", async backend => {
     const exec = vi.fn().mockResolvedValue(ok());
     const text = await diagnoseCli(exec, backend, { META_API_KEY: "SECRET", XAI_API_KEY: "SECRET" });
     expect(exec).toHaveBeenCalledTimes(1);

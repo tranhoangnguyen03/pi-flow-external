@@ -1165,7 +1165,6 @@ describe("workflow frozen Pi descriptor", () => {
     expect(high).toMatchObject({ thinking: "high", maxBudgetUsd: 2 });
     expect(toWorkflowSubagentDescriptor({ ...profile, thinking: "parent" }, "high", 2)).toEqual(high);
     expect(toWorkflowSubagentDescriptor({ ...profile, thinking: "native", model: "native" }, "high", 2)).toMatchObject({ thinking: undefined, model: undefined });
-    expect(toWorkflowSubagentDescriptor({ ...profile, backend: "opencode" }, "high", 2).thinking).toBeUndefined();
     expect(toWorkflowSubagentDescriptor({ ...profile, configVersion: 5 }, "high", 2).thinking).toBeUndefined();
     const events: any[] = [];
     const script = `${META}return await agent('one');`;

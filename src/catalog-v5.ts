@@ -4,7 +4,7 @@ import { parseFrontmatter } from '@earendil-works/pi-coding-agent';
 import { DEFAULT_ROLES } from './default-roles.ts';
 import { CONFIG_NAME, cliHarness, type BindingSettings } from './config-v5.ts';
 import type { LoadedExternalSettings } from './settings.ts';
-import { EXTERNAL_HARNESSES, type SubagentProfile } from './types.ts';
+import { EXTERNAL_HARNESSES, isRetiredHarness, type SubagentProfile } from './types.ts';
 import type { HarnessConfig } from './harnesses.ts';
 
 export function bindingKey(harness:string, role:string):string { return `${harness}/${role}`; }
@@ -20,7 +20,9 @@ export function loadV5Catalog(agentDir:string, loaded:LoadedExternalSettings) {
  const harnessConfigs=new Map<string,HarnessConfig>(Object.entries(settings.harnesses??{}));
  const disabledHarnesses=new Set(settings.disabledHarnesses??[]);
  for(const [name,value] of Object.entries(settings.harnessSettings??{}))if(value.enabled===false)disabledHarnesses.add(name);
- if(loaded.blocked)return {profiles,diagnostics,blocked:true,harnessConfigs,disabledHarnesses};
+ const retiredExact = new Map<string, string>();
+ const catalog = {profiles, diagnostics, harnessConfigs, disabledHarnesses, retiredExact};
+ if(loaded.blocked)return {...catalog,blocked:true};
  const roles=new Map<string,{description:string;systemPrompt?:string;source:string;configurationError?:string}>(Object.entries(DEFAULT_ROLES).map(([role,v])=>[role,{description:v.description,systemPrompt:v.body,source:'built-in'}]));
  const base=join(agentDir,'pi-flow-external');
  const roleDir=join(base,'roles');
@@ -31,7 +33,7 @@ export function loadV5Catalog(agentDir:string, loaded:LoadedExternalSettings) {
   } catch (error) {
    if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
    diagnostics.push(String(error));
-   return {profiles,diagnostics,blocked:true,harnessConfigs,disabledHarnesses};
+   return {...catalog,blocked:true};
   }
  }
  if(existsSync(roleDir))for(const file of readdirSync(roleDir)) {
@@ -61,25 +63,23 @@ export function loadV5Catalog(agentDir:string, loaded:LoadedExternalSettings) {
   const pick=<K extends keyof BindingSettings>(key:K):BindingSettings[K]=>{origins[key]=patch[key]!==undefined?`role ${role} on ${harness}`:h[key]!==undefined?`harness ${harness}`:'backend default';return patch[key]??h[key];};
   const model=pick('model'); const thinking=pick('thinking')??(cliHarness(harness)?'native':'off');
   const profile:SubagentProfile={...definition,name:bindingKey(harness,role),role,harness,backend:cliHarness(harness)?harness:'pi',configVersion:5,origins,model:model==='native'?undefined:model,thinking,tools:pick('tools'),maxBudgetUsd:pick('max_budget_usd'),...(cliHarness(harness)?{}:{preset:h.preset??'minimal'})};
-  const labels: Record<string,string> = { agy:'Antigravity', claude:'Claude Code', codex:'Codex CLI', grok:'Grok CLI', muse:'Muse Code', opencode:'OpenCode' };
+  const labels: Record<string,string> = { agy:'Antigravity', claude:'Claude Code', codex:'Codex CLI', muse:'Muse Code' };
   profile.description=profile.description.replaceAll('${backendLabel}',labels[harness]??harness);
   const path=join(base,'overrides',harness,`${role}.md`);
   if(invalidDirectories.has(harness)) profile.configurationError = `Invalid override directory for ${harness}`;
   else if(existsSync(path))try{Object.assign(profile,instructions(path),{source:path});delete profile.configurationError;origins.instructions=path;}catch(e){profile.configurationError=`Invalid override ${path}: ${String(e)}`;diagnostics.push(profile.configurationError);}
   const blocks=[profile.configurationError,disabledHarnesses.has(harness)?`Harness "${harness}" is disabled. Use /external config harness enable ${harness}.`:undefined,settings.roles?.[role]?.enabled===false?`Role "${role}" is disabled. Use /external config role enable ${role}.`:undefined,patch.enabled===false||(!Object.hasOwn(settings.exact??{},`${harness}-${role}`)&&settings.disabledProfiles?.includes(`${harness}-${role}`))?`Binding "${harness}/${role}" is disabled. Use /external config role enable ${role} --harness ${harness}.`:undefined].filter(Boolean);
-  if(harness==='opencode'&&thinking!=='native'&&!profile.model)blocks.push('OpenCode effort variant requires a pinned model');
-  if(harness==='opencode'&&thinking!=='native'&&profile.model?.includes('#'))blocks.push('OpenCode model already has a #variant; do not also set effort');
   if(!cliHarness(harness)&&!profile.model)blocks.push('Pi requires a resolvable model');
   profile.configurationError=blocks.length?blocks.join('\n'):undefined;
   profiles.set(profile.name,profile);
  }
  for(const [name,entry] of Object.entries(settings.exact??{})){
   const {harness,description,instructions:body,...fields}=entry;
+  if (isRetiredHarness(harness)) { retiredExact.set(name, harness); continue; }
   profiles.set(name,{name,harness,backend:cliHarness(harness)?harness:'pi',configVersion:5,description,systemPrompt:body,model:fields.model==='native'?undefined:fields.model,thinking:fields.thinking??(cliHarness(harness)?'native':'off'),tools:fields.tools,maxBudgetUsd:fields.max_budget_usd,...(!cliHarness(harness)?{preset:settings.harnesses?.[harness]?.preset??'minimal'}:{}),...(fields.enabled===false||disabledHarnesses.has(harness)||settings.disabledProfiles?.includes(name)?{configurationError:`Exact selector ${name} is disabled`}:{}),...(!names.includes(harness as never)?{configurationError:`Harness ${harness} is not registered`}:{})});
  }
  for (const profile of profiles.values()) {
   if (profile.backend === 'pi' && !profile.model) profile.configurationError ??= 'Pi exact selection requires a resolvable model';
-  if (profile.backend === 'opencode' && profile.thinking !== 'native' && (!profile.model || profile.model.includes('#'))) profile.configurationError ??= 'OpenCode effort requires a pinned model without an existing #variant';
  }
- return {profiles,diagnostics,blocked:false,harnessConfigs,disabledHarnesses};
+ return {...catalog,blocked:false};
 }

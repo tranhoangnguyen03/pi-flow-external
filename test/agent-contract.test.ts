@@ -93,6 +93,23 @@ describe("pi-subagent agent contract", () => {
     disposeSession(session);
   });
 
+  it("rejects retired direct and workflow selections without launching a child", async () => {
+    mkdirSync(join(agentDir, "pi-flow-external"), { recursive: true });
+    writeFileSync(join(agentDir, "pi-flow-external", "settings.json"), JSON.stringify({
+      version: 5, defaultHarness: "grok", exact: { audit: { harness: "opencode", description: "Prior audit", instructions: "Audit" } },
+    }));
+    const { session, model, modelRegistry } = await createSession();
+    const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry }) as any;
+    const delegate = session.getToolDefinition("external_delegate")!;
+    const result = await delegate.execute("retired-default", { description: "Audit", prompt: "Audit", role: "reviewer" }, undefined, undefined, ctx);
+    expect(result.structuredContent).toMatchObject({ ok: false, data: { run: null }, error: { code: "selection_invalid", message: expect.stringContaining('Default harness "grok" was retired') } });
+    const workflow = session.getToolDefinition("external_workflow")!;
+    const run = await workflow.execute("retired-exact", { script: "export const meta = { apiVersion: 1, name: 'audit', description: 'Audit' }; return await agent('Audit', { subagent_type: 'audit' });" }, undefined, undefined, ctx);
+    expect(run.structuredContent).toMatchObject({ ok: false, error: { message: expect.stringContaining('Harness "opencode" was retired') } });
+    expect(run.details).toMatchObject({ agents: [] });
+    disposeSession(session);
+  });
+
   it("settles workflow child evidence when resume validation fails", async () => {
     mkdirSync(join(agentDir, "pi-flow-external", "overrides"), { recursive: true });
     writeFileSync(join(agentDir, "pi-flow-external", "overrides", "codex-worker.md"), "---\ndescription: Codex worker.\nbackend: codex\n---\n");

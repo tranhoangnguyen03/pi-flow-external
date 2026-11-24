@@ -57,6 +57,7 @@ async function loadRecord(baseDirectory, runId) {
     const eventCount = finite(document.eventCount);
     const attemptedEventCount = finite(document.attemptedEventCount);
     const backendEventCount = events.filter((event) => event.type === "backend_event").length;
+    // Historical receipts from retired CLIs are still valid report inputs.
     if (!["claude", "codex", "agy", "grok", "muse", "opencode"].includes(summary.backend)) problems.push("missing or unknown backend");
     if (typeof summary.profile !== "string" || !summary.profile) problems.push("missing profile");
     if (!["done", "error", "aborted"].includes(summary.status)) problems.push("missing or unknown status");

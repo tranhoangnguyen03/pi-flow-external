@@ -5,7 +5,7 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { CONFIG_NAME, cliHarness, objectRecord } from "./config-v5.ts";
 import { defaultRoleNames } from "./default-roles.ts";
 import { DEFAULT_EXTERNAL_SETTINGS, externalSettingsPath, loadExternalSettings, updateExternalSettings, type ExternalSettings } from "./settings.ts";
-import { EXTERNAL_HARNESSES } from "./types.ts";
+import { EXTERNAL_HARNESSES, isRetiredHarness } from "./types.ts";
 
 /**
  * Deterministic v5 configuration lifecycle. Settings changes go through the
@@ -437,6 +437,7 @@ export function roleInventory(agentDir: string, settings: ExternalSettings): Map
   }
   const overridesDir = join(configBase(agentDir), "overrides");
   for (const harness of safeList(overridesDir)) {
+    if (isRetiredHarness(harness)) continue;
     const dir = join(overridesDir, harness);
     const stat = lstatSync(dir);
     if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
@@ -719,6 +720,7 @@ export function applyRoleDelete(agentDir: string, plan: DeletePlan): DeleteResul
     if (objectRecord(roles)) { delete roles[role]; prune(raw, "roles"); }
     const harnesses = own(raw, "harnesses");
     for (const harness of objectRecord(harnesses) ? Object.keys(harnesses) : []) {
+      if (isRetiredHarness(harness)) continue;
       const patches = own(own(harnesses, harness), "roles");
       if (objectRecord(patches) && Object.hasOwn(patches, role)) { delete patches[role]; pruneHarness(raw, harness); }
     }

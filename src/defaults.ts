@@ -1,5 +1,5 @@
 import { DEFAULT_ROLES } from "./default-roles.ts";
-import type { SubagentBackend, SubagentProfile } from "./types.ts";
+import { EXTERNAL_HARNESSES, type SubagentProfile } from "./types.ts";
 
 /**
  * Default profile roster shipped with the extension: five code-oriented roles
@@ -9,7 +9,7 @@ import type { SubagentBackend, SubagentProfile } from "./types.ts";
  * Role bodies themselves live in default-roles.ts, the one canonical source
  * also used to synthesize the same six roles for named Pi harness configs.
  */
-const DEFAULT_BACKENDS: SubagentBackend[] = ["claude", "codex", "agy", "grok", "muse", "opencode"];
+const DEFAULT_BACKENDS = EXTERNAL_HARNESSES;
 export const BACKEND_LABELS: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",

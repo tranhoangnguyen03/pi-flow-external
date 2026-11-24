@@ -30,7 +30,7 @@ export const externalHelpParameters = Type.Object({
   }),
   harness: Type.Optional(Type.String({
     description:
-      "Optional harness filter for roles, permissions, or capabilities: agy, claude, codex, grok, muse, opencode, or a registered pi-* harness. Omit on capabilities for the compact index. usage, workflow, and contracts describe every harness.",
+      "Optional harness filter for roles, permissions, or capabilities: agy, claude, codex, muse, or a registered pi-* harness. Omit on capabilities for the compact index. usage, workflow, and contracts describe every harness.",
   })),
   tool: Type.Optional(Type.String({
     description:
@@ -122,7 +122,7 @@ export const permissionTierCapabilitySchema = Type.Object({
 
 export const capabilityRecordSchema = Type.Object({
   harness: Type.String(),
-  backend: strings("agy", "claude", "codex", "grok", "muse", "opencode", "pi"),
+  backend: strings("agy", "claude", "codex", "muse", "pi"),
   boundary: strings("external_cli", "pi_sdk"),
   configuration: Type.Object({
     state: strings("built_in", "registered", "invalid"),
@@ -501,7 +501,7 @@ export const PUBLIC_TOOLS: Record<PublicToolName, PublicToolSpec> = {
                 harness: "claude",
                 backend: "claude",
                 configuration: { state: "built_in", enabled: true },
-                options: { effectiveUid: 501, platform: "linux", defaultPermission: "danger" },
+                options: { effectiveUid: 501, defaultPermission: "danger" },
               }),
             ],
           },

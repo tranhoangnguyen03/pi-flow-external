@@ -46,7 +46,7 @@ When choosing a model in `/external`:
 |---|---|
 | Codex CLI | Local model catalog (`$CODEX_HOME/models_cache.json`, default `~/.codex`). Stale if Codex hasn't run recently. |
 | Claude Code | Built-in aliases: `sonnet`, `opus`, `fable`. The CLI resolves the specific version on launch. |
-| Antigravity, Grok CLI, OpenCode | Queried from CLI `models` command when opening the picker (10s timeout). |
+| Antigravity | Queried from CLI `models` command when opening the picker (10s timeout). |
 | Muse Code | Current and previously configured model IDs, plus custom manual entry. |
 | Pi agents | Pi's internal model registry, grouped by provider. |
 

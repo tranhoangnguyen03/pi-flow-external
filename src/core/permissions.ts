@@ -81,22 +81,6 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
         backend,
         caveat: tier === "danger" ? undefined : "unsupported; Antigravity is autonomous only",
       };
-    case "grok":
-      // --sandbox is a real kernel-level sandbox on the grok CLI, enforced at
-      // every tier; its network-blocking guarantee is Linux-only, so the
-      // readonly caveat discloses that rather than overstating cross-platform
-      // enforcement. edit's --sandbox workspace limits writes to the cwd.
-      return {
-        tier,
-        enforced: true,
-        backend,
-        caveat:
-          tier === "readonly"
-            ? "kernel sandbox; network blocking is Linux-only"
-            : tier === "edit"
-              ? "writes limited to workspace"
-              : undefined,
-      };
     case "muse":
       // --disable-approval/--disable-write/--disable-shell and --yolo are real,
       // enforced flags (verified against real muse exec runs), not advisory
@@ -114,22 +98,6 @@ export function resolvePermission(tier: PermissionTier, backend: SubagentBackend
             ? "disables approval, non-shell writes, and shell execution"
             : tier === "edit"
               ? "sandbox stays enabled; only approval is bypassed"
-              : undefined,
-      };
-    case "opencode":
-      // readonly/edit run under an injected OpenCode 2 agent whose permission
-      // rules deny every tool but the tier's file tools (see opencode.ts).
-      // These are OpenCode's own application rules, not an OS sandbox, and
-      // project/user plugins and MCP servers still load and run their code.
-      return {
-        tier,
-        enforced: true,
-        backend,
-        caveat:
-          tier === "readonly"
-            ? "read/grep/glob tools only; OpenCode permission rules, not an OS sandbox"
-            : tier === "edit"
-              ? "file read/edit tools only, no shell; OpenCode permission rules, not an OS sandbox"
               : undefined,
       };
     case "pi":
@@ -173,10 +141,6 @@ export function buildPermissionArgs(
         throw new Error(unsupportedPermissionReason(tier, "agy"));
       }
       return ["--dangerously-skip-permissions"];
-    case "grok":
-      if (tier === "readonly") return ["--sandbox", "read-only", "--permission-mode", "bypassPermissions"];
-      if (tier === "edit") return ["--sandbox", "workspace", "--permission-mode", "bypassPermissions"];
-      return ["--sandbox", "off", "--permission-mode", "bypassPermissions"];
     case "muse":
       // Approval must always be bypassed headlessly, or exec would hang on an
       // interactive prompt. readonly additionally strips non-shell writes and
@@ -186,11 +150,6 @@ export function buildPermissionArgs(
       if (tier === "readonly") return ["--disable-approval", "--disable-write", "--disable-shell"];
       if (tier === "edit") return ["--disable-approval"];
       return ["--yolo"];
-    case "opencode":
-      // readonly/edit are enforced through the injected agent's rules
-      // (buildOpencodeEnv); unanswered permission asks are auto-rejected
-      // headlessly. danger auto-approves asks but keeps explicit denies.
-      return tier === "danger" ? ["--auto"] : [];
     default:
       return [];
   }

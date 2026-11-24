@@ -1,6 +1,6 @@
 import { ExpectedFlowError } from "./core/errors.ts";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { EXTERNAL_HARNESSES, type ExternalHarness, type SubagentBackend, type SubagentProfile, type ThinkingLevel } from "./types.ts";
+import { isRetiredHarness, RETIRED_HARNESSES, EXTERNAL_HARNESSES, type RetiredHarness, type ExternalHarness, type SubagentBackend, type SubagentProfile, type ThinkingLevel } from "./types.ts";
 import { loadExternalSettings } from "./settings.ts";
 import { bindingKey, loadV5Catalog } from './catalog-v5.ts';
 
@@ -23,14 +23,15 @@ function parseThinking(value: unknown): ThinkingLevel | undefined {
   return optionalString(value);
 }
 
-function parseBackend(value: unknown): SubagentBackend | "invalid" {
+export type LegacyProfile = Omit<SubagentProfile, "backend"> & { backend: SubagentBackend | RetiredHarness };
+
+function parseBackend(value: unknown): LegacyProfile["backend"] | "invalid" {
   if (value === undefined || value === null || value === "inherit") {
     return "pi";
   }
   const backend = optionalString(value);
-  if (backend === "pi" || backend === "codex" || backend === "claude" || backend === "agy" || backend === "grok" || backend === "muse" || backend === "opencode") {
-    return backend;
-  }
+  if (backend === "pi" || isRetiredHarness(backend)) return backend;
+  if ((EXTERNAL_HARNESSES as readonly string[]).includes(backend ?? "")) return backend as ExternalHarness;
   return "invalid";
 }
 
@@ -72,7 +73,7 @@ export function parseSubagentProfileContent(
   content: string,
   name: string,
   options: { requireBody: boolean } = { requireBody: false },
-): SubagentProfile | undefined {
+): LegacyProfile | undefined {
   let parsed: { frontmatter: Record<string, unknown>; body: string };
   try {
     parsed = parseFrontmatter<Record<string, unknown>>(content);
@@ -132,7 +133,7 @@ export function getSubagentProfiles(agentDir = getAgentDir()): Map<string, Subag
  * therefore forwarded as that model's variant, which is only possible when the
  * model itself is pinned. The inherited Pi thinking level is never forwarded.
  */
-export function opencodeProfileProblem(profile: SubagentProfile): string | undefined {
+export function opencodeProfileProblem(profile: LegacyProfile): string | undefined {
   if (profile.backend !== "opencode") return undefined;
   if (profile.model !== undefined && !/^[^/\s]+\/\S+$/.test(profile.model)) {
     return `OpenCode profile "${profile.name}" pins model "${profile.model}". Use the provider/model form, such as anthropic/claude-sonnet-4-5.`;
@@ -153,12 +154,16 @@ export function disabledHarnessMessage(harness: string, isDefault = false): stri
     : `Harness "${harness}" is disabled in settings.json. Enable it with /external config harness enable ${harness}, or choose another harness.`;
 }
 
+export function retiredHarnessMessage(harness: string, isDefault = false): string {
+  return `${isDefault ? "Default harness" : "Harness"} "${harness}" was retired in Flow 7. Choose a supported harness explicitly${isDefault ? " or update defaultHarness in project settings or with /external config harness default <harness>" : ""}. Use Flow 6.3.0-external.2 if you still need this backend.`;
+}
+
 export type ExternalCatalog = ReturnType<typeof loadV5Catalog>;
 
 /** The one catalog source. Settings version 4 is blocked until explicit conversion. */
 export function loadExternalCatalog(agentDir = getAgentDir()): ExternalCatalog {
   const loaded = loadExternalSettings(agentDir);
-  if (loaded.settings.version === 4) return { profiles: new Map<string, SubagentProfile>(), diagnostics: [...loaded.diagnostics, 'Settings version 4 requires explicit conversion. Run /external config convert.'], blocked: true, harnessConfigs: new Map(Object.entries(loaded.settings.harnesses ?? {})), disabledHarnesses: new Set(loaded.settings.disabledHarnesses ?? []) };
+  if (loaded.settings.version === 4) return { profiles: new Map<string, SubagentProfile>(), diagnostics: [...loaded.diagnostics, 'Settings version 4 requires explicit conversion. Run /external config convert.'], blocked: true, harnessConfigs: new Map(Object.entries(loaded.settings.harnesses ?? {})), disabledHarnesses: new Set(loaded.settings.disabledHarnesses ?? []), retiredExact: new Map<string, string>() };
   return loadV5Catalog(agentDir, loaded);
 }
 
@@ -217,9 +222,10 @@ export interface ResolveExternalProfileOptions {
   configuredHarnessNames?: ReadonlySet<string>;
   /** Harnesses disabled in settings; selecting one fails without fallback. */
   disabledHarnesses?: ReadonlySet<string>;
+  retiredExact?: ReadonlyMap<string, string>;
 }
 
-const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
+const DEFAULT_RESOLVE_OPTIONS = {
   configuredHarnessNames: new Set(EXTERNAL_HARNESSES),
   disabledHarnesses: NO_PI_HARNESSES,
 };
@@ -227,7 +233,7 @@ const DEFAULT_RESOLVE_OPTIONS: Required<ResolveExternalProfileOptions> = {
 /** Unknown exact identity. Directs the caller back to role plus harness, including a registered pi-* name. */
 export function unknownExternalProfileMessage(subagentType: string, names: Iterable<string>): string {
   const available = [...names].join(", ") || "none";
-  return `Unknown external subagent_type "${subagentType}". Available external profiles: ${available}. Select role and an optional harness (agy, claude, codex, grok, muse, opencode, or a registered pi-* name).`;
+  return `Unknown external subagent_type "${subagentType}". Available external profiles: ${available}. Select role and an optional harness (${EXTERNAL_HARNESSES.join(", ")}, or a registered pi-* name).`;
 }
 
 export function resolveExternalProfile(
@@ -245,10 +251,14 @@ export function resolveExternalProfile(
     if (role || harness) {
       throw new ExpectedFlowError("selection_invalid", "Choose either role (with optional harness) or legacy subagent_type; do not combine them.");
     }
+    const retiredExact = options.retiredExact?.get(subagentType);
+    if (retiredExact) throw new ExpectedFlowError("selection_invalid", retiredHarnessMessage(retiredExact));
     const matches = [...profiles.values()].filter(p => p.configVersion === 5 && p.role && `${selectorHarness(p)}-${p.role}` === subagentType);
     if (!profiles.has(subagentType) && matches.length > 1) throw new ExpectedFlowError("selection_invalid", `Ambiguous legacy selector "${subagentType}"; use role and harness explicitly.`);
     const profile = profiles.get(subagentType) ?? matches[0];
     if (!profile) {
+      const retired = RETIRED_HARNESSES.find((name) => subagentType.startsWith(`${name}-`) || subagentType.startsWith(`${name}/`));
+      if (retired) throw new ExpectedFlowError("selection_invalid", retiredHarnessMessage(retired));
       throw new ExpectedFlowError("selection_invalid", unknownExternalProfileMessage(subagentType, profiles.keys()));
     }
     if (profile.configurationError) throw new ExpectedFlowError("selection_invalid", profile.configurationError);
@@ -261,6 +271,7 @@ export function resolveExternalProfile(
       : "Either role or legacy subagent_type is required.");
   }
   const selectedHarness = harness || defaultHarness;
+  if (isRetiredHarness(selectedHarness)) throw new ExpectedFlowError("selection_invalid", retiredHarnessMessage(selectedHarness, !harness));
   if (!configuredHarnessNames.has(selectedHarness)) {
     throw new ExpectedFlowError("selection_invalid", `Unknown external harness "${selectedHarness}". Choose one of: ${[...configuredHarnessNames].join(", ") || "none"}.`);
   }

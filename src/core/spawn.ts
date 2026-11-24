@@ -24,9 +24,7 @@ import {
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import { spawnAgySubagent, isTransientAgyFailure, normalizeAgyEffort } from "./agy.ts";
-import { spawnGrokSubagent, normalizeGrokReasoningEffort } from "./grok.ts";
 import { museHasNestedAgentActivity, spawnMuseSubagent, normalizeMuseReasoningEffort } from "./muse.ts";
-import { opencodeHasNestedAgentActivity, spawnOpencodeSubagent } from "./opencode.ts";
 import type {
   PermissionTier,
   SubagentBackend,
@@ -134,7 +132,7 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
   const event = asRecord(value);
   if (!event) return false;
 
-  if (backend === "claude" || backend === "grok") {
+  if (backend === "claude") {
     const message = asRecord(event.message);
     return event.type === "assistant" && Array.isArray(message?.content) && message.content.some((content) => {
       const block = asRecord(content);
@@ -157,9 +155,6 @@ export function hasNestedAgentActivity(value: unknown, backend: SubagentBackend)
     return museHasNestedAgentActivity(event);
   }
 
-  if (backend === "opencode") {
-    return opencodeHasNestedAgentActivity(event);
-  }
 
   return false;
 }
@@ -385,10 +380,9 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
         const supported = params.profile.backend === 'claude' ? ['low','medium','high','xhigh','max'] : params.profile.backend === 'codex' ? ['minimal','low','medium','high','xhigh'] : undefined;
         if (supported && !supported.includes(params.thinkingLevel)) throw new Error(`Unsupported ${params.profile.backend} reasoning effort ${params.thinkingLevel}; choose ${supported.join(', ')} or native.`);
       }
-      thinkingApplied = params.profile.backend === "opencode" ? params.profile.thinking ?? "Backend default" :
+      thinkingApplied =
         params.profile.backend === "pi" ? "Pending SDK initialization" :
         params.profile.backend === "agy" ? normalizeAgyEffort(params.thinkingLevel) ?? "Backend default" :
-        params.profile.backend === "grok" ? normalizeGrokReasoningEffort(params.thinkingLevel) ?? "Backend default" :
         params.profile.backend === "muse" ? normalizeMuseReasoningEffort(params.thinkingLevel) ?? "Backend default" : params.thinkingLevel ?? "Backend default";
     } catch (error) {
       unsupported = error instanceof Error ? error.message : String(error);
@@ -419,7 +413,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
       harness: selectorHarness(params.profile),
       backend: params.profile.backend,
       model: params.model ? `${params.model.provider}/${params.model.id}` : params.profile.model ?? "Backend default (not resolved by extension)",
-      thinkingRequested: params.profile.backend === "opencode" ? params.profile.thinking : params.thinkingLevel,
+      thinkingRequested: params.thinkingLevel,
       thinkingApplied,
       thinkingApplication: "CLI effort argument, or SDK setting; not a claim about provider-internal reasoning",
       requestedTools: params.profile.tools ?? "Backend defaults",
@@ -695,27 +689,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       executionStartedAt: params.executionStartedAt,
     });
   }
-  if (params.profile.backend === "grok") {
-    return spawnGrokSubagent({
-      toolCallId: params.toolCallId,
-      description: params.description,
-      prompt: params.prompt,
-      profile: params.profile,
-      thinkingLevel: params.thinkingLevel,
-      ctx: params.ctx,
-      signal: params.signal,
-      progressEnabled: params.progressEnabled,
-      onProgress: params.onProgress,
-      onUsage: params.onUsage,
-      onBackendEvent: params.onBackendEvent,
-      onProcessStart: params.onProcessStart,
-      appendInstructions: params.appendInstructions,
-      outputSchema: params.outputSchema,
-      permission: params.permission,
-      resumeSessionId: params.resumeSessionId,
-      executionStartedAt: params.executionStartedAt,
-    });
-  }
   if (params.profile.backend === "muse") {
     return spawnMuseSubagent({
       toolCallId: params.toolCallId,
@@ -723,28 +696,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentRuntimeParams): Promise
       prompt: params.prompt,
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
-      ctx: params.ctx,
-      signal: params.signal,
-      progressEnabled: params.progressEnabled,
-      onProgress: params.onProgress,
-      onUsage: params.onUsage,
-      onBackendEvent: params.onBackendEvent,
-      onProcessStart: params.onProcessStart,
-      appendInstructions: params.appendInstructions,
-      outputSchema: params.outputSchema,
-      permission: params.permission,
-      resumeSessionId: params.resumeSessionId,
-      executionStartedAt: params.executionStartedAt,
-    });
-  }
-  if (params.profile.backend === "opencode") {
-    // The inherited thinking level is not forwarded: OpenCode variants are
-    // model-specific. A profile pin becomes `#variant` (see opencodeProfileProblem).
-    return spawnOpencodeSubagent({
-      toolCallId: params.toolCallId,
-      description: params.description,
-      prompt: params.prompt,
-      profile: params.profile,
       ctx: params.ctx,
       signal: params.signal,
       progressEnabled: params.progressEnabled,

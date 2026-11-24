@@ -74,7 +74,7 @@ The workflow sandbox exposes these helpers:
 
 - **`agent(prompt, options)`:** Delegates one subagent task.
   - `options.role`: Role name (`explorer`, `reviewer`, `implementer`, etc.).
-  - `options.harness`: Optional harness override (`claude`, `codex`, `agy`, `grok`, `muse`, `opencode`, or named `pi-*`).
+  - `options.harness`: Optional harness override (`claude`, `codex`, `agy`, `muse`, or named `pi-*`).
   - `options.permission`: Permission tier (`readonly`, `edit`, or `danger`).
   - `options.context`: Context sharing (`{ mode: "recent", turns: 5 }` or `{ mode: "full" }`).
   - `options.description`: User-facing task label in UI.

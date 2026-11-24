@@ -48,12 +48,6 @@ describe("permission tier argv mapping", () => {
     expect(() => buildPermissionArgs("edit", "agy")).toThrow(/autonomous/);
   });
 
-  it("maps every tier onto native grok sandbox flags plus the bypass permission mode", () => {
-    expect(buildPermissionArgs("readonly", "grok")).toEqual(["--sandbox", "read-only", "--permission-mode", "bypassPermissions"]);
-    expect(buildPermissionArgs("edit", "grok")).toEqual(["--sandbox", "workspace", "--permission-mode", "bypassPermissions"]);
-    expect(buildPermissionArgs("danger", "grok")).toEqual(["--sandbox", "off", "--permission-mode", "bypassPermissions"]);
-  });
-
   it("maps every tier onto native muse approval/sandbox flags", () => {
     expect(buildPermissionArgs("readonly", "muse")).toEqual(["--disable-approval", "--disable-write", "--disable-shell"]);
     expect(buildPermissionArgs("edit", "muse")).toEqual(["--disable-approval"]);
@@ -226,22 +220,6 @@ describe("tier enforcement resolution", () => {
     expect(permissionLabel(resolvePermission("readonly", "claude"))).toContain("readonly");
   });
 
-  it("resolves grok as enforced at every tier with an accurate sandbox caveat", () => {
-    const readonly = resolvePermission("readonly", "grok");
-    expect(readonly.enforced).toBe(true);
-    expect(readonly.caveat).toContain("kernel sandbox");
-    expect(readonly.caveat).toContain("Linux-only");
-
-    const edit = resolvePermission("edit", "grok");
-    expect(edit.enforced).toBe(true);
-    expect(edit.caveat).toContain("workspace");
-
-    const danger = resolvePermission("danger", "grok");
-    expect(danger.enforced).toBe(true);
-    expect(danger.caveat).toBeUndefined();
-    expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
-  });
-
   it("resolves muse as enforced at every tier with an accurate approval/sandbox caveat", () => {
     const readonly = resolvePermission("readonly", "muse");
     expect(readonly.enforced).toBe(true);
@@ -256,15 +234,6 @@ describe("tier enforcement resolution", () => {
     expect(danger.enforced).toBe(true);
     expect(danger.caveat).toBeUndefined();
     expect(permissionLabel(danger)).toBe("unsandboxed external CLI");
-  });
-
-  it("discloses opencode restricted tiers as application rules, not an OS sandbox", () => {
-    for (const tier of ["readonly", "edit"] as const) {
-      const resolution = resolvePermission(tier, "opencode");
-      expect(resolution.enforced).toBe(true);
-      expect(permissionLabel(resolution)).toContain("not an OS sandbox");
-    }
-    expect(permissionLabel(resolvePermission("danger", "opencode"))).toBe("unsandboxed external CLI");
   });
 
   it("drops non-finite budgets instead of emitting them as CLI flags", () => {

@@ -312,7 +312,7 @@ export async function spawnMuseSubagent(params: {
   executionStartedAt?: number;
 }): Promise<AgentToolResult> {
   const subagentType = params.profile.name;
-  // muse exec has no native system-prompt flag (unlike claude/codex/grok);
+  // muse exec has no native system-prompt flag (unlike claude/codex);
   // fold the profile's instructions into the prompt file content, matching
   // agy's identical no-native-flag composition.
   const promptParts = [params.profile.systemPrompt, params.prompt, params.appendInstructions].filter(

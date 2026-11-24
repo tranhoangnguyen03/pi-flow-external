@@ -11,9 +11,7 @@ cd /path/to/pi-flow-external
 claude --version
 codex --version
 agy --version
-grok --version
 muse --version
-opencode --version
 ```
 
 The default lane needs no root Pi authentication at all (its root model is a faux, never-prompted placeholder). Only `--routing-smoke` needs a working root model:
@@ -28,15 +26,13 @@ Root Pi authentication is separate from each delegated CLI.
 
 ## Direct backend receipt
 
-A runtime release runs all six direct receipts: `agy`, `claude`, `codex`, `grok`, `muse`, and `opencode`. During development, also run the backend you changed:
+A runtime release runs all four direct receipts: `agy`, `claude`, `codex`, and `muse`. During development, also run the backend you changed:
 
 ```bash
 npm run e2e -- --backend claude
 npm run e2e -- --backend codex
 npm run e2e -- --backend agy
-npm run e2e -- --backend grok
 npm run e2e -- --backend muse
-npm run e2e -- --backend opencode --model <provider/model>
 ```
 
 Each run creates a collision-safe (`randomUUID`-named) temporary fixture in an isolated agent directory, calls the `external_delegate` tool executor directly with an explicit `role`/`harness`, requires the exact expected result in the child's real result, checks for one complete `done` receipt, verifies that the fixture stayed clean, and removes its temporary files. Isolation is unconditional: for every backend above, an inherited `PI_CODING_AGENT_DIR` (such as the one exported in [Preparation](#preparation)) is ignored unless you pass `--agent-dir` explicitly — only `--backend pi` and `--routing-smoke` ever default to your real agent directory, since they only read it and never write into it. These isolated runner files are not the product catalog. A normal session start still writes zero role files under the user's `subagents/` directory.
@@ -48,21 +44,15 @@ Defaults:
 | Claude | `claude-sonnet-5` | `high` |
 | Codex | `gpt-5.6-sol` | `high` |
 | Agy | `gemini-3.7-flash-high` | `high` |
-| Grok | `grok-4.6` | `high` |
 | Muse | `muse-spark-1.3-contributor` | `high` |
-| OpenCode | Its configured default; use `--model provider/model` to pin | Not forwarded; `--thinking` with `--model` pins that model's variant |
 
 Override with `--model`/`--thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary path printed by the runner.
-
-Grok's `readonly`/`edit` tiers run under its own kernel sandbox (`--sandbox read-only`/`workspace`). Grok 1.0.40 on macOS can refuse startup with `sandbox could not be applied: socket deny resolution failed: could not resolve runtime-socket deny path /var/run/docker.sock: endpoint is a symlink`. This is an upstream CLI/environment incompatibility, not proof that the adapter's sandbox flags are wrong. The failed receipt retains the diagnostic and requested permission metadata; the adapter never retries with sandbox off. Do **not** remove or alter the Docker socket as a runner workaround. Verify sandbox enforcement on a compatible host or check a newer Grok version with an actual sandboxed invocation, not just `--help`. An explicitly requested `danger` run has no OS isolation and does not validate readonly delegation. Track compatibility and any confirmed upstream fix in [#61](https://github.com/tranhoangnguyen03/pi-flow-external/issues/61); no fixed upstream version has been verified.
 
 Muse Code 1.3.0 accepts `none` in help text but its `meta` provider rejects `--reasoning-effort none`. Effective `thinking: off` therefore fails before launch with remediation; it is never silently mapped to minimal. Fresh v5 Muse roles use native effort unless configured; converted settings may retain `parent`. Set supported harness/binding effort (`minimal`, `low`, `medium`, `high`, or `xhigh`), or choose a supported root level when using `parent`. Clearing a binding pin still inherits the harness policy. Compatibility probes must invoke provider validation, not merely inspect `--help`.
 
 Muse's `meta` provider performs its own internal retries (observed up to 10 attempts with growing backoff on transient 503/504 errors) entirely inside the `muse` process; this is unrelated to and invisible from this extension's own no-auto-retry contract, and shows up only as activity narration (e.g. "retrying meta model stream in 60000ms (attempt 3/10)"). A run that never reports usage/cost is expected — Muse has never been observed to report either.
 
-OpenCode targets OpenCode 2 only (`@opencode/cli` 2.0.16; `opencode --version` prints `opencode v2.0.16`). Every child is `opencode run --standalone`, so it must never start, stop, or reuse the shared `opencode service`: note the service PID before a lane and confirm it is unchanged afterwards, and confirm that no `opencode serve --stdio` process outlives the lane. Check direct, workflow, interruption, a readonly direct lane (`--permission readonly`), and a two-process resume with a codeword known only to the first process. `opencode/space-bunny-free` accepts the restricted tool lists on 2.0.16, so free-model restricted runs are valid tier evidence. A 1.x free model rejected them with 403, which is not a passing check. Verify that success comes from `opencode session export`, not the stream: an interrupted or tool-calls turn that still exits 0 must fail, and the receipt's result must be the exported final assistant text. Prove restricted resume: resume a session that has a saved `build` agent at `--permission readonly` and ask for a shell write of a marker file. The marker must not appear, and the export must show the injected `pi-flow-readonly-*` agent. A `danger` resume of that session must be refused with the actionable message. Native subagent-child cost is not streamed; total cost must become unknown. Structured output schemas must fail clearly before launch. An unknown `#variant` must fail clearly from OpenCode itself.
-
-Give the runner a bounded child timeout and a longer outer deadline, for example `--timeout-ms 120000` under a command limit of at least 180 seconds, so an outer kill never lands before the runner's own watchdog and cleanup. A 1.x direct lane with a slow free model took 214 seconds; an outer 180-second limit killed that runner before cleanup.
+Give the runner a bounded child timeout and a longer outer deadline, for example `--timeout-ms 120000` under a command limit of at least 180 seconds, so an outer kill never lands before the runner's own watchdog and cleanup.
 
 ### Named Pi harness receipt
 
@@ -76,15 +66,13 @@ This lane reads your real agent directory and does not write a role file for the
 
 ## Supervised workflow receipt
 
-When workflow runtime, scheduling, supervision, or tool integration changes, run the affected backend. Before a runtime release, run all six CLI workflow receipts and one named Pi harness workflow receipt:
+When workflow runtime, scheduling, supervision, or tool integration changes, run the affected backend. Before a runtime release, run all four CLI workflow receipts and one named Pi harness workflow receipt:
 
 ```bash
 npm run e2e -- --backend claude --workflow
 npm run e2e -- --backend codex --workflow
 npm run e2e -- --backend agy --workflow
-npm run e2e -- --backend grok --workflow
 npm run e2e -- --backend muse --workflow
-npm run e2e -- --backend opencode --model <provider/model> --workflow
 npm run e2e -- --backend pi --harness pi-deepseek --workflow
 ```
 
@@ -98,9 +86,7 @@ When adapter cancellation, process-tree termination, partial output, or supervis
 npm run e2e -- --backend claude --interrupt
 npm run e2e -- --backend codex --interrupt
 npm run e2e -- --backend agy --interrupt
-npm run e2e -- --backend grok --interrupt
 npm run e2e -- --backend muse --interrupt
-npm run e2e -- --backend opencode --model <provider/model> --interrupt
 ```
 
 The runner calls the `external_delegate` tool executor directly with `background: true`, polls `external_runs` until the run is observed `running`, cancels its stable ID with an explicit reason, waits for its `cancelled` outcome, and asks `external_runs` for every available output and diagnostic page. A very early cancellation may legitimately have diagnostics but no assistant text; the durable receipt must still be `aborted` with the exact reason. Do not retry a failure automatically. Use `--keep` for one deliberate evidence inspection, then remove the printed run root and temporary files.
@@ -109,8 +95,8 @@ The runner calls the `external_delegate` tool executor directly with `background
 
 There are two levels of routing check:
 
-- `npm run e2e -- --routing-smoke --backend <claude|codex|agy|grok|muse|opencode>` (optionally `--workflow`/`--interrupt`) spawns a real `pi` CLI process with a real root model and gives it a single plain-language instruction naming the exact tool, role, and harness to call. It is a mechanical, automated check that the natural-language call-and-relay path (real root LLM → real tool call → real backend child) still works end to end. It requires real root Pi authentication (see Preparation) and is opt-in only — never the default backend gate — because the root model's tool-call decision is a live, provider-billed, non-deterministic step. `--root-model`/`--root-thinking` only apply here.
-- The broader, still-manual qualitative check below covers *discovery*, not just one named call: when role discovery, tool descriptions, or coordinator guidance changes, run three fresh Pi sessions against the current checkout and a read-only fixture. Ask for two named harnesses to review, two named harnesses to research, and a task split between Pi plus two named harnesses. Cover `agy`, `claude`, `codex`, `grok`, `muse`, and `opencode` across those sessions, plus a registered named Pi harness when one is configured. For each session, verify that each requested external harness produced one complete `done` receipt through `role` plus `harness`, no help/discovery call was needed for the built-in roles, and the fixture stayed unchanged. An auth-blocked harness is not a pass.
+- `npm run e2e -- --routing-smoke --backend <claude|codex|agy|muse>` (optionally `--workflow`/`--interrupt`) spawns a real `pi` CLI process with a real root model and gives it a single plain-language instruction naming the exact tool, role, and harness to call. It is a mechanical, automated check that the natural-language call-and-relay path (real root LLM → real tool call → real backend child) still works end to end. It requires real root Pi authentication (see Preparation) and is opt-in only — never the default backend gate — because the root model's tool-call decision is a live, provider-billed, non-deterministic step. `--root-model`/`--root-thinking` only apply here.
+- The broader, still-manual qualitative check below covers *discovery*, not just one named call: when role discovery, tool descriptions, or coordinator guidance changes, run three fresh Pi sessions against the current checkout and a read-only fixture. Ask for two named harnesses to review, two named harnesses to research, and a task split between Pi plus two named harnesses. Cover `agy`, `claude`, `codex`, and `muse` across those sessions, plus a registered named Pi harness when one is configured. For each session, verify that each requested external harness produced one complete `done` receipt through `role` plus `harness`, no help/discovery call was needed for the built-in roles, and the fixture stayed unchanged. An auth-blocked harness is not a pass.
 
 Neither is a statistical regression comparison or a model-independent guarantee. Neither covers workflow routing or the omitted-`harness` default; use the workflow receipt above and a separate direct role request without `harness` for those paths.
 
@@ -196,7 +182,7 @@ Pi may create its own root files; opening the extension must not create `agent/p
 
 - **Verification levels:**
   - *Offline / fixture checks (Level 0):* Zero network/model requests; local cache, static aliases and fake handlers only. A real terminal smoke may start Pi itself, but does not invoke backend CLIs.
-  - *CLI metadata listing checks (Level 1):* Bounded `models` CLI inspection on picker entry for agy/grok/opencode (10s timeout, abort signal on cancel, never sends a prompt; no eligibility/access claim).
+  - *CLI metadata listing checks (Level 1):* Bounded `models` CLI inspection on picker entry for Antigravity (10s timeout, abort signal on cancel, never sends a prompt; no eligibility/access claim).
   - *Separately authorized paid tests (Level 2):* Explicit "Send a test message" in the Pi modal, requiring separate confirmation that warns about token costs. Run only when authorized.
 
 ### Task 1: Modal navigation, model choice, search, and cancel-safety (TUI)
@@ -204,7 +190,7 @@ Pi may create its own root files; opening the extension must not create `agent/p
 - From Configuration → Agents, select an agent (e.g. Codex CLI) → Model:
   - Claude shows static alias choices (`sonnet`, `opus`, `fable`).
   - Codex reads local cache (`~/.codex/models_cache.json` or `$CODEX_HOME`) without network calls.
-  - `agy`, `grok`, and `opencode` query their native `models` CLI command only upon opening the picker (Level 1 metadata check, abortable).
+  - Antigravity queries its native `models` CLI command only upon opening the picker (Level 1 metadata check, abortable).
   - Pi model picker reads Pi's local registry, initially filtering providers to configured credentials (all providers when none are configured), with a "Show all providers…" option for others.
 - Press `/` to search model names; type a filter and confirm matching choices filter interactively.
 - Confirm active/stored model is labeled `· Current`.
@@ -239,8 +225,8 @@ Pi may create its own root files; opening the extension must not create `agent/p
 Before a runtime release:
 
 1. Run `npm run check`.
-2. Run all six direct backend receipts (`agy`, `claude`, `codex`, `grok`, `muse`, `opencode`). All six are mandatory.
-3. Run all six supervised workflow receipts, plus one named Pi harness direct receipt and its workflow receipt when a real harness is registered.
+2. Run all four direct backend receipts (`agy`, `claude`, `codex`, `muse`). All four are mandatory.
+3. Run all four supervised workflow receipts, plus one named Pi harness direct receipt and its workflow receipt when a real harness is registered.
 4. Run interruption checks for adapters whose cancellation/output path changed.
 5. Run `--routing-smoke` (mechanical) and the manual qualitative routing smoke when role discovery, tool descriptions, coordinator guidance, or slash commands changed. This configuration release requires that smoke. An auth-blocked lane is not a pass.
 6. Run the configuration surface check and task-based modal/RPC/headless acceptance checks when settings, the role catalog, slash commands, or conversion behavior changed.
