@@ -91,7 +91,7 @@ do {
 return { run, view, encoding, text, checklist };
 ```
 
-- **Check the run, not just `ok`.** `wait.ok` means supervision worked, even if a child failed. Read each `completed[i].state.outcome` and all `pending` IDs. With multiple targets, a failed workflow can return early even in `mode: "all"`; pending work continues. Keep collecting it unless the user defers, or cancel it explicitly.
+- **Check the run, not just `ok`.** `wait.ok` means supervision worked, even if a child failed. Read each `completed[i].state.outcome` and all `pending` IDs. Even in `mode: "all"`, a selected workflow that fails, is cancelled, or times out ends the wait early; pending work continues. Keep collecting it unless the user defers, or cancel it explicitly.
 - **Avoid redundant calls.** If settlement is already known, inspect directly rather than wait again. Successful inline output needs no second fetch. A successful workflow can still have `children.failed` when the script handled child errors; check the returned reports.
 - **Read every page.** Otherwise use `final` for verified success or `diagnostics`/`output` for failure. `final` is empty without verified success. Follow `page.nextCursor`, concatenate text, and only then parse if `encoding` is `json`. Workflow final JSON wraps the value in `{ runId, result, finalAvailable }`; agent finals are text.
 - **Keep ownership.** The parent retains IDs and collects/checks results after its independent work finishes, unless the user asks to leave work running or check back later—in which case it reports the IDs and switches tasks or ends the turn without waiting. A script's local variables do not survive a separate codemode call; pass the retained handle or ID explicitly. If independent work or collection fails, report any still-running IDs rather than abandoning them silently. Never retry a child automatically.
@@ -162,7 +162,7 @@ Block until one or more targets (`1-100` IDs in `runIds`) reach terminal state:
 const waitResult = await external_runs({
   action: "wait",
   runIds: [runId1, runId2],
-  mode: "all", // A failed workflow can return early; always check data.pending.
+  mode: "all", // An unsuccessful workflow ends the wait early; check data.pending.
   limitBytes: 32768,
 });
 ```

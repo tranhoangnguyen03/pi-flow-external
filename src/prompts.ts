@@ -13,7 +13,7 @@ export const EXTERNAL_HELP_PROMPT_SNIPPET =
   "Show the delegation playbook, role details, permission behavior, workflow guidance, public contracts, or harness capabilities on demand.";
 
 export const EXTERNAL_RUNS_PROMPT_SNIPPET =
-  "Supervise session-owned external runs (supply only fields for the chosen action): list (optional workflowRunId, limit, cursor, workflowCursor), inspect (runIds: 1 ID with any view, or 2-20 IDs for summary batch), wait (runIds 1-100, optional mode/limitBytes), or cancel (runIds: 1 ID, optional reason). view: final returns only a verified terminal answer, empty until one exists.";
+  "List, inspect, wait for, or cancel session-owned external runs. Use refs.final to retrieve the verified answer when it isn't inline.";
 
 export const ORCHESTRATOR_MODE_PROMPT = `# Orchestrator Mode
 
@@ -96,29 +96,29 @@ export interface UsageAgentExample {
   prompt: string;
   role: string;
   harness: string;
-  /** Omit on ordinary calls so defaultPermission applies. Set only to confine the tier. */
   permission?: PermissionTier;
   background?: boolean;
   resume?: string;
   context?: { mode: "none" } | { mode: "recent"; turns: number } | { mode: "full" };
 }
 
-/** One self-contained external_delegate call. Valid against the external_delegate tool schema. Permission stays omitted. */
+/** One self-contained read-only call, valid against the external_delegate tool schema. */
 export const USAGE_ONE_AGENT: UsageAgentExample = {
   description: "Map the repository",
   prompt: "Map /absolute/repo. Read only. Return the important files and how they fit together. Do not edit.",
   role: "explorer",
   harness: "claude",
+  permission: "readonly",
 };
 
 export const USAGE_WORKFLOW_CALLS: { prompt: string; options: { description: string; role: string; harness: string; permission?: PermissionTier } }[] = [
   {
     prompt: "Map /absolute/repo read-only. Return important paths. Do not edit.",
-    options: { description: "map", role: "explorer", harness: "claude" },
+    options: { description: "map", role: "explorer", harness: "claude", permission: "readonly" },
   },
   {
     prompt: "Review /absolute/repo read-only. Report defects with paths. Do not edit.",
-    options: { description: "review", role: "reviewer", harness: "codex" },
+    options: { description: "review", role: "reviewer", harness: "codex", permission: "readonly" },
   },
 ];
 
@@ -158,7 +158,7 @@ export function formatUsagePlaybook(): string {
 
 **Use the result.** Foreground is simplest when the next action needs the answer. Background is for useful independent parent work or a user-requested deferred run; collect through external_runs when needed. Inspect the result (inline or refs.final), make sense of missing checks, integrate findings, and choose the next action. Operation success is not task acceptance.
 
-One independent assignment (select a working harness for your environment):
+One read-only assignment. Choose an installed harness that supports readonly (for example, Claude Code or Codex; not Antigravity):
 ${jsonBlock(USAGE_ONE_AGENT)}
 
 One grouped parallel workflow (pass as external_workflow script; this is illustrative rather than a required method):

@@ -45,7 +45,7 @@ export function resolveEffectivePermissionTier(
  */
 export function unsupportedPermissionReason(tier: PermissionTier, backend: SubagentBackend): string | undefined {
   if (backend === "agy" && tier !== "danger") {
-    return `Antigravity supports only autonomous danger mode (--dangerously-skip-permissions). It cannot enforce ${tier}. Pass permission "danger", or change the global defaultPermission to danger.`;
+    return `Antigravity cannot enforce ${tier}; it only supports autonomous danger mode (unsandboxed). To keep ${tier}, choose a configured harness that supports it, for example { harness: "codex", permission: "${tier}" }.`;
   }
   return undefined;
 }

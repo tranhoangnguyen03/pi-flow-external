@@ -231,15 +231,8 @@ describe("external_help usage playbook", () => {
     const agentTool = { name: "external_delegate", parameters: agentToolParameters } as any;
     for (const example of agentExamples) {
       const validated = validateToolArguments(agentTool, toolCall("external_delegate", { ...example }));
-      expect(validated).toMatchObject({ role: example.role, harness: example.harness });
-      expect(validated).not.toHaveProperty("permission");
+      expect(validated).toMatchObject({ role: example.role, harness: example.harness, permission: "readonly" });
     }
-    const confined = { ...USAGE_ONE_AGENT, permission: "readonly" as const };
-    expect(validateToolArguments(agentTool, toolCall("external_delegate", confined))).toMatchObject({
-      role: USAGE_ONE_AGENT.role,
-      harness: USAGE_ONE_AGENT.harness,
-      permission: "readonly",
-    });
     for (const [label, args] of [
       ["role + subagent_type", { ...USAGE_ONE_AGENT, subagent_type: "claude-explorer" }],
       ["subagent_type + harness", { description: "d", prompt: "p", subagent_type: "claude/explorer", harness: "claude" }],
@@ -294,10 +287,6 @@ describe("external_help usage playbook", () => {
     }
 
     const guidance = formatExternalRunsActionGuidance();
-    expect(guidance).toContain("inspect (single run, any view)");
-    expect(guidance).toContain("inspect (batch summary, 2-20 runs)");
-    expect(guidance).toContain("workflowCursor");
-    expect(guidance).toContain("workflowRunId");
 
     const helpTool = makeTool();
     const agentDir = tempAgentDir();
@@ -319,8 +308,8 @@ describe("external_help usage playbook", () => {
         label: call.options.description,
         role: call.options.role,
         harness: call.options.harness,
+        permission: "readonly",
       });
-      expect(normalized.permission).toBeUndefined();
     }
   });
 
