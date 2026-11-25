@@ -220,7 +220,15 @@ return { arch, coverage };
 
 ---
 
-## Upgrading to Flow 7
+## Release numbering reset
+
+`0.7.0-external.0` follows `7.0.0-external.0`. It keeps the same Flow behavior and reads the same settings and receipts. The previous release remains available. If your install is pinned to the old series, switch explicitly:
+
+```bash
+pi install npm:@tranhoangnguyen0310/pi-flow-external@0.7.0-external.0
+```
+
+## Grok and OpenCode retirement
 
 Grok (`grok`) and OpenCode (`opencode`) no longer launch or resume through Flow. Their saved settings, instruction overrides, and run receipts remain in place; existing runs can still be inspected. Update explicit harness selections, exact selectors, and saved workflows to use a supported harness, or pin `6.3.0-external.2` to keep launching those backends.
 
