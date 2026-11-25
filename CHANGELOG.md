@@ -2,6 +2,12 @@
 
 All notable changes to pi-flow external are documented here.
 
+## [0.7.0-external.0] - 2026-11-25
+
+### Changed
+- Start the `0.7` version series at `0.7.0-external.0`. This is a numbering reset from `7.0.0-external.0`, not a rollback. Existing releases, settings, and receipts are unchanged.
+- Installs pinned to the previous version or constrained to the `7.x` series must select the new npm version explicitly.
+
 ## [7.0.0-external.0] - 2026-11-25
 
 ### Breaking

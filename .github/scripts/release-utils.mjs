@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Release metadata validation (ci.yml) and npm/GitHub drift comparison (sync-check.yml).
+// Release metadata validation (ci.yml).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8" }).trim();
+const RESET_FROM = "7.0.0-external.0";
+const RESET_TO = "0.7.0-external.0";
 
 // Versions are always X.Y.Z-external.N: [major, minor, patch, externalCounter].
 const parse = (v) => {
@@ -33,6 +35,10 @@ const bump = (from, to) => {
 	return null;
 };
 
+// This is a one-time transition, not a general allowance for descending versions.
+const releaseKind = (base, published, next) =>
+	base === RESET_FROM && published === RESET_FROM && next === RESET_TO ? "prerelease" : bump(published, next);
+
 const fail = (msg) => {
 	console.error(`release check failed: ${msg}`);
 	process.exit(1);
@@ -56,7 +62,7 @@ const matchShipped = (changed, entries) =>
 
 const publishedVersion = () => {
 	try {
-		return run("npm", ["view", pkg.name, "version"]);
+		return run("npm", ["view", `${pkg.name}@latest`, "version", "--prefer-online"]);
 	} catch {
 		fail(`could not read ${pkg.name}'s published version from npm; check registry access`);
 	}
@@ -80,6 +86,11 @@ if (mode === "selftest") {
 		[bump("1.9.0-external.0", "1.11.0-external.0"), null],
 		[bump("1.9.0-external.0", "1.10.0"), null],
 		[bump("1.9.0-external.0", "1.10.0-external.1"), null],
+		[releaseKind(RESET_FROM, RESET_FROM, RESET_TO), "prerelease"],
+		[releaseKind("6.3.0-external.2", RESET_FROM, RESET_TO), null],
+		[releaseKind(RESET_FROM, "7.0.0-external.1", RESET_TO), null],
+		[releaseKind(RESET_FROM, RESET_FROM, "0.7.0-external.1"), null],
+		[releaseKind(RESET_TO, RESET_TO, "0.7.0-external.1"), "prerelease"],
 		[
 			matchShipped(
 				["src/a.ts", "docs/workflows.md", "test/a.test.ts", "docs/maintainer/field-testing.md", "README.md"],
@@ -92,14 +103,6 @@ if (mode === "selftest") {
 		if (got !== want) fail(`selftest: got ${got}, want ${want}`);
 	}
 	console.log("selftest ok");
-} else if (mode === "gt") {
-	const [a, b] = process.argv.slice(3);
-	const result = cmp(a, b);
-	if (result === null) {
-		console.error(`cannot compare versions: ${a} / ${b}`);
-		process.exit(2);
-	}
-	process.exit(result === 1 ? 0 : 1);
 } else if (mode === "validate") {
 	if (!process.env.BASE_SHA || !process.env.HEAD_SHA) fail("BASE_SHA and HEAD_SHA are required");
 	const published = publishedVersion();
@@ -136,7 +139,7 @@ if (mode === "selftest") {
 		process.exit(0);
 	}
 
-	const level = bump(published, next);
+	const level = releaseKind(readVersion(process.env.BASE_SHA), published, next);
 	if (!level) {
 		fail(
 			`${next} is not a clean patch/minor/major/prerelease bump from published ${published}; ` +
@@ -156,5 +159,5 @@ if (mode === "selftest") {
 	}
 	console.log(`release ${published} -> ${next} (${level})`);
 } else {
-	fail("usage: release-utils.mjs selftest|validate|gt <a> <b>");
+	fail("usage: release-utils.mjs selftest|validate");
 }

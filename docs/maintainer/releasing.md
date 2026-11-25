@@ -20,6 +20,15 @@ npm version <new-version> --no-git-tag-version
 
 Do not create Git tags manually; the release workflow owns them.
 
+### One-time numbering reset
+
+`0.7.0-external.0` follows `7.0.0-external.0`. The exact transition uses
+`release:prerelease`; other descending versions are rejected. Keep the old npm
+version, Git tag, and GitHub release intact. The new version takes over npm
+`latest` and GitHub Latest when published. Since `0.7.0-external.0` sorts below
+`7.0.0-external.0`, pinned installs and `7.x` ranges must switch explicitly.
+Future releases use the normal bump rules from npm `latest`.
+
 ## The PR contract (CI-enforced)
 
 CI validates release metadata on every PR to `main`, and re-validates when
@@ -28,8 +37,8 @@ labels change:
 - The version must be a clean bump of the published npm version (patch,
   minor, major with `external.0`, or `prerelease` with `external.N+1`).
 - Exactly one label matches the bump: `release:patch`, `release:minor`,
-  `release:major`, or `release:prerelease`. A no-release PR carries
-  `release:none` instead and must not bump the version.
+  `release:major`, or `release:prerelease` (also used for the one-time reset).
+  A no-release PR carries `release:none` instead and must not bump the version.
 - Changing shipped files (the `files` list in `package.json`, plus
   `package.json`/`package-lock.json`) without a version bump fails.
 - `package-lock.json` must carry the same version (run `npm install` after
@@ -160,9 +169,10 @@ directory afterward.
 
 ## Drift watchdog
 
-`sync-check.yml` runs daily and compares npm's latest with the latest GitHub
-release. On drift above the pre-automation baseline (`1.9.0-external.0`) it
-opens or comments on a "Release drift" issue and closes it once back in sync.
+`sync-check.yml` runs daily and compares npm's `latest` with the GitHub release
+marked Latest. Neither version needs to sort above a historical baseline:
+only the two active release pointers matter. The watchdog opens or comments
+on a "Release drift" issue and closes it once back in sync.
 Fix drift by re-running the release workflow, never by manual publishing.
 
 ## Emergency manual publish

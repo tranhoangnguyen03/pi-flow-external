@@ -14,9 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      # Versions published before release automation existed are expected to be
-      # missing from GitHub Releases; only report drift above this baseline.
-      BASELINE: "1.9.0-external.0"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -27,8 +24,8 @@ jobs:
       - name: Compare npm and GitHub releases
         run: |
           set -eu
-          npm_latest=$(npm view @tranhoangnguyen0310/pi-flow-external version)
-          gh_latest=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null | sed 's/^v//')
+          npm_latest=$(npm view @tranhoangnguyen0310/pi-flow-external@latest version --prefer-online)
+          gh_latest=$(gh release view --json tagName --jq '.tagName | ltrimstr("v")')
           echo "npm=$npm_latest github=${gh_latest:-none}"
 
           if [ "$npm_latest" = "$gh_latest" ]; then
@@ -38,17 +35,6 @@ jobs:
               gh issue close "$existing" --comment "npm and GitHub are back in sync at $npm_latest."
             fi
             exit 0
-          fi
-
-          rc=0
-          node .github/scripts/release-utils.mjs gt "$npm_latest" "$BASELINE" || rc=$?
-          if [ "$rc" -eq 1 ]; then
-            echo "pre-automation gap (npm $npm_latest <= baseline $BASELINE); ignoring"
-            exit 0
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "could not compare npm $npm_latest with baseline $BASELINE"
-            exit 1
           fi
 
           body="npm has @tranhoangnguyen0310/pi-flow-external@$npm_latest but the latest GitHub release is ${gh_latest:-none}.
