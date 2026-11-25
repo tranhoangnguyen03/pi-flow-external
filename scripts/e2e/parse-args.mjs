@@ -8,7 +8,7 @@ import process from "node:process";
 const defaults = {
   claude: { model: "claude-sonnet-5", thinking: "high" },
   codex: { model: "gpt-5.6-sol", thinking: "high" },
-  agy: { model: "gemini-3.7-flash-high", thinking: "high" },
+  agy: {},
   muse: { model: "muse-spark-1.3-contributor", thinking: "high" },
   // No fixed model/thinking default: a named pi harness pins its own model and
   // thinking in the caller's real settings.json (version 5) harnesses map;

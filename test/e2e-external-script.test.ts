@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseArgs } from "../scripts/e2e/parse-args.mjs";
 import { preflightPiHarness } from "../scripts/e2e/preflight.mjs";
 
 const scriptPath = new URL("../scripts/e2e/external.mjs", import.meta.url).pathname;
@@ -60,6 +61,14 @@ function preflightError(agentDir: string): string {
   }
   throw new Error("Expected the Pi harness precheck to reject invalid settings");
 }
+
+it("leaves Antigravity model and effort to the CLI unless explicitly pinned", () => {
+  const args = ["--backend", "agy"];
+  const { model, thinking } = parseArgs(args);
+  expect({ model, thinking }).toEqual({ model: undefined, thinking: undefined });
+  expect(parseArgs([...args, "--model", "gemini-3.8-flash-high", "--thinking", "native"]))
+    .toMatchObject({ model: "gemini-3.8-flash-high", thinking: "native" });
+});
 
 describe("e2e external script pi harness precheck", () => {
   it("rejects a missing harness and any non-v5 settings without modifying the real agent directory", async () => {
