@@ -43,10 +43,10 @@ Defaults:
 |---|---|---|
 | Claude | `claude-sonnet-5` | `high` |
 | Codex | `gpt-5.6-sol` | `high` |
-| Agy | `gemini-3.7-flash-high` | `high` |
+| Antigravity | CLI default | CLI default (no `--effort` override) |
 | Muse | `muse-spark-1.3-contributor` | `high` |
 
-Override with `--model`/`--thinking`. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary path printed by the runner.
+Override with `--model`/`--thinking`. If Antigravity’s configured default is unavailable, use `agy models` to choose an available model. For example, `--model gemini-3.8-flash-high --thinking native` passed direct and workflow checks on Antigravity CLI 1.5.16. Use `--keep` only when evidence inspection is necessary; it preserves sensitive output and the temporary path printed by the runner.
 
 Muse Code 1.3.0 accepts `none` in help text but its `meta` provider rejects `--reasoning-effort none`. Effective `thinking: off` therefore fails before launch with remediation; it is never silently mapped to minimal. Fresh v5 Muse roles use native effort unless configured; converted settings may retain `parent`. Set supported harness/binding effort (`minimal`, `low`, `medium`, `high`, or `xhigh`), or choose a supported root level when using `parent`. Clearing a binding pin still inherits the harness policy. Compatibility probes must invoke provider validation, not merely inspect `--help`.
 
